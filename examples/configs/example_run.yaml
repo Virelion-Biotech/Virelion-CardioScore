@@ -1,0 +1,25 @@
+# Example study configuration for Virelion CardioScore
+
+pipeline:
+  name: "example_screening_run"
+  version: "0.1.0"
+  random_seed: 42
+
+quality_control:
+  min_electrodes_per_well: 4
+  max_noise_sd_uv: 25.0
+  min_beat_detection_rate: 0.7
+  log_rejections: true
+
+scoring:
+  low_threshold: 0.30
+  moderate_threshold: 0.60
+  normalize_by_vehicle: true
+
+reporting:
+  generate_html: true
+  generate_csv: true
+  generate_json: true
+
+io:
+  output_dir: "./results/example_run"
