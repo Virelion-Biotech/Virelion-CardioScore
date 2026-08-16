@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "virelion-cardioscore"
+version = "0.1.0"
+description = "CiPA-aligned cardiotoxicity risk scoring from human iPSC-CM MEA field-potential recordings"
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "Virelion Biotech", email = "contact@virelionbiotech.org"}
+]
+keywords = [
+    "cardiotoxicity", "iPSC-CM", "MEA", "CiPA", "field potential",
+    "drug safety", "electrophysiology", "preclinical"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "jinja2>=3.1",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "mypy>=1.5",
+    "black>=23.0",
+    "jupyter>=1.0",
+    "ipykernel>=6.25",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.22",
+]
+
+[project.urls]
+Homepage = "https://github.com/Virelion-Biotech/Virelion-CardioScore"
+Repository = "https://github.com/Virelion-Biotech/Virelion-CardioScore"
+Issues = "https://github.com/Virelion-Biotech/Virelion-CardioScore/issues"
+
+[project.scripts]
+cardioscore = "virelion_cardioscore.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["virelion_cardioscore*"]
+
+[tool.setuptools.package-data]
+virelion_cardioscore = [
+    "config/*.yaml",
+    "reporting/templates/*.html",
+    "data/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
