@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virelion CardioScore — Biodefense MCM cardiac safety demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0B1210;--panel:#121A18;--ink:#E8EEEB;--muted:#8A9A92;--teal:#35E6C2;--line:#1E2A26;--amber:#E6B35A;--red:#E07A6A;--green:#22c55e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',sans-serif;min-height:100vh}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 18px 64px}
+header{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.brand{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px}
+.brand span{color:var(--teal)}
+.sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+.note{font-size:12.5px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--teal);padding:12px 14px;margin-bottom:16px;line-height:1.55}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:800px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.card h3{margin:0 0 10px;font-family:'Space Grotesk',sans-serif;font-size:14px}
+label{display:block;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+input,select{width:100%;background:#0e1614;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px}
+.btn{display:inline-flex;align-items:center;gap:8px;background:var(--teal);color:#0B1210;border:none;font-weight:700;padding:10px 16px;border-radius:999px;cursor:pointer;font-size:13px;margin:4px 6px 4px 0}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+.badge-Low{background:rgba(34,197,94,.15);color:var(--green)}
+.badge-Moderate{background:rgba(230,179,90,.15);color:var(--amber)}
+.badge-High{background:rgba(224,122,106,.15);color:var(--red)}
+.bar-wrap{display:flex;align-items:center;gap:8px;margin:3px 0}
+.bar{height:7px;border-radius:4px;background:var(--teal);min-width:2px}
+.meta{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+a.link{color:var(--teal);font-size:13px;text-decoration:none}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.w33{flex:1;min-width:120px}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);margin-bottom:8px}
+.chk input{width:auto;margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="brand">VIRELION<span>.</span> CardioScore</div>
+      <div class="sub">Biodefense / MCM cardiac safety · CiPA-aligned MEA scoring</div>
+    </div>
+    <a class="link" href="https://github.com/Virelion-Biotech/Virelion-CardioScore" target="_blank" rel="noopener">GitHub →</a>
+  </header>
+  <div class="note">
+    Browser implementation of the CardioScore engine for <strong>medical countermeasure (MCM)</strong> and biodefense-oriented screening:
+    vaccines, antitoxins, antivirals, and related candidates. Generate synthetic multi-well MEA feature tables, tune endpoint weights,
+    optionally upload a CSV of pre-extracted features, score to Low / Moderate / High, and export JSON or CSV.
+    Full Python pipeline is on GitHub. <strong>Research framework only — not a regulatory assay.</strong>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>1 · Study setup</h3>
+      <label>Modality preset</label>
+      <select id="preset">
+        <option value="mcm_mix">MCM mix (vaccine / antitoxin / antiviral)</option>
+        <option value="vaccine">Vaccine-like series</option>
+        <option value="antitoxin">Antitoxin / antibody-like</option>
+        <option value="antiviral">Antiviral small-molecule-like</option>
+        <option value="general">General / mixed toxicology</option>
+      </select>
+      <div class="row">
+        <div class="w33"><label>Candidates</label><input type="number" id="nComp" value="4" min="2" max="10"></div>
+        <div class="w33"><label>Concentrations</label><input type="number" id="nConc" value="6" min="3" max="12"></div>
+        <div class="w33"><label>Seed</label><input type="number" id="seed" value="42" min="0"></div>
+      </div>
+      <label>Optional: upload feature CSV</label>
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+      <p class="meta">CSV: compound, concentration_uM, well, vehicle, fpd_ms, beat_rate_bpm, amplitude_uv, stv, triangulation_proxy</p>
+    </div>
+    <div class="card">
+      <h3>2 · Endpoint weights</h3>
+      <div class="row">
+        <div class="w33"><label>FPD</label><input type="number" id="w_fpd" value="0.30" min="0" max="1" step="0.05"></div>
+        <div class="w33"><label>Beat rate</label><input type="number" id="w_rate" value="0.15" min="0" max="1" step="0.05"></div>
+        <div class="w33"><label>Amplitude</label><input type="number" id="w_amp" value="0.15" min="0" max="1" step="0.05"></div>
+      </div>
+      <div class="row">
+        <div class="w33"><label>STV</label><input type="number" id="w_stv" value="0.25" min="0" max="1" step="0.05"></div>
+        <div class="w33"><label>Triangulation</label><input type="number" id="w_tri" value="0.15" min="0" max="1" step="0.05"></div>
+        <div class="w33"><label>Low / Mod cutoffs</label>
+          <div class="row"><input type="number" id="th_low" value="0.30" step="0.05" style="width:48%"><input type="number" id="th_mod" value="0.60" step="0.05" style="width:48%"></div>
+        </div>
+      </div>
+      <label class="chk"><input type="checkbox" id="includeToxic" checked> Include high-liability positive-control profile</label>
+    </div>
+  </div>
+  <div class="row" style="margin-bottom:12px">
+    <button class="btn" id="run">Run CardioScore</button>
+    <button class="btn ghost" id="exportJson" type="button">Export JSON</button>
+    <button class="btn ghost" id="exportCsv" type="button">Export CSV</button>
+    <button class="btn ghost" id="clear" type="button">Clear</button>
+  </div>
+  <div id="qc" class="card" style="display:none"><h3>QC log</h3><ul id="qcList" class="meta" style="margin:0;padding-left:18px"></ul></div>
+  <div id="out"></div>
+</div>
+<script src="./app.js"></script>
+</body>
+</html>
