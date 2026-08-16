@@ -149,10 +149,15 @@ def detect_beats(
     # signal directly. But rectifying (abs) makes both the spike and the
     # repolarization bump register as separate positive peaks, which
     # double-counts beats. Instead: find candidate peaks in both polarities
-    # separately, then pick ONE polarity -- whichever produced the higher-
-    # prominence peaks on average -- since the depolarization spike is
-    # reliably larger than the repolarization deflection regardless of
-    # which direction it points.
+    # separately, then pick ONE polarity for the beat markers.
+    #
+    # Selection uses raw peak HEIGHT, not prominence. Prominence measures
+    # the drop to the nearest higher terrain, and the depol spike sits
+    # immediately next to the repol deflection swinging the opposite way --
+    # so both directions end up with similar prominence (the algorithm was
+    # effectively measuring the same depol-to-repol swing either way,
+    # regardless of which one it called the "peak"). Raw height cleanly
+    # separates them, since the depolarization spike is reliably taller.
     pos_indices, pos_props = signal.find_peaks(
         trace, prominence=config.min_prominence_uv, distance=min_distance_samples
     )
@@ -160,10 +165,10 @@ def detect_beats(
         -trace, prominence=config.min_prominence_uv, distance=min_distance_samples
     )
 
-    pos_mean_prom = float(np.mean(pos_props["prominences"])) if len(pos_indices) else 0.0
-    neg_mean_prom = float(np.mean(neg_props["prominences"])) if len(neg_indices) else 0.0
+    pos_mean_height = float(np.mean(np.abs(trace[pos_indices]))) if len(pos_indices) else 0.0
+    neg_mean_height = float(np.mean(np.abs(trace[neg_indices]))) if len(neg_indices) else 0.0
 
-    if pos_mean_prom >= neg_mean_prom:
+    if pos_mean_height >= neg_mean_height:
         peak_indices = pos_indices
     else:
         peak_indices = neg_indices
