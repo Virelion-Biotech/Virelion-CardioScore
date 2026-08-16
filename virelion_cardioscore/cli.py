@@ -16,6 +16,10 @@ import click
 
 from virelion_cardioscore import __version__
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
+from virelion_cardioscore.io.raw_trace import (
+    RawTraceSchemaError,
+    load_raw_traces_to_feature_table,
+)
 from virelion_cardioscore.io.synthetic import load_synthetic_dataset
 
 
@@ -75,20 +79,38 @@ def demo(n_compounds: int, n_concentrations: int, seed: int, output_dir: str) ->
 @click.option("--config", required=True, type=click.Path(exists=True), help="Pipeline YAML config")
 @click.option("--output-dir", default="./outputs", show_default=True, type=click.Path())
 @click.option("--features", type=click.Path(exists=True), help="Optional pre-extracted feature CSV")
-def run(config: str, output_dir: str, features: str | None) -> None:
-    """Run CardioScore on a configured experiment (or feature table)."""
+@click.option(
+    "--raw-traces",
+    type=click.Path(exists=True),
+    help="Raw per-electrode voltage trace CSV (long format: compound, well, "
+    "concentration_uM, vehicle, electrode_id, time_s, voltage_uv). Runs "
+    "filtering, beat detection, and feature extraction before scoring.",
+)
+def run(config: str, output_dir: str, features: str | None, raw_traces: str | None) -> None:
+    """Run CardioScore on a configured experiment (feature table or raw traces)."""
+    if features and raw_traces:
+        raise click.UsageError("Pass only one of --features or --raw-traces, not both.")
+
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     pipeline = CardioScorePipeline.from_config(config)
 
-    if features:
+    if raw_traces:
+        click.echo(f"Loading raw traces from {raw_traces} …")
+        try:
+            df = load_raw_traces_to_feature_table(raw_traces)
+        except RawTraceSchemaError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"  Extracted features for {len(df)} well(s).")
+        result = pipeline.run(df)
+    elif features:
         import pandas as pd
 
         df = pd.read_csv(features)
         result = pipeline.run(df)
     else:
-        click.echo("No --features supplied; running synthetic demo data with the given config.")
+        click.echo("No --features or --raw-traces supplied; running synthetic demo data with the given config.")
         dataset = load_synthetic_dataset()
         result = pipeline.run(dataset)
 
