@@ -1,0 +1,65 @@
+# CiPA-oriented endpoint definitions and default weights for CardioScore
+#
+# These weights and effect directions are engineering choices inspired by
+# public CiPA literature and common MEA practices. They are fully overridable.
+# No claim of regulatory validation is made.
+
+endpoints:
+  fpd_change_pct:
+    description: "Field potential duration change relative to vehicle (%)"
+    direction: "absolute"
+    weight: 0.30
+    effect_threshold: 10.0
+    max_contribution: 1.0
+
+  beat_rate_change_pct:
+    description: "Beat rate (bpm) change relative to vehicle (%)"
+    direction: "absolute"
+    weight: 0.15
+    effect_threshold: 15.0
+    max_contribution: 1.0
+
+  amplitude_change_pct:
+    description: "Field potential amplitude change relative to vehicle (%)"
+    direction: "decrease"
+    weight: 0.15
+    effect_threshold: 20.0
+    max_contribution: 1.0
+
+  stv_increase:
+    description: "Short-term variability increase (normalized)"
+    direction: "increase"
+    weight: 0.25
+    effect_threshold: 0.15
+    max_contribution: 1.0
+
+  triangulation_proxy:
+    description: "Triangulation / APD dispersion proxy (normalized)"
+    direction: "increase"
+    weight: 0.15
+    effect_threshold: 0.20
+    max_contribution: 1.0
+
+risk_categories:
+  low:
+    max_score: 0.30
+    label: "Low"
+    color: "#2ca02c"
+    interpretation: "Minimal electrophysiological liability signals at the tested concentrations."
+  moderate:
+    max_score: 0.60
+    label: "Moderate"
+    color: "#ff7f0e"
+    interpretation: "Clear concentration-dependent changes. Recommend follow-up evaluation."
+  high:
+    max_score: 1.00
+    label: "High"
+    color: "#d62728"
+    interpretation: "Strong multi-endpoint liability signals. Prioritize additional preclinical assessment."
+
+notes: |
+  - Weights sum to 1.0 by design.
+  - Scores are clipped to [0, 1] after weighting.
+  - Vehicle-normalized endpoints are preferred when available.
+  - Individual endpoint contributions are always reported for interpretability.
+  - Users should re-calibrate weights on their own historical data when possible.

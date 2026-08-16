@@ -1,0 +1,59 @@
+# Virelion CardioScore – default pipeline configuration
+
+pipeline:
+  name: "default_cardioscore"
+  version: "0.1.0"
+  random_seed: 42
+
+quality_control:
+  min_electrodes_per_well: 4
+  max_noise_sd_uv: 25.0
+  min_beat_detection_rate: 0.7
+  reject_wells_with_arrhythmia_proxy: true
+  log_rejections: true
+
+preprocessing:
+  highpass_hz: 0.5
+  lowpass_hz: 40.0
+  notch_hz: 50.0
+  notch_q: 30.0
+  detrend: true
+
+beat_detection:
+  method: "peak"
+  min_prominence_uv: 20.0
+  min_distance_ms: 250.0
+  refractory_ms: 200.0
+
+features:
+  compute_fpd: true
+  compute_beat_rate: true
+  compute_amplitude: true
+  compute_stv: true
+  compute_triangulation_proxy: true
+  compute_conduction_proxy: false
+  window_s: 60.0
+
+concentration_response:
+  min_concentrations: 3
+  effect_threshold_pct: 10.0
+  fit_curve: false
+
+scoring:
+  endpoint_config: "cipa_endpoints.yaml"
+  low_threshold: 0.30
+  moderate_threshold: 0.60
+  normalize_by_vehicle: true
+
+reporting:
+  generate_html: true
+  generate_csv: true
+  generate_json: true
+  include_plots: true
+  plot_style: "seaborn-v0_8-whitegrid"
+
+io:
+  supported_formats:
+    - "synthetic"
+    - "csv_features"
+  output_dir: "./outputs"
