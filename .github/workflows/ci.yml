@@ -41,3 +41,13 @@ jobs:
           cardioscore demo --output-dir /tmp/cardioscore-demo
           test -f /tmp/cardioscore-demo/summary.csv
           test -f /tmp/cardioscore-demo/report.html
+
+      - name: Build and validate wheel
+        run: |
+          rm -rf /tmp/cardioscore-dist /tmp/cardioscore-wheel-env
+          mkdir -p /tmp/cardioscore-dist
+          pip wheel . --no-deps -w /tmp/cardioscore-dist
+          python -m venv /tmp/cardioscore-wheel-env
+          /tmp/cardioscore-wheel-env/bin/python -m pip install --upgrade pip
+          /tmp/cardioscore-wheel-env/bin/pip install /tmp/cardioscore-dist/*.whl
+          /tmp/cardioscore-wheel-env/bin/cardioscore version

@@ -26,3 +26,10 @@ def test_browser_scoring_uses_directional_compound_aggregation():
 def test_browser_does_not_claim_hierarchical_or_4pl_parity():
     text = APP.read_text(encoding="utf-8")
     assert "biological-unit inference and 4PL evidence remain Python-only" in text
+
+
+def test_browser_preserves_explicit_zero_weight_values():
+    text = APP.read_text(encoding="utf-8")
+    assert "function numericOrDefault(id, fallback)" in text
+    assert "Number.isFinite(value)?value:fallback" in text
+    assert "return{fpd:numericOrDefault('w_fpd',0.3)" in text
