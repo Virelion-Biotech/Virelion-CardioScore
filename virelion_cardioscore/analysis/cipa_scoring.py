@@ -110,7 +110,22 @@ class CardioScoreEngine:
         endpoint_values: dict[str, float],
         max_concentration_uM: Optional[float] = None,
         n_wells: int = 0,
+        dose_response_evidence: Optional[float] = None,
+        dose_response_weight: float = 0.0,
     ) -> ScoreResult:
+        """Score a compound with optional non-overlapping exposure-response evidence.
+
+        ``dose_response_evidence`` is a separate evidence dimension, not another
+        electrophysiology endpoint. It should only be supplied for quality-passing
+        dose-response fits and is disabled by default with zero weight.
+        """
+        if dose_response_weight < 0:
+            raise ValueError("dose_response_weight must be non-negative")
+        if dose_response_evidence is not None and not 0.0 <= dose_response_evidence <= 1.0:
+            raise ValueError("dose_response_evidence must be between 0 and 1")
+        if dose_response_weight > 0 and dose_response_evidence is None:
+            raise ValueError("dose_response_evidence is required when dose_response_weight > 0")
+
         contributions: list[EndpointContribution] = []
         weighted_sum = 0.0
         total_weight = 0.0
@@ -136,6 +151,22 @@ class CardioScoreEngine:
                 )
             )
 
+        if dose_response_weight > 0 and dose_response_evidence is not None:
+            weighted_sum += dose_response_weight * dose_response_evidence
+            total_weight += dose_response_weight
+            contributions.append(
+                EndpointContribution(
+                    name="dose_response_exposure_evidence",
+                    raw_value=float(dose_response_evidence),
+                    contribution=float(dose_response_evidence),
+                    weight=float(dose_response_weight),
+                    description=(
+                        "Exposure-response evidence from quality-passing 4PL fits; "
+                        "fraction of the tested log-concentration range above the fitted EC50."
+                    ),
+                )
+            )
+
         score = float(np.clip(weighted_sum / total_weight if total_weight > 0 else 0.0, 0.0, 1.0))
 
         if score < self.low_threshold:
@@ -144,6 +175,11 @@ class CardioScoreEngine:
             cat = self.risk_categories["moderate"]
         else:
             cat = self.risk_categories["high"]
+
+        metadata = {}
+        if dose_response_evidence is not None:
+            metadata["dose_response_evidence"] = float(dose_response_evidence)
+            metadata["dose_response_weight"] = float(dose_response_weight)
 
         return ScoreResult(
             compound=compound,
@@ -154,6 +190,7 @@ class CardioScoreEngine:
             contributions=contributions,
             max_concentration_uM=max_concentration_uM,
             n_wells=n_wells,
+            metadata=metadata,
         )
 
     def score_feature_table(self, df: pd.DataFrame) -> list[ScoreResult]:
