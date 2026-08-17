@@ -125,7 +125,7 @@ def aggregate_to_scoring_units(
     for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
-        row = dict(zip(group_columns, keys))
+        row = dict(zip(group_columns, keys, strict=True))
         row["well"] = f"{scoring_unit}:{keys[-1]}"
         row["n_wells"] = int(group["well"].nunique())
         for endpoint in endpoint_columns:
@@ -179,7 +179,7 @@ def summarize_experimental_units(
     for keys, group in grouped:
         if not isinstance(keys, tuple):
             keys = (keys,)
-        row = dict(zip(unit_columns, keys))
+        row = dict(zip(unit_columns, keys, strict=True))
         row["n_wells"] = int(group["well"].nunique()) if "well" in group else len(group)
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
