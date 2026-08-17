@@ -37,6 +37,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .badge-Low {{ background: rgba(34,197,94,0.15); color: var(--low); }}
     .badge-Moderate {{ background: rgba(245,158,11,0.15); color: var(--mod); }}
     .badge-High {{ background: rgba(239,68,68,0.15); color: var(--high); }}
+    .badge-stable {{ background: rgba(34,197,94,0.15); color: var(--low); }}
+    .badge-high_variability {{ background: rgba(239,68,68,0.15); color: var(--high); }}
+    .badge-insufficient_groups {{ background: rgba(245,158,11,0.15); color: var(--mod); }}
     .contrib {{ display: flex; align-items: center; gap: 0.75rem; margin: 0.4rem 0; }}
     .bar {{ height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }}
     .meta {{ font-size: 0.85rem; color: var(--muted); }}
@@ -55,6 +58,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <tbody>{summary_rows}</tbody>
     </table>
   </div>
+  {variability_card}
   {detail_cards}
   <div class="card">
     <h2 style="margin-top:0">Quality Control Log</h2>
@@ -67,6 +71,73 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def _format_optional_number(value: object, digits: int = 2) -> str:
+    if value is None:
+        return "—"
+    try:
+        if value != value:
+            return "—"
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _build_variability_card(result: "PipelineResult") -> str:
+    if result.variability_table.empty:
+        return ""
+
+    rows = []
+    for _, row in result.variability_table.iterrows():
+        status = str(row["status"])
+        rows.append(
+            f"""<tr>
+              <td>{row['endpoint']}</td>
+              <td>{row['group_column']}</td>
+              <td>{int(row['n_groups'])}</td>
+              <td>{int(row['n_controls'])}</td>
+              <td>{_format_optional_number(row['control_cv_pct'])}%</td>
+              <td>{_format_optional_number(row['between_group_sd'])}</td>
+              <td><span class=\"badge badge-{status}\">{status.replace('_', ' ')}</span></td>
+            </tr>"""
+        )
+
+    separation = result.separation_table
+    separation_html = ""
+    if not separation.empty:
+        separation_rows = []
+        group_column = str(separation.columns[1])
+        for _, row in separation.iterrows():
+            separation_rows.append(
+                f"""<tr>
+                  <td>{row['compound']}</td>
+                  <td>{row[group_column]}</td>
+                  <td>{row['endpoint']}</td>
+                  <td>{int(row['n_controls'])}</td>
+                  <td>{int(row['n_treated'])}</td>
+                  <td>{_format_optional_number(row['standardized_separation'], 3)}</td>
+                </tr>"""
+            )
+        separation_html = f"""
+        <h3 style=\"font-size:1rem;margin-top:1.25rem\">Exploratory treatment/control separation</h3>
+        <table>
+          <thead><tr><th>Compound</th><th>Group</th><th>Endpoint</th>
+          <th>Controls</th><th>Treated</th><th>|Δ| / Control SD</th></tr></thead>
+          <tbody>{''.join(separation_rows)}</tbody>
+        </table>
+        """
+
+    return f"""<div class=\"card\">
+      <h2 style=\"margin-top:0\">Control Stability &amp; Plate/Batch Diagnostics</h2>
+      <p class=\"meta\">QC/inference diagnostics only; these values do not alter CardioScore.</p>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Grouping</th><th>Groups</th><th>Controls</th>
+        <th>Control CV</th><th>Between-group SD</th><th>Status</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+      {separation_html}
+    </div>"""
 
 
 def write_html_report(result: "PipelineResult", path: str | Path) -> None:
@@ -111,6 +182,7 @@ def write_html_report(result: "PipelineResult", path: str | Path) -> None:
 
     html = HTML_TEMPLATE.format(
         summary_rows="\n".join(summary_rows),
+        variability_card=_build_variability_card(result),
         detail_cards="\n".join(detail_cards),
         qc_items=qc_items,
     )
