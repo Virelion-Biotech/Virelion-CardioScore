@@ -30,10 +30,8 @@ jobs:
         if: matrix.python-version == '3.11'
         run: |
           ruff check --fix . || true
-          tar -czf /tmp/cardioscore-ruff-fixed.tar.gz . \
-            --exclude='./.git' \
-            --exclude='./.pytest_cache' \
-            --exclude='./outputs'
+          tar --exclude='./.git' --exclude='./.pytest_cache' --exclude='./outputs' \
+            -czf /tmp/cardioscore-ruff-fixed.tar.gz .
 
       - name: Upload Ruff-fixed source artifact
         if: matrix.python-version == '3.11'
