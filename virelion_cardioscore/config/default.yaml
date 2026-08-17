@@ -57,7 +57,6 @@ variability:
   max_control_cv_pct: 20.0
   correction:
     # Conservative control-anchored recentering; disabled by default.
-    # Requires variability.enabled=true and adequate vehicle controls in every group.
     enabled: false
     corrected_columns:
       - "fpd_ms"
@@ -72,12 +71,13 @@ variability:
       require_treatment_in_all_groups: true
       min_treated_per_group: 1
       max_shift_cv_pct: 50.0
+      # Fail closed when assumptions are not met unless deliberately overridden for exploration.
+      fail_closed: true
 
 mixed_effects:
   # Optional random-intercept inference; never changes CardioScore automatically.
   enabled: false
   group_column: null
-  # Treatment is derived from the vehicle flag by the pipeline helper.
   treatment_column: "_treatment"
   endpoints:
     - "fpd_ms"
@@ -87,15 +87,12 @@ mixed_effects:
     - "triangulation_proxy"
 
 concentration_response:
-  # Replicates are summarized within each concentration before compound-level scoring.
   replicate_aggregation: "mean"
   concentration_aggregation: "max_absolute_effect"
   min_concentrations: 3
   effect_threshold_pct: 10.0
-  # Optional 4-parameter logistic fitting; disabled by default.
   fit_curve: false
   fit_min_concentrations: 4
-  # A fit can be numerically converged yet still be a poor representation of the data.
   fit_min_r_squared: 0.80
   fit_min_monotonicity: 0.80
   fit_ec50_boundary_factor: 2.0
@@ -113,7 +110,6 @@ scoring:
   low_threshold: 0.30
   moderate_threshold: 0.60
   normalize_by_vehicle: true
-  # Optional dose-response exposure evidence. Zero preserves the original endpoint-only score.
   dose_response_weight: 0.0
 
 reporting:
