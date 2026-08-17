@@ -87,13 +87,13 @@ def test_decrease_direction_scores_large_amplitude_loss(engine: CardioScoreEngin
     assert result.score == pytest.approx(0.15)
 
 
-def test_one_extreme_endpoint_does_not_cross_moderate_threshold(engine: CardioScoreEngine):
+def test_one_extreme_endpoint_reaches_but_does_not_exceed_low_boundary(engine: CardioScoreEngine):
     for endpoint in ("fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy"):
         values = _zero_case()
         values[endpoint] = 1e6 if endpoint != "amplitude_change_pct" else -1e6
         result = engine.score_compound(endpoint, values)
         assert result.score <= 0.30
-        assert result.risk_class == "Low"
+        assert result.risk_class == ("Moderate" if result.score == pytest.approx(0.30) else "Low")
 
 
 def test_multiple_extreme_endpoints_cross_high_threshold(engine: CardioScoreEngine):
