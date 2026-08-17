@@ -417,9 +417,11 @@ class CardioScorePipeline:
                 dose_response_weight=dose_response_weight,
             ))
         summary_rows = []
+        fit_curve_enabled = bool(concentration_cfg.get("fit_curve", False))
+        max_ec50_uncertainty_fold = float(concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0))
         for s in scores:
             agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
-            summary_rows.append({
+            row = {
                 "compound": s.compound,
                 "cardioscore": round(s.score, 4),
                 "risk_class": s.risk_class,
@@ -431,7 +433,22 @@ class CardioScorePipeline:
                 "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                 "effect_detected": bool(agg_row["effect_detected"]),
                 "interpretation": s.interpretation,
-            })
+            }
+            if fit_curve_enabled:
+                fits = dose_response_fits.get(s.compound, [])
+                successful = [fit for fit in fits if fit.success]
+                monotonicities = [fit.monotonicity for fit in successful if fit.monotonicity is not None]
+                row["dose_response_fit_endpoints"] = len(successful)
+                row["dose_response_boundary_flags"] = sum(1 for fit in successful if fit.ec50_boundary_flag)
+                row["dose_response_high_uncertainty"] = sum(
+                    1
+                    for fit in successful
+                    if fit.ec50_uncertainty_fold is not None and fit.ec50_uncertainty_fold > max_ec50_uncertainty_fold
+                )
+                row["dose_response_mean_monotonicity"] = (
+                    round(float(np.mean(monotonicities)), 4) if monotonicities else None
+                )
+            summary_rows.append(row)
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
             summary = summary.sort_values("cardioscore", ascending=False)

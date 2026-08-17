@@ -279,13 +279,23 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
 def test_4pl_fit_recovers_known_curve():
     concentrations = np.logspace(-1, 2, 7)
     expected = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, expected, endpoint="fpd_change_pct", min_r_squared=0.999)
+    # A perfectly noiseless curve fit without weights has zero residual
+    # variance, so scipy's covariance estimate (scaled by residual
+    # variance / dof when no sigma is supplied) collapses to zero-width --
+    # ec50_ci_low == ec50 == ec50_ci_high exactly. That's correct numerical
+    # behavior, not something fit_4pl should paper over, so the test adds
+    # small, fixed-seed noise to get a realistic (non-degenerate) CI while
+    # still recovering the known curve closely.
+    rng = np.random.default_rng(7)
+    responses = expected + rng.normal(0, 0.5, size=expected.shape)
+
+    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99)
 
     assert result.success
     assert result.quality_pass
-    assert result.ec50 == pytest.approx(10.0, rel=1e-2)
-    assert result.hill_slope == pytest.approx(1.5, rel=1e-2)
-    assert result.r_squared > 0.999
+    assert result.ec50 == pytest.approx(10.0, rel=0.05)
+    assert result.hill_slope == pytest.approx(1.5, rel=0.05)
+    assert result.r_squared > 0.99
     assert result.ec50_ci_low < result.ec50 < result.ec50_ci_high
     assert result.hill_ci_low < result.hill_slope < result.hill_ci_high
 
