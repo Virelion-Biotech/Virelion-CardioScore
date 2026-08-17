@@ -7,6 +7,7 @@ vector, and reports changes in score and risk class.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 import pandas as pd
@@ -37,7 +38,8 @@ def run_weight_sensitivity(
 
     ``compounds`` maps compound names to complete endpoint-value mappings.
     Endpoint values are validated by the engine, so incomplete/non-finite data
-    fail closed rather than being treated as zero liability.
+    fail closed rather than being treated as zero liability. The supplied engine
+    is never mutated; each perturbation is evaluated on an isolated copy.
     """
     spec = spec or WeightSensitivitySpec()
     base_weights = {name: float(meta["weight"]) for name, meta in engine.endpoints.items()}
@@ -53,17 +55,13 @@ def run_weight_sensitivity(
                 if total <= 0:
                     raise ValueError("Perturbed endpoint weights must sum to a positive value.")
 
-                original = engine.config["endpoints"]
-                try:
-                    engine.config["endpoints"] = {
-                        name: {**meta, "weight": perturbed[name]}
-                        for name, meta in original.items()
-                    }
-                    engine.endpoints = engine.config["endpoints"]
-                    result = engine.score_compound(compound, values)
-                finally:
-                    engine.config["endpoints"] = original
-                    engine.endpoints = original
+                isolated_engine = deepcopy(engine)
+                isolated_engine.config["endpoints"] = {
+                    name: {**meta, "weight": perturbed[name]}
+                    for name, meta in isolated_engine.config["endpoints"].items()
+                }
+                isolated_engine.endpoints = isolated_engine.config["endpoints"]
+                result = isolated_engine.score_compound(compound, values)
 
                 rows.append(
                     {
