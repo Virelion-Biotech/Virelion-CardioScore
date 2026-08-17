@@ -127,5 +127,6 @@ class HierarchicalCardioScorePipeline:
             group_column=group_column,
             endpoints=endpoints,
             vehicle_column=cfg.get("vehicle_column", "vehicle"),
+            treatment_column=cfg.get("treatment_column", "_treatment"),
         )
         return HierarchicalPipelineResult(base_result, pd.DataFrame(rows))
