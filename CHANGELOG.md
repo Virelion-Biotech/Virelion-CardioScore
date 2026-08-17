@@ -24,12 +24,25 @@
 - Synthetic hierarchical stress-test generator with known treatment effects, additive plate drift, multiplicative scale drift, and treatment-allocation imbalance scenarios.
 - Robustness-matrix runner that sweeps plate drift, treatment allocation, replicate count, and noise level and summarizes conventional-estimator bias and recovery rate.
 
+### Fixed
+- Restored the actual `preprocessing.beat_detection` implementation after a module collision had replaced it with endpoint-extraction code.
+- Removed invalid bootstrap p-values that were derived from an observed-effect bootstrap distribution; profile comparisons now report confidence intervals only.
+- Made endpoint direction semantics consistent, including correct handling of decrease-only endpoints and feature-table scoring.
+- Made configured endpoint files authoritative and validate endpoint weights, thresholds, and directions at load time.
+- Made `normalize_by_vehicle`, preprocessing, beat-detection, mixed-effects treatment, correction guardrails, and reporting settings effective rather than decorative.
+- Rejected missing or blank experimental-unit identifiers instead of collapsing them into one pseudo-unit.
+- Made plate/batch variability diagnostics operate on group-level control means and concentration-specific treatment separation.
+- Preserved plate, batch, experiment, and biological-replicate metadata through raw-trace feature extraction.
+- Tightened raw-trace validation for finite values, non-negative concentrations, duplicate timestamps, and inconsistent electrode sampling rates.
+- Aligned hierarchical mixed-effects inference with the base run's QC/normalization population instead of re-analyzing rejected raw wells.
+- Hardened the browser demo against unsafe HTML injection and silent feature fabrication from missing CSV columns.
+
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
 - Wells remain the default analysis unit when no higher-level metadata are available.
 - When biological-replicate metadata are supplied, technical wells can be summarized within biological units before higher-level inference and scoring.
 - Raw well-level effects remain preserved in `PipelineResult.feature_table` for auditability.
-- Vehicle normalization is now explicitly scoped; missing matching controls are not silently substituted.
+- Vehicle normalization is explicitly scoped; missing matching controls are not silently substituted.
 - The default vehicle scope remains `compound`, preserving historical behavior unless a study explicitly uses shared plate/batch/global controls.
 - Plate/batch variability diagnostics are QC/inference outputs only and do not alter CardioScore.
 - The variability layer does not claim a mixed-effects model; it identifies control instability that should be addressed before confirmatory inference.

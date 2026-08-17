@@ -1,9 +1,4 @@
-"""Control-anchored batch normalization for CardioScore.
-
-The correction is intentionally conservative: group-specific shifts are learned
-from vehicle controls only and applied to all wells in that group. It is an
-exploratory normalization layer, not a mixed-effects or regulatory correction.
-"""
+"""Control-anchored batch normalization for CardioScore."""
 
 from __future__ import annotations
 
@@ -20,8 +15,6 @@ from virelion_cardioscore.analysis.normalization_assumptions import (
 
 @dataclass(frozen=True)
 class CorrectionDiagnostic:
-    """Record how a control-anchored correction was applied."""
-
     group_column: str
     n_groups: int
     n_controls: int
@@ -63,20 +56,11 @@ def apply_control_anchor_correction(
     min_controls_per_group: int = 2,
     require_all_groups: bool = True,
     min_treated_per_group: int = 1,
+    require_treatment_in_all_groups: bool = True,
     max_shift_cv_pct: float = 50.0,
     fail_on_assumption_violation: bool = True,
 ) -> tuple[pd.DataFrame, CorrectionDiagnostic]:
-    """Recenter selected endpoints using vehicle-only group control means.
-
-    For each experimental group ``g`` and endpoint ``x``:
-
-        corrected_x = x - mean(vehicle_g) + mean(vehicle_all)
-
-    This preserves within-group treatment-control differences while expressing
-    observations on a common control-centered scale. Before applying the
-    correction, the function checks treatment allocation and additive-shift
-    assumptions and can fail closed when those assumptions are violated.
-    """
+    """Recenter selected endpoints using vehicle-only group control means."""
     if df.empty:
         raise ValueError("Cannot correct an empty dataset.")
     if "vehicle" not in df.columns:
@@ -110,7 +94,7 @@ def apply_control_anchor_correction(
             endpoint=column,
             min_treated_per_group=min_treated_per_group,
             max_shift_cv_pct=max_shift_cv_pct,
-            require_treatment_in_all_groups=require_all_groups,
+            require_treatment_in_all_groups=require_treatment_in_all_groups,
         )
         assumption_checks[column] = check.to_dict()
         if fail_on_assumption_violation and not check.usable_for_additive_correction:
@@ -119,7 +103,7 @@ def apply_control_anchor_correction(
             )
 
     working = df.copy()
-    controls = working[working["vehicle"] == True]  # noqa: E712
+    controls = working[working["vehicle"].astype(bool)]
     if controls.empty:
         raise ValueError("Control-anchored correction requires at least one vehicle well.")
 
