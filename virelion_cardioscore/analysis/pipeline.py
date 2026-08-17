@@ -281,15 +281,26 @@ class CardioScorePipeline:
             return {}
 
         min_points = int(concentration_cfg.get("fit_min_concentrations", 4))
+        min_r_squared = float(concentration_cfg.get("fit_min_r_squared", 0.80))
         results: dict[str, list[DoseResponseFit]] = {}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(group, min_points=min_points)
+            fits = fit_concentration_series(
+                group,
+                min_points=min_points,
+                min_r_squared=min_r_squared,
+            )
             results[str(compound)] = fits
-            failures = [fit for fit in fits if not fit.success]
-            if failures:
+            failed = [fit for fit in fits if not fit.success]
+            poor_quality = [fit for fit in fits if fit.success and not fit.quality_pass]
+            if failed:
                 self.qc_log.append(
-                    f"Dose-response fitting: {compound} has {len(failures)} endpoint fit(s) "
-                    f"that did not converge or lacked sufficient data."
+                    f"Dose-response fitting: {compound} has {len(failed)} endpoint fit(s) "
+                    "that did not converge or lacked sufficient data."
+                )
+            if poor_quality:
+                self.qc_log.append(
+                    f"Dose-response fitting: {compound} has {len(poor_quality)} endpoint fit(s) "
+                    f"below the configured R-squared quality threshold ({min_r_squared:.2f})."
                 )
         return results
 
@@ -357,7 +368,7 @@ class CardioScorePipeline:
         for s in scores:
             agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
             fits = dose_response_fits.get(s.compound, [])
-            successful_fits = sum(fit.success for fit in fits)
+            successful_quality_fits = sum(fit.quality_pass for fit in fits)
             summary_rows.append(
                 {
                     "compound": s.compound,
@@ -368,7 +379,7 @@ class CardioScorePipeline:
                     "concentrations_tested": int(agg_row["concentrations_tested"]),
                     "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                     "effect_detected": bool(agg_row["effect_detected"]),
-                    "dose_response_fit_endpoints": successful_fits,
+                    "dose_response_fit_endpoints": successful_quality_fits,
                     "interpretation": s.interpretation,
                 }
             )
