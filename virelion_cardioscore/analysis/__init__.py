@@ -14,6 +14,7 @@ from virelion_cardioscore.analysis.hierarchy import (
     hierarchy_columns,
     summarize_experimental_units,
 )
+from virelion_cardioscore.analysis.mixed_effects import MixedEffectsResult, fit_random_intercept
 from virelion_cardioscore.analysis.normalization import (
     CorrectionDiagnostic,
     apply_control_anchor_correction,
@@ -51,6 +52,8 @@ __all__ = [
     "hierarchy_columns",
     "summarize_experimental_units",
     "count_independent_units",
+    "MixedEffectsResult",
+    "fit_random_intercept",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
     "NormalizationAssumptionCheck",

@@ -50,6 +50,9 @@ dev = [
     "jupyter>=1.0",
     "ipykernel>=6.25",
 ]
+mixed = [
+    "statsmodels>=0.14",
+]
 docs = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.0",

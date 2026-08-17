@@ -16,7 +16,7 @@
 - HTML reporting of control-stability and plate/batch diagnostics when variability analysis is enabled.
 - Optional control-anchored batch normalization using vehicle-only group shifts, with before/after control variability reporting and JSON audit metadata.
 - Reusable normalization-validation utilities for testing drift reduction and preservation of within-group treatment-control effects on benchmark datasets.
-- Normalization-assumption diagnostics for treatment allocation imbalance and heterogeneous additive shifts, exposed through the public analysis API.
+- Fail-closed normalization assumption checks for treatment allocation and additive-vs-scale drift warnings.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -32,7 +32,8 @@
 - The normalization is additive and should only be enabled for endpoints where additive recentering is scientifically defensible; it is not presented as a validated regulatory batch-correction model.
 - Before/after variability outputs are retained so users can determine whether normalization reduced technical drift rather than assuming it did.
 - The normalization-validation harness separately measures control-drift reduction and treatment-effect preservation; it does not turn those benchmark results into a regulatory validation claim.
-- Normalization-assumption diagnostics flag missing treatment coverage and highly heterogeneous shifts before an additive correction is considered; they are screening checks rather than formal statistical tests.
+- Normalization now performs assumption checks before applying corrections and fails closed by default when treatment allocation or additive-shift assumptions are not met.
+- Symmetric positive/negative additive shifts are treated sign-invariantly in the assumption diagnostic to avoid false alarms from plate offsets in opposite directions.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
