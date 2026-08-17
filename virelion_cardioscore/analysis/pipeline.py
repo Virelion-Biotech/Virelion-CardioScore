@@ -63,8 +63,8 @@ class PipelineResult:
                 for compound, fits in self.dose_response_fits.items()
             },
         }
-        with open(path, "w") as f:
-            json.dump(payload, f, indent=2)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
 
 
 class CardioScorePipeline:
@@ -72,17 +72,32 @@ class CardioScorePipeline:
 
     def __init__(self, config: dict):
         self.config = config
+        scoring_cfg = config.get("scoring", {})
+        endpoint_config = scoring_cfg.get("endpoint_config", "cipa_endpoints.yaml")
+        endpoint_path = Path(endpoint_config)
+        if not endpoint_path.is_absolute():
+            base_dir = Path(config.get("_config_dir", Path(__file__).resolve().parents[1] / "config"))
+            endpoint_path = base_dir / endpoint_path
+            if not endpoint_path.exists():
+                package_default = Path(__file__).resolve().parents[1] / "config" / endpoint_config
+                endpoint_path = package_default
+        if not endpoint_path.exists():
+            raise ValueError(f"Configured endpoint configuration does not exist: {endpoint_path}")
+
         self.engine = CardioScoreEngine(
-            low_threshold=config.get("scoring", {}).get("low_threshold", 0.30),
-            moderate_threshold=config.get("scoring", {}).get("moderate_threshold", 0.60),
+            endpoint_config_path=endpoint_path,
+            low_threshold=scoring_cfg.get("low_threshold", 0.30),
+            moderate_threshold=scoring_cfg.get("moderate_threshold", 0.60),
         )
         self.qc_log: list[str] = []
 
     @classmethod
     def from_config(cls, path: str | Path) -> "CardioScorePipeline":
         path = Path(path)
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
+        with open(path, encoding="utf-8") as handle:
+            cfg = yaml.safe_load(handle) or {}
+        cfg = dict(cfg)
+        cfg["_config_dir"] = str(path.resolve().parent)
         return cls(cfg)
 
     @classmethod
@@ -153,13 +168,39 @@ class CardioScorePipeline:
                 f"control_normalization.scope={scope!r} requires metadata column(s) "
                 f"{missing!r}, but they are not present in the dataset."
             )
+        for column in columns:
+            if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
+                raise ValueError(
+                    f"control_normalization.scope={scope!r} cannot use grouping column "
+                    f"{column!r} with missing or blank identifiers."
+                )
         return columns
 
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate vehicle-normalized effects using an explicit control scope."""
+        control_cfg = self.config.get("control_normalization", {})
+        normalize = bool(self.config.get("scoring", {}).get("normalize_by_vehicle", True))
+        if not normalize:
+            required = {
+                "compound", "concentration_uM", "well", "fpd_change_pct",
+                "beat_rate_change_pct", "amplitude_change_pct", "stv_increase",
+                "triangulation_proxy_change",
+            }
+            missing = sorted(required - set(df.columns))
+            if missing:
+                raise ValueError(
+                    "normalize_by_vehicle=false requires precomputed effect columns: "
+                    f"{missing}"
+                )
+            effects = df.copy()
+            effects["vehicle"] = False
+            effects["max_effect_pct"] = effects[[
+                "fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct"
+            ]].abs().max(axis=1)
+            return effects
+
         records = []
         optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id"]
-        control_cfg = self.config.get("control_normalization", {})
         scope = control_cfg.get("scope", "compound")
         control_columns = self._control_group_columns(df)
         require_match = bool(control_cfg.get("require_matching_control", True))
@@ -168,8 +209,8 @@ class CardioScorePipeline:
         for group_key, group in grouped:
             if not isinstance(group_key, tuple):
                 group_key = (group_key,)
-            vehicle = group[group["vehicle"] == True]  # noqa: E712
-            treated = group[group["vehicle"] == False]
+            vehicle = group[group["vehicle"].astype(bool)]
+            treated = group[~group["vehicle"].astype(bool)]
 
             if vehicle.empty:
                 message = f"No matching vehicle control for normalization scope={scope!r} group={group_key!r}."
@@ -185,19 +226,13 @@ class CardioScorePipeline:
             v_stv = vehicle["stv"].mean()
             v_tri = vehicle["triangulation_proxy"].mean()
 
-            if v_fpd == 0 or v_rate == 0 or v_amp == 0:
-                self.qc_log.append(
-                    f"Warning: zero vehicle baseline encountered for control group {group_key!r}; "
-                    "affected percentage effects were not calculated."
-                )
-
             for _, row in treated.iterrows():
                 compound = str(row["compound"])
                 fpd_change = np.nan if v_fpd == 0 else 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd
                 rate_change = np.nan if v_rate == 0 else 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate
                 amp_change = np.nan if v_amp == 0 else 100.0 * (row["amplitude_uv"] - v_amp) / v_amp
-                stv_increase = (row["stv"] - v_stv) / max(v_stv, 1e-6)
-                tri_change = (row["triangulation_proxy"] - v_tri) / max(v_tri, 1e-6)
+                stv_increase = (row["stv"] - v_stv) / max(abs(v_stv), 1e-6)
+                tri_change = (row["triangulation_proxy"] - v_tri) / max(abs(v_tri), 1e-6)
                 finite_effects = [abs(x) for x in [fpd_change, rate_change, amp_change] if pd.notna(x)]
                 finite_effects.extend([abs(stv_increase) * 100.0, abs(tri_change) * 100.0])
                 max_effect_pct = max(finite_effects) if finite_effects else np.nan
@@ -285,13 +320,18 @@ class CardioScorePipeline:
 
         corrected_columns = cfg.get("corrected_columns")
         min_controls = int(cfg.get("min_controls_per_group", 2))
-        group_column = self.config.get("variability", {}).get("group_column")
+        group_cfg = self.config.get("variability", {})
+        group_column = group_cfg.get("group_column")
+        assumptions = cfg.get("assumptions", {})
         corrected, diagnostic = apply_control_anchor_correction(
             df,
             group_column=group_column,
             corrected_columns=corrected_columns,
             min_controls_per_group=min_controls,
             require_all_groups=bool(cfg.get("require_all_groups", True)),
+            min_treated_per_group=int(assumptions.get("min_treated_per_group", 1)),
+            max_shift_cv_pct=float(assumptions.get("max_shift_cv_pct", 50.0)),
+            fail_on_assumption_violation=bool(assumptions.get("fail_closed", True)),
         )
         self.qc_log.append(
             f"Control normalization: applied control-anchored recentering across "
@@ -383,6 +423,8 @@ class CardioScorePipeline:
             def min_value(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 return float(values.min()) if len(values) else 0.0
+            technical_wells = int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum())
+            independent_units = int(group["n_replicates"].sum())
             rows.append({
                 "compound": compound,
                 "fpd_change_pct": max_abs("fpd_change_pct_mean"),
@@ -391,11 +433,11 @@ class CardioScorePipeline:
                 "stv_increase": max_positive("stv_increase_mean"),
                 "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
                 "max_concentration_uM": float(group["concentration_uM"].max()),
-                "n_wells": int(group["n_replicates"].sum()),
-                "n_independent_units": int(group["n_replicates"].sum()),
+                "n_wells": technical_wells,
+                "n_independent_units": independent_units,
                 "concentrations_tested": int(group["concentration_uM"].nunique()),
                 "max_effect_pct": float(group["max_effect_pct_mean"].max()),
-                "n_technical_wells": int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum()),
+                "n_technical_wells": technical_wells,
             })
         return pd.DataFrame(rows)
 
