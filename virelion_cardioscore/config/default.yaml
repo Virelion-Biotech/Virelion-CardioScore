@@ -2,7 +2,7 @@
 
 pipeline:
   name: "default_cardioscore"
-  version: "0.1.0"
+  version: "0.1.1"
   random_seed: 42
 
 quality_control:
