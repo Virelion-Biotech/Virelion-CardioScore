@@ -22,6 +22,7 @@
 - Opt-in hierarchical CardioScore pipeline wrapper that augments standard pipeline results with mixed-effects inference and JSON/HTML reporting.
 - Conventional-vs-hierarchical effect concordance analysis reporting absolute/relative disagreement and direction agreement.
 - Synthetic hierarchical stress-test generator with known treatment effects, additive plate drift, multiplicative scale drift, and treatment-allocation imbalance scenarios.
+- Robustness-matrix runner that sweeps plate drift, treatment allocation, replicate count, and noise level and summarizes conventional-estimator bias and recovery rate.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -45,6 +46,7 @@
 - The hierarchical wrapper augments standard CardioScore output without altering the core scoring path or default results.
 - Conventional-vs-hierarchical concordance is a diagnostic only. Disagreement does not establish that either estimator is correct; it identifies analyses where clustering may materially affect the estimated treatment effect.
 - Synthetic stress tests encode known ground truth so that treatment-effect bias from plate drift or allocation imbalance can be detected independently of the scorer's own assumptions.
+- The robustness matrix is an operating-characteristic tool for synthetic data only; recovery thresholds are configurable and are not claims of real-world performance or regulatory validation.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
