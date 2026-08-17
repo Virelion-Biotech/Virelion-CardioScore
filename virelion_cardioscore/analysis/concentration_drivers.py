@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
 
@@ -61,6 +60,13 @@ def _select_driver(values: pd.Series, direction: str) -> int:
     raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
 
 
+def _support_threshold(endpoint: str, effect_threshold_pct: float) -> float:
+    """Return the endpoint-native threshold corresponding to a percent cutoff."""
+    if endpoint in {"stv_increase", "triangulation_proxy_change"}:
+        return effect_threshold_pct / 100.0
+    return effect_threshold_pct
+
+
 def concentration_drivers(
     concentration_summary: pd.DataFrame,
     *,
@@ -69,9 +75,10 @@ def concentration_drivers(
 ) -> pd.DataFrame:
     """Identify worst-case concentrations and signal support for each endpoint.
 
-    ``support_fraction`` is the fraction of tested concentrations whose absolute
-    endpoint effect reaches ``effect_threshold_pct``. For directional endpoints,
-    only the harmful direction is counted.
+    ``support_fraction`` is the fraction of tested concentrations whose endpoint
+    response reaches ``effect_threshold_pct`` in the configured harmful direction.
+    FPD, rate, and amplitude use percentage-point units; STV and triangulation use
+    fractional units internally and are converted from the same percent cutoff.
     """
     if concentration_summary.empty:
         return pd.DataFrame()
@@ -98,12 +105,13 @@ def concentration_drivers(
 
             driver_index = _select_driver(finite_values, direction)
             driver_row = finite_group.loc[driver_index]
+            threshold = _support_threshold(endpoint, effect_threshold_pct)
             if direction == "decrease":
-                harmful = finite_values <= -effect_threshold_pct
+                harmful = finite_values <= -threshold
             elif direction == "increase":
-                harmful = finite_values >= effect_threshold_pct / 100.0 if endpoint in {"stv_increase", "triangulation_proxy_change"} else finite_values >= effect_threshold_pct
+                harmful = finite_values >= threshold
             else:
-                harmful = finite_values.abs() >= effect_threshold_pct
+                harmful = finite_values.abs() >= threshold
             support_count = int(harmful.sum())
             n_tested = int(finite_values.size)
             rows.append(
