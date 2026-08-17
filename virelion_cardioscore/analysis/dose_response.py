@@ -24,6 +24,14 @@ _ENDPOINT_HARM_DIRECTIONS = {
     "triangulation_proxy_change": "increase",
 }
 
+_ENDPOINT_EFFECT_THRESHOLDS = {
+    "fpd_change_pct": 10.0,
+    "beat_rate_change_pct": 15.0,
+    "amplitude_change_pct": 20.0,
+    "stv_increase": 0.15,
+    "triangulation_proxy_change": 0.20,
+}
+
 
 @dataclass
 class DoseResponseFit:
@@ -141,6 +149,8 @@ def fit_4pl(
     max_ec50_uncertainty_fold: float = 100.0,
     effect_threshold: float | None = None,
 ) -> DoseResponseFit:
+    if effect_threshold is None:
+        effect_threshold = _ENDPOINT_EFFECT_THRESHOLDS.get(endpoint)
     if effect_threshold is not None and effect_threshold < 0:
         raise ValueError("effect_threshold must be non-negative.")
 
