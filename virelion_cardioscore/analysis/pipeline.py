@@ -282,12 +282,20 @@ class CardioScorePipeline:
 
         min_points = int(concentration_cfg.get("fit_min_concentrations", 4))
         min_r_squared = float(concentration_cfg.get("fit_min_r_squared", 0.80))
+        min_monotonicity = float(concentration_cfg.get("fit_min_monotonicity", 0.80))
+        ec50_boundary_factor = float(concentration_cfg.get("fit_ec50_boundary_factor", 2.0))
+        max_ec50_uncertainty_fold = float(
+            concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0)
+        )
         results: dict[str, list[DoseResponseFit]] = {}
         for compound, group in concentration_summary.groupby("compound"):
             fits = fit_concentration_series(
                 group,
                 min_points=min_points,
                 min_r_squared=min_r_squared,
+                min_monotonicity=min_monotonicity,
+                ec50_boundary_factor=ec50_boundary_factor,
+                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
             )
             results[str(compound)] = fits
             failed = [fit for fit in fits if not fit.success]
@@ -300,7 +308,7 @@ class CardioScorePipeline:
             if poor_quality:
                 self.qc_log.append(
                     f"Dose-response fitting: {compound} has {len(poor_quality)} endpoint fit(s) "
-                    f"below the configured R-squared quality threshold ({min_r_squared:.2f})."
+                    "that failed one or more configured quality gates."
                 )
         return results
 
@@ -369,6 +377,15 @@ class CardioScorePipeline:
             agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
             fits = dose_response_fits.get(s.compound, [])
             successful_quality_fits = sum(fit.quality_pass for fit in fits)
+            boundary_flags = sum(fit.ec50_boundary_flag for fit in fits if fit.success)
+            high_uncertainty = sum(
+                fit.ec50_uncertainty_fold is not None
+                and fit.ec50_uncertainty_fold > float(concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0))
+                for fit in fits
+                if fit.success
+            )
+            monotonicities = [fit.monotonicity for fit in fits if fit.monotonicity is not None]
+            mean_monotonicity = float(np.mean(monotonicities)) if monotonicities else np.nan
             summary_rows.append(
                 {
                     "compound": s.compound,
@@ -380,6 +397,11 @@ class CardioScorePipeline:
                     "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                     "effect_detected": bool(agg_row["effect_detected"]),
                     "dose_response_fit_endpoints": successful_quality_fits,
+                    "dose_response_boundary_flags": boundary_flags,
+                    "dose_response_high_uncertainty": high_uncertainty,
+                    "dose_response_mean_monotonicity": (
+                        round(mean_monotonicity, 3) if np.isfinite(mean_monotonicity) else None
+                    ),
                     "interpretation": s.interpretation,
                 }
             )
