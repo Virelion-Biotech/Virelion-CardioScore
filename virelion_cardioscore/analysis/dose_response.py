@@ -127,7 +127,10 @@ def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None, e
         return None if expected is None else False
     if expected == "absolute":
         return True
-    return monotonic_direction == expected
+    expected_monotonic = {"increase": "increasing", "decrease": "decreasing"}.get(expected)
+    if expected_monotonic is None:
+        raise ValueError(f"Unsupported endpoint direction: {expected!r}.")
+    return monotonic_direction == expected_monotonic
 
 
 def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
@@ -140,6 +143,19 @@ def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions:
         return float(max(0.0, np.max(y)))
     if direction == "decrease":
         return float(max(0.0, -np.min(y)))
+    raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
+
+
+def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+    if direction is None:
+        return None
+    if direction == "absolute":
+        return float(max(abs(bottom), abs(top)))
+    if direction == "increase":
+        return float(max(0.0, top - bottom))
+    if direction == "decrease":
+        return float(max(0.0, bottom - top))
     raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
 
 
@@ -189,11 +205,10 @@ def fit_4pl(
         return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=int(np.unique(x).size), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
 
     span = float(np.max(y) - np.min(y))
-    harmful_effect_magnitude = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
-    effect_size_pass = None if effect_threshold is None or harmful_effect_magnitude is None else harmful_effect_magnitude >= effect_threshold
+    observed_harmful_effect = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
 
     if span <= 1e-12:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, harmful_effect_magnitude=harmful_effect_magnitude, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, coverage_pass=False, message="Response has negligible dynamic range; 4PL fit is not identifiable.")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, harmful_effect_magnitude=observed_harmful_effect, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, coverage_pass=False, message="Response has negligible dynamic range; 4PL fit is not identifiable.")
 
     p0 = [float(np.min(y)), float(np.max(y)), float(np.median(x)), 1.0]
     y_min, y_max = float(np.min(y)), float(np.max(y))
@@ -204,7 +219,7 @@ def fit_4pl(
     try:
         params, covariance = curve_fit(four_parameter_logistic, x, y, p0=p0, bounds=(lower, upper), sigma=sigma, absolute_sigma=sigma is not None, maxfev=20000)
     except (RuntimeError, ValueError) as exc:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), weighted=sigma is not None, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, min_ec50_coverage=min_ec50_coverage, message=f"4PL optimization failed: {exc}")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), weighted=sigma is not None, harmful_effect_magnitude=observed_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, message=f"4PL optimization failed: {exc}")
 
     fitted = four_parameter_logistic(x, *params)
     residuals = y - fitted
@@ -214,11 +229,14 @@ def fit_4pl(
     rmse = float(np.sqrt(np.mean(residuals**2)))
     standard_errors = np.sqrt(np.clip(np.diag(covariance), 0.0, np.inf))
     ec50, hill_slope = float(params[2]), float(params[3])
+    bottom, top = float(params[0]), float(params[1])
     ec50_se, hill_se = float(standard_errors[2]), float(standard_errors[3])
     ec50_ci_low, ec50_ci_high = _ci95(ec50, ec50_se)
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
     monotonicity, monotonic_direction = _monotonicity_score(x, y)
     harm_direction_compatible = _harm_direction_compatible(endpoint, monotonic_direction, endpoint_directions)
+    fitted_harmful_effect = _fitted_harmful_effect_magnitude(bottom, top, endpoint, endpoint_directions)
+    effect_size_pass = None if effect_threshold is None or fitted_harmful_effect is None else fitted_harmful_effect >= effect_threshold
     boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
     boundary_high = ec50 > float(np.max(x)) / ec50_boundary_factor
     ec50_boundary_flag = bool(boundary_low or boundary_high)
@@ -237,7 +255,7 @@ def fit_4pl(
     if harm_direction_compatible is False:
         reasons.append("fitted concentration-response direction is not the configured harmful direction")
     if effect_size_pass is False:
-        reasons.append(f"harmful response magnitude below configured effect threshold {float(effect_threshold):.4g}")
+        reasons.append(f"harmful fitted response magnitude below configured effect threshold {float(effect_threshold):.4g}")
     if not coverage_pass:
         reasons.append(f"EC50 coverage below minimum {min_ec50_coverage:.2f}")
     if ec50_boundary_flag:
@@ -250,7 +268,7 @@ def fit_4pl(
         reasons.append("parameter confidence intervals are non-finite")
 
     message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria: " + "; ".join(dict.fromkeys(reasons))
-    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=float(params[0]), top=float(params[1]), r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
+    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=bottom, top=top, r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=fitted_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
 
 
 def fit_concentration_series(
