@@ -18,6 +18,10 @@ from virelion_cardioscore.analysis.hierarchical_pipeline import (
     HierarchicalCardioScorePipeline,
     HierarchicalPipelineResult,
 )
+from virelion_cardioscore.analysis.inference_comparison import (
+    compare_effect_estimates,
+    summarize_effect_concordance,
+)
 from virelion_cardioscore.analysis.mixed_effects import MixedEffectsResult, fit_random_intercept
 from virelion_cardioscore.analysis.mixed_effects_pipeline import fit_compound_concentration_mixed_effects
 from virelion_cardioscore.analysis.normalization import (
@@ -38,6 +42,12 @@ from virelion_cardioscore.analysis.statistics import (
     ProfileDifference,
     bootstrap_ci,
     bootstrap_profile_difference,
+)
+from virelion_cardioscore.analysis.stress_tests import (
+    StressTestSpec,
+    conventional_treatment_effect,
+    make_known_effect_dataset,
+    true_treatment_effect,
 )
 from virelion_cardioscore.analysis.variability import (
     VariabilityDiagnostic,
@@ -62,6 +72,12 @@ __all__ = [
     "fit_compound_concentration_mixed_effects",
     "HierarchicalCardioScorePipeline",
     "HierarchicalPipelineResult",
+    "compare_effect_estimates",
+    "summarize_effect_concordance",
+    "StressTestSpec",
+    "make_known_effect_dataset",
+    "conventional_treatment_effect",
+    "true_treatment_effect",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
     "NormalizationAssumptionCheck",
