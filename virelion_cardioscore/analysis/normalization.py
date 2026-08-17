@@ -13,6 +13,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from virelion_cardioscore.analysis.normalization_assumptions import (
+    check_additive_correction_assumptions,
+)
+
 
 @dataclass(frozen=True)
 class CorrectionDiagnostic:
@@ -24,6 +28,7 @@ class CorrectionDiagnostic:
     corrected_columns: tuple[str, ...]
     target_means: dict[str, float]
     group_shifts: dict[str, dict[str, float]]
+    assumption_checks: dict[str, dict]
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +38,7 @@ class CorrectionDiagnostic:
             "corrected_columns": list(self.corrected_columns),
             "target_means": self.target_means,
             "group_shifts": self.group_shifts,
+            "assumption_checks": self.assumption_checks,
         }
 
 
@@ -56,6 +62,9 @@ def apply_control_anchor_correction(
     corrected_columns: Optional[list[str]] = None,
     min_controls_per_group: int = 2,
     require_all_groups: bool = True,
+    min_treated_per_group: int = 1,
+    max_shift_cv_pct: float = 50.0,
+    fail_on_assumption_violation: bool = True,
 ) -> tuple[pd.DataFrame, CorrectionDiagnostic]:
     """Recenter selected endpoints using vehicle-only group control means.
 
@@ -64,8 +73,9 @@ def apply_control_anchor_correction(
         corrected_x = x - mean(vehicle_g) + mean(vehicle_all)
 
     This preserves within-group treatment-control differences while expressing
-    observations on a common control-centered scale. It is appropriate only for
-    endpoints where additive recentering is scientifically defensible.
+    observations on a common control-centered scale. Before applying the
+    correction, the function checks treatment allocation and additive-shift
+    assumptions and can fail closed when those assumptions are violated.
     """
     if df.empty:
         raise ValueError("Cannot correct an empty dataset.")
@@ -87,6 +97,26 @@ def apply_control_anchor_correction(
         raise ValueError(f"Correction columns are absent from the dataset: {missing_columns}.")
     if min_controls_per_group < 1:
         raise ValueError("min_controls_per_group must be at least 1.")
+    if min_treated_per_group < 1:
+        raise ValueError("min_treated_per_group must be at least 1.")
+    if max_shift_cv_pct < 0:
+        raise ValueError("max_shift_cv_pct cannot be negative.")
+
+    assumption_checks: dict[str, dict] = {}
+    for column in corrected_columns:
+        check = check_additive_correction_assumptions(
+            df,
+            group_column=group,
+            endpoint=column,
+            min_treated_per_group=min_treated_per_group,
+            max_shift_cv_pct=max_shift_cv_pct,
+            require_treatment_in_all_groups=require_all_groups,
+        )
+        assumption_checks[column] = check.to_dict()
+        if fail_on_assumption_violation and not check.usable_for_additive_correction:
+            raise ValueError(
+                f"Control-anchored correction is not justified for endpoint {column!r}: {check.message}"
+            )
 
     working = df.copy()
     controls = working[working["vehicle"] == True]  # noqa: E712
@@ -138,5 +168,6 @@ def apply_control_anchor_correction(
         corrected_columns=tuple(corrected_columns),
         target_means=target_means,
         group_shifts=group_shifts,
+        assumption_checks=assumption_checks,
     )
     return working, diagnostic
