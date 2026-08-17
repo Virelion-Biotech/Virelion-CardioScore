@@ -42,6 +42,11 @@ from virelion_cardioscore.analysis.robustness import (
     run_robustness_matrix,
     summarize_robustness_matrix,
 )
+from virelion_cardioscore.analysis.score_sensitivity import (
+    WeightSensitivitySpec,
+    run_weight_sensitivity,
+    summarize_weight_sensitivity,
+)
 from virelion_cardioscore.analysis.statistics import (
     BootstrapCI,
     ProfileDifference,
@@ -86,6 +91,9 @@ __all__ = [
     "RobustnessGrid",
     "run_robustness_matrix",
     "summarize_robustness_matrix",
+    "WeightSensitivitySpec",
+    "run_weight_sensitivity",
+    "summarize_weight_sensitivity",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
     "NormalizationAssumptionCheck",
