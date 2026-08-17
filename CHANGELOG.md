@@ -14,6 +14,7 @@
 - Explicit vehicle-control normalization scope supporting `compound`, `plate`, `batch`, `biological_replicate`, and `global` controls.
 - Optional plate/batch control-stability diagnostics with control CV, between-group SD, and exploratory treatment-to-control separation.
 - HTML reporting of control-stability and plate/batch diagnostics when variability analysis is enabled.
+- Optional control-anchored batch normalization using vehicle-only group shifts, with before/after control variability reporting and JSON audit metadata.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -24,7 +25,10 @@
 - The default vehicle scope remains `compound`, preserving historical behavior unless a study explicitly uses shared plate/batch/global controls.
 - Plate/batch variability diagnostics are QC/inference outputs only and do not alter CardioScore.
 - The variability layer does not claim a mixed-effects model; it identifies control instability that should be addressed before confirmatory inference.
-- Variability diagnostics are now exposed through `PipelineResult` and JSON as `variability` and `treatment_separation` tables, and are surfaced in the HTML report when available.
+- Variability diagnostics are exposed through `PipelineResult` and JSON as `variability` and `treatment_separation` tables, and are surfaced in the HTML report when available.
+- Control-anchored normalization learns group shifts from vehicle wells only, requires adequate controls in every corrected group by default, and is disabled by default.
+- The normalization is additive and should only be enabled for endpoints where additive recentering is scientifically defensible; it is not presented as a validated regulatory batch-correction model.
+- Before/after variability outputs are retained so users can determine whether normalization reduced technical drift rather than assuming it did.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
