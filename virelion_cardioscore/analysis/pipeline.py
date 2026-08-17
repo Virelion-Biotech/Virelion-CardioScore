@@ -72,6 +72,8 @@ class CardioScorePipeline:
         min_elec = qc.get("min_electrodes_per_well", 4)
         max_noise = qc.get("max_noise_sd_uv", 25.0)
         min_bdr = qc.get("min_beat_detection_rate", 0.7)
+        reject_irregular = qc.get("reject_wells_with_arrhythmia_proxy", False)
+        irregularity_threshold = qc.get("arrhythmia_proxy_max_stv")
 
         before = len(df)
         mask = (
@@ -79,15 +81,31 @@ class CardioScorePipeline:
             & (df["noise_sd_uv"] <= max_noise)
             & (df["beat_detection_rate"] >= min_bdr)
         )
+
+        if reject_irregular:
+            if irregularity_threshold is None:
+                self.qc_log.append(
+                    "Warning: arrhythmia-proxy rejection is enabled, but "
+                    "quality_control.arrhythmia_proxy_max_stv is not configured; "
+                    "no irregularity rejection was applied. STV is treated only "
+                    "as an optional irregularity proxy, not an arrhythmia detector."
+                )
+            else:
+                mask &= df["stv"] <= float(irregularity_threshold)
+
         rejected = df[~mask]
         kept = df[mask].copy()
 
         if qc.get("log_rejections", True) and len(rejected) > 0:
             for _, row in rejected.iterrows():
+                details = (
+                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, "
+                    f"bdr={row['beat_detection_rate']:.2f}"
+                )
+                if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
+                    details += f", stv={row['stv']:.3f}"
                 self.qc_log.append(
-                    f"Rejected {row['compound']} {row['well']} "
-                    f"(noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, "
-                    f"bdr={row['beat_detection_rate']:.2f})"
+                    f"Rejected {row['compound']} {row['well']} ({details})"
                 )
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
@@ -109,6 +127,19 @@ class CardioScorePipeline:
             v_tri = vehicle["triangulation_proxy"].mean()
 
             for _, row in treated.iterrows():
+                fpd_change = 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd
+                rate_change = 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate
+                amp_change = 100.0 * (row["amplitude_uv"] - v_amp) / v_amp
+                stv_increase = (row["stv"] - v_stv) / max(v_stv, 1e-6)
+                tri_change = (row["triangulation_proxy"] - v_tri) / max(v_tri, 1e-6)
+                max_effect_pct = max(
+                    abs(fpd_change),
+                    abs(rate_change),
+                    abs(amp_change),
+                    abs(stv_increase) * 100.0,
+                    abs(tri_change) * 100.0,
+                )
+
                 records.append(
                     {
                         "compound": compound,
@@ -120,11 +151,12 @@ class CardioScorePipeline:
                         "amplitude_uv": row["amplitude_uv"],
                         "stv": row["stv"],
                         "triangulation_proxy": row["triangulation_proxy"],
-                        "fpd_change_pct": 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd,
-                        "beat_rate_change_pct": 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate,
-                        "amplitude_change_pct": 100.0 * (row["amplitude_uv"] - v_amp) / v_amp,
-                        "stv_increase": (row["stv"] - v_stv) / max(v_stv, 1e-6),
-                        "triangulation_proxy_change": (row["triangulation_proxy"] - v_tri) / max(v_tri, 1e-6),
+                        "fpd_change_pct": fpd_change,
+                        "beat_rate_change_pct": rate_change,
+                        "amplitude_change_pct": amp_change,
+                        "stv_increase": stv_increase,
+                        "triangulation_proxy_change": tri_change,
+                        "max_effect_pct": max_effect_pct,
                     }
                 )
         return pd.DataFrame(records)
@@ -139,6 +171,20 @@ class CardioScorePipeline:
         df = self.apply_qc(df)
         effects = self.compute_effects(df)
 
+        concentration_cfg = self.config.get("concentration_response", {})
+        min_concentrations = int(concentration_cfg.get("min_concentrations", 1))
+        effect_threshold_pct = float(concentration_cfg.get("effect_threshold_pct", 0.0))
+
+        if not effects.empty:
+            for compound, group in effects.groupby("compound"):
+                n_concentrations = group["concentration_uM"].nunique()
+                if n_concentrations < min_concentrations:
+                    self.qc_log.append(
+                        f"Warning: {compound} has {n_concentrations} treated concentration(s); "
+                        f"configured minimum is {min_concentrations}. Score retained, "
+                        "but concentration-response coverage is limited."
+                    )
+
         agg_rows = []
         for compound, group in effects.groupby("compound"):
             agg_rows.append(
@@ -151,6 +197,9 @@ class CardioScorePipeline:
                     "triangulation_proxy": group["triangulation_proxy_change"].max(),
                     "max_concentration_uM": group["concentration_uM"].max(),
                     "n_wells": group["well"].nunique(),
+                    "concentrations_tested": group["concentration_uM"].nunique(),
+                    "max_effect_pct": group["max_effect_pct"].max(),
+                    "effect_detected": group["max_effect_pct"].max() >= effect_threshold_pct,
                 }
             )
         agg = pd.DataFrame(agg_rows)
@@ -173,19 +222,26 @@ class CardioScorePipeline:
                 )
             )
 
-        summary = pd.DataFrame(
-            [
+        summary_rows = []
+        for s in scores:
+            agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
+            summary_rows.append(
                 {
                     "compound": s.compound,
                     "cardioscore": round(s.score, 4),
                     "risk_class": s.risk_class,
                     "max_concentration_uM": s.max_concentration_uM,
                     "n_wells": s.n_wells,
+                    "concentrations_tested": int(agg_row["concentrations_tested"]),
+                    "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
+                    "effect_detected": bool(agg_row["effect_detected"]),
                     "interpretation": s.interpretation,
                 }
-                for s in scores
-            ]
-        ).sort_values("cardioscore", ascending=False)
+            )
+
+        summary = pd.DataFrame(summary_rows)
+        if not summary.empty:
+            summary = summary.sort_values("cardioscore", ascending=False)
 
         return PipelineResult(
             scores=scores,
