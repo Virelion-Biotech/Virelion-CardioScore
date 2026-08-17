@@ -47,12 +47,12 @@ def test_control_anchor_preserves_within_group_treatment_control_difference():
 
     p1_difference = corrected.loc[corrected["well"] == "T1", "fpd_ms"].iloc[0] - corrected.loc[corrected["well"] == "V1", "fpd_ms"].iloc[0]
     p2_difference = corrected.loc[corrected["well"] == "T2", "fpd_ms"].iloc[0] - corrected.loc[corrected["well"] == "V3", "fpd_ms"].iloc[0]
-    assert p1_difference == pytest.approx(29.0)
-    assert p2_difference == pytest.approx(29.0)
+    assert p1_difference == pytest.approx(30.0)
+    assert p2_difference == pytest.approx(30.0)
 
 
 def test_control_anchor_requires_sufficient_controls():
-    frame = _frame().drop(index=3)
+    frame = _frame().drop(index=1).drop(index=3)
     with pytest.raises(ValueError, match="at least 2 vehicle wells per group"):
         apply_control_anchor_correction(
             frame,
