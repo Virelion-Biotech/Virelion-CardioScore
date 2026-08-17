@@ -3,6 +3,12 @@ import pandas as pd
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
 
+def _pipeline_without_vehicle_normalization() -> CardioScorePipeline:
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config.setdefault("scoring", {})["normalize_by_vehicle"] = False
+    return pipeline
+
+
 def test_precomputed_effect_max_includes_stv_and_triangulation():
     df = pd.DataFrame(
         {
@@ -16,8 +22,7 @@ def test_precomputed_effect_max_includes_stv_and_triangulation():
             "triangulation_proxy_change": [0.0],
         }
     )
-    pipeline = CardioScorePipeline.from_defaults()
-    effects = pipeline.compute_effects(df)
+    effects = _pipeline_without_vehicle_normalization().compute_effects(df)
     assert effects.loc[0, "max_effect_pct"] == 80.0
 
 
@@ -34,6 +39,5 @@ def test_precomputed_effect_max_includes_triangulation():
             "triangulation_proxy_change": [0.65],
         }
     )
-    pipeline = CardioScorePipeline.from_defaults()
-    effects = pipeline.compute_effects(df)
+    effects = _pipeline_without_vehicle_normalization().compute_effects(df)
     assert effects.loc[0, "max_effect_pct"] == 65.0
