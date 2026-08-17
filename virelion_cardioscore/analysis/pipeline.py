@@ -123,8 +123,32 @@ class CardioScorePipeline:
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
 
+    def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
+        """Resolve control normalization scope from configuration."""
+        scope = self.config.get("control_normalization", {}).get("scope", "compound")
+        aliases = {
+            "compound": ["compound"],
+            "plate": ["plate_id"],
+            "batch": ["batch_id" if "batch_id" in df.columns else "experiment_id"],
+            "biological_replicate": ["biological_replicate"],
+            "global": [],
+        }
+        if scope not in aliases:
+            raise ValueError(
+                f"Unsupported control_normalization.scope: {scope!r}. "
+                "Expected 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
+            )
+        columns = aliases[scope]
+        missing = [column for column in columns if column not in df.columns]
+        if missing:
+            raise ValueError(
+                f"control_normalization.scope={scope!r} requires metadata column(s) "
+                f"{missing!r}, but they are not present in the dataset."
+            )
+        return columns
+
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate vehicle-normalized effects for each treated well."""
+        """Calculate vehicle-normalized effects using an explicit control scope."""
         records = []
         optional_metadata = [
             "biological_replicate",
@@ -132,12 +156,27 @@ class CardioScorePipeline:
             "experiment_id",
             "plate_id",
         ]
-        for compound, group in df.groupby("compound"):
+        control_cfg = self.config.get("control_normalization", {})
+        scope = control_cfg.get("scope", "compound")
+        control_columns = self._control_group_columns(df)
+        require_match = bool(control_cfg.get("require_matching_control", True))
+
+        grouped = df.groupby(control_columns, dropna=False, sort=True) if control_columns else [((), df)]
+        for group_key, group in grouped:
+            if not isinstance(group_key, tuple):
+                group_key = (group_key,)
             vehicle = group[group["vehicle"] == True]  # noqa: E712
             treated = group[group["vehicle"] == False]
 
             if vehicle.empty:
-                self.qc_log.append(f"Warning: no vehicle wells for {compound}")
+                message = (
+                    f"No matching vehicle control for normalization scope={scope!r} "
+                    f"group={group_key!r}."
+                )
+                if require_match:
+                    self.qc_log.append(f"Warning: {message} Treated wells excluded from effect calculation.")
+                    continue
+                self.qc_log.append(f"Warning: {message} Falling back to unnormalized effects is not supported; group skipped.")
                 continue
 
             v_fpd = vehicle["fpd_ms"].mean()
@@ -148,11 +187,12 @@ class CardioScorePipeline:
 
             if v_fpd == 0 or v_rate == 0 or v_amp == 0:
                 self.qc_log.append(
-                    f"Warning: zero vehicle baseline encountered for {compound}; "
+                    f"Warning: zero vehicle baseline encountered for control group {group_key!r}; "
                     "affected percentage effects were not calculated."
                 )
 
             for _, row in treated.iterrows():
+                compound = str(row["compound"])
                 fpd_change = np.nan if v_fpd == 0 else 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd
                 rate_change = np.nan if v_rate == 0 else 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate
                 amp_change = np.nan if v_amp == 0 else 100.0 * (row["amplitude_uv"] - v_amp) / v_amp
@@ -160,14 +200,9 @@ class CardioScorePipeline:
                 tri_change = (row["triangulation_proxy"] - v_tri) / max(v_tri, 1e-6)
 
                 finite_effects = [
-                    abs(x)
-                    for x in [fpd_change, rate_change, amp_change]
-                    if pd.notna(x)
+                    abs(x) for x in [fpd_change, rate_change, amp_change] if pd.notna(x)
                 ]
-                finite_effects.extend([
-                    abs(stv_increase) * 100.0,
-                    abs(tri_change) * 100.0,
-                ])
+                finite_effects.extend([abs(stv_increase) * 100.0, abs(tri_change) * 100.0])
                 max_effect_pct = max(finite_effects) if finite_effects else np.nan
 
                 record = {
@@ -200,9 +235,7 @@ class CardioScorePipeline:
         try:
             prepared = aggregate_to_scoring_units(effects, scoring_unit=scoring_unit)
         except ValueError as exc:
-            raise ValueError(
-                f"Experimental-unit configuration is invalid: {exc}"
-            ) from exc
+            raise ValueError(f"Experimental-unit configuration is invalid: {exc}") from exc
 
         if scoring_unit != "well":
             technical_wells = int(effects["well"].nunique()) if "well" in effects else len(effects)
@@ -214,10 +247,7 @@ class CardioScorePipeline:
         return prepared
 
     @staticmethod
-    def summarize_concentrations(
-        effects: pd.DataFrame,
-        replicate_aggregation: str = "mean",
-    ) -> pd.DataFrame:
+    def summarize_concentrations(effects: pd.DataFrame, replicate_aggregation: str = "mean") -> pd.DataFrame:
         """Summarize replicates within each compound-concentration group."""
         if effects.empty:
             return pd.DataFrame()
@@ -241,60 +271,34 @@ class CardioScorePipeline:
                 "compound": compound,
                 "concentration_uM": concentration,
                 "n_replicates": int(group["well"].nunique()),
-                "n_technical_wells": int(group.get("n_wells", group["well"]).sum())
-                if "n_wells" in group.columns
-                else int(group["well"].nunique()),
+                "n_technical_wells": int(group["n_wells"].sum()) if "n_wells" in group.columns else int(group["well"].nunique()),
             }
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
                 aggregator = values.mean if replicate_aggregation == "mean" else values.median
                 row[f"{endpoint}_mean"] = float(aggregator()) if len(values) else np.nan
                 row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else np.nan
-                row[f"{endpoint}_sem"] = (
-                    float(values.std(ddof=1) / np.sqrt(len(values))) if len(values) > 1 else np.nan
-                )
-            row["max_effect_pct_mean"] = max(
-                [
-                    abs(row["fpd_change_pct_mean"]) if pd.notna(row["fpd_change_pct_mean"]) else 0.0,
-                    abs(row["beat_rate_change_pct_mean"]) if pd.notna(row["beat_rate_change_pct_mean"]) else 0.0,
-                    abs(row["amplitude_change_pct_mean"]) if pd.notna(row["amplitude_change_pct_mean"]) else 0.0,
-                    abs(row["stv_increase_mean"]) * 100.0 if pd.notna(row["stv_increase_mean"]) else 0.0,
-                    abs(row["triangulation_proxy_change_mean"]) * 100.0 if pd.notna(row["triangulation_proxy_change_mean"]) else 0.0,
-                ]
-            )
+                row[f"{endpoint}_sem"] = float(values.std(ddof=1) / np.sqrt(len(values))) if len(values) > 1 else np.nan
+            row["max_effect_pct_mean"] = max([
+                abs(row["fpd_change_pct_mean"]) if pd.notna(row["fpd_change_pct_mean"]) else 0.0,
+                abs(row["beat_rate_change_pct_mean"]) if pd.notna(row["beat_rate_change_pct_mean"]) else 0.0,
+                abs(row["amplitude_change_pct_mean"]) if pd.notna(row["amplitude_change_pct_mean"]) else 0.0,
+                abs(row["stv_increase_mean"]) * 100.0 if pd.notna(row["stv_increase_mean"]) else 0.0,
+                abs(row["triangulation_proxy_change_mean"]) * 100.0 if pd.notna(row["triangulation_proxy_change_mean"]) else 0.0,
+            ])
             rows.append(row)
         return pd.DataFrame(rows)
 
     @staticmethod
-    def bootstrap_concentration_inference(
-        effects: pd.DataFrame,
-        *,
-        n_bootstrap: int = 2000,
-        confidence: float = 0.95,
-        seed: int = 42,
-    ) -> pd.DataFrame:
+    def bootstrap_concentration_inference(effects: pd.DataFrame, *, n_bootstrap: int = 2000, confidence: float = 0.95, seed: int = 42) -> pd.DataFrame:
         """Return bootstrap mean CIs for each compound/concentration endpoint."""
         if effects.empty:
             return pd.DataFrame()
-
-        endpoint_columns = [
-            "fpd_change_pct",
-            "beat_rate_change_pct",
-            "amplitude_change_pct",
-            "stv_increase",
-            "triangulation_proxy_change",
-        ]
+        endpoint_columns = ["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"]
         rows = []
         group_index = 0
         for (compound, concentration), group in effects.groupby(["compound", "concentration_uM"], sort=True):
-            row = {
-                "compound": compound,
-                "concentration_uM": concentration,
-                "n_replicates": int(group["well"].nunique()),
-                "n_technical_wells": int(group.get("n_wells", group["well"]).sum())
-                if "n_wells" in group.columns
-                else int(group["well"].nunique()),
-            }
+            row = {"compound": compound, "concentration_uM": concentration, "n_replicates": int(group["well"].nunique())}
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
                 values = values[np.isfinite(values)]
@@ -302,12 +306,7 @@ class CardioScorePipeline:
                     row[f"{endpoint}_ci_low"] = np.nan
                     row[f"{endpoint}_ci_high"] = np.nan
                     continue
-                result = bootstrap_ci(
-                    values,
-                    n_bootstrap=n_bootstrap,
-                    confidence=confidence,
-                    seed=seed + group_index,
-                )
+                result = bootstrap_ci(values, n_bootstrap=n_bootstrap, confidence=confidence, seed=seed + group_index)
                 row[f"{endpoint}_ci_low"] = result.ci_low
                 row[f"{endpoint}_ci_high"] = result.ci_high
             rows.append(row)
@@ -315,10 +314,7 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def aggregate_compound_effects(
-        concentration_summary: pd.DataFrame,
-        concentration_aggregation: str = "max_absolute_effect",
-    ) -> pd.DataFrame:
+    def aggregate_compound_effects(concentration_summary: pd.DataFrame, concentration_aggregation: str = "max_absolute_effect") -> pd.DataFrame:
         """Aggregate concentration-level summaries into compound-level scoring inputs."""
         if concentration_summary.empty:
             return pd.DataFrame()
@@ -327,36 +323,31 @@ class CardioScorePipeline:
                 "Unsupported concentration_aggregation: "
                 f"{concentration_aggregation!r}. Expected 'max_absolute_effect'."
             )
-
         rows = []
         for compound, group in concentration_summary.groupby("compound"):
             def max_abs(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 return float(values.abs().max()) if len(values) else 0.0
-
             def max_positive(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 return float(values.max()) if len(values) else 0.0
-
             def min_value(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 return float(values.min()) if len(values) else 0.0
-
-            rows.append(
-                {
-                    "compound": compound,
-                    "fpd_change_pct": max_abs("fpd_change_pct_mean"),
-                    "beat_rate_change_pct": max_abs("beat_rate_change_pct_mean"),
-                    "amplitude_change_pct": min_value("amplitude_change_pct_mean"),
-                    "stv_increase": max_positive("stv_increase_mean"),
-                    "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
-                    "max_concentration_uM": float(group["concentration_uM"].max()),
-                    "n_wells": int(group["n_technical_wells"].sum()) if "n_technical_wells" in group else int(group["n_replicates"].sum()),
-                    "n_independent_units": int(group["n_replicates"].sum()),
-                    "concentrations_tested": int(group["concentration_uM"].nunique()),
-                    "max_effect_pct": float(group["max_effect_pct_mean"].max()),
-                }
-            )
+            rows.append({
+                "compound": compound,
+                "fpd_change_pct": max_abs("fpd_change_pct_mean"),
+                "beat_rate_change_pct": max_abs("beat_rate_change_pct_mean"),
+                "amplitude_change_pct": min_value("amplitude_change_pct_mean"),
+                "stv_increase": max_positive("stv_increase_mean"),
+                "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
+                "max_concentration_uM": float(group["concentration_uM"].max()),
+                "n_wells": int(group["n_replicates"].sum()),
+                "n_independent_units": int(group["n_replicates"].sum()),
+                "concentrations_tested": int(group["concentration_uM"].nunique()),
+                "max_effect_pct": float(group["max_effect_pct_mean"].max()),
+                "n_technical_wells": int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum()),
+            })
         return pd.DataFrame(rows)
 
     def fit_dose_response(self, concentration_summary: pd.DataFrame) -> dict[str, list[DoseResponseFit]]:
@@ -364,46 +355,25 @@ class CardioScorePipeline:
         concentration_cfg = self.config.get("concentration_response", {})
         if not concentration_cfg.get("fit_curve", False) or concentration_summary.empty:
             return {}
-
         min_points = int(concentration_cfg.get("fit_min_concentrations", 4))
         min_r_squared = float(concentration_cfg.get("fit_min_r_squared", 0.80))
         min_monotonicity = float(concentration_cfg.get("fit_min_monotonicity", 0.80))
         ec50_boundary_factor = float(concentration_cfg.get("fit_ec50_boundary_factor", 2.0))
-        max_ec50_uncertainty_fold = float(
-            concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0)
-        )
+        max_ec50_uncertainty_fold = float(concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0))
         results: dict[str, list[DoseResponseFit]] = {}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(
-                group,
-                min_points=min_points,
-                min_r_squared=min_r_squared,
-                min_monotonicity=min_monotonicity,
-                ec50_boundary_factor=ec50_boundary_factor,
-                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
-            )
+            fits = fit_concentration_series(group, min_points=min_points, min_r_squared=min_r_squared, min_monotonicity=min_monotonicity, ec50_boundary_factor=ec50_boundary_factor, max_ec50_uncertainty_fold=max_ec50_uncertainty_fold)
             results[str(compound)] = fits
             failed = [fit for fit in fits if not fit.success]
             poor_quality = [fit for fit in fits if fit.success and not fit.quality_pass]
             if failed:
-                self.qc_log.append(
-                    f"Dose-response fitting: {compound} has {len(failed)} endpoint fit(s) "
-                    "that did not converge or lacked sufficient data."
-                )
+                self.qc_log.append(f"Dose-response fitting: {compound} has {len(failed)} endpoint fit(s) that did not converge or lacked sufficient data.")
             if poor_quality:
-                self.qc_log.append(
-                    f"Dose-response fitting: {compound} has {len(poor_quality)} endpoint fit(s) "
-                    "that failed one or more configured quality gates."
-                )
+                self.qc_log.append(f"Dose-response fitting: {compound} has {len(poor_quality)} endpoint fit(s) that failed one or more configured quality gates.")
         return results
 
     @staticmethod
-    def dose_response_exposure_evidence(
-        fits: list[DoseResponseFit],
-        min_concentration_uM: float,
-        max_concentration_uM: float,
-        endpoint_weights: dict[str, float],
-    ) -> float | None:
+    def dose_response_exposure_evidence(fits: list[DoseResponseFit], min_concentration_uM: float, max_concentration_uM: float, endpoint_weights: dict[str, float]) -> float | None:
         """Summarize quality-passing EC50 fits as exposure evidence in [0, 1]."""
         if min_concentration_uM <= 0 or max_concentration_uM <= min_concentration_uM:
             return None
@@ -412,11 +382,7 @@ class CardioScorePipeline:
         for fit in fits:
             if not fit.quality_pass or fit.ec50 is None or fit.ec50 <= 0:
                 continue
-            coverage = np.clip(
-                np.log10(max_concentration_uM / fit.ec50) / log_span,
-                0.0,
-                1.0,
-            )
+            coverage = np.clip(np.log10(max_concentration_uM / fit.ec50) / log_span, 0.0, 1.0)
             weight = float(endpoint_weights.get(fit.endpoint, 0.0))
             if weight > 0:
                 usable.append((weight, float(coverage)))
@@ -427,30 +393,21 @@ class CardioScorePipeline:
 
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
-        if isinstance(dataset, SyntheticMEADataset):
-            df = dataset.features.copy()
-        else:
-            df = dataset.copy()
-
+        df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
         df = self.apply_qc(df)
         effects = self.compute_effects(df)
-        analysis_effects = self.prepare_scoring_effects(effects)
+        scoring_effects = self.prepare_scoring_effects(effects)
 
         concentration_cfg = self.config.get("concentration_response", {})
         replicate_aggregation = concentration_cfg.get("replicate_aggregation", "mean")
-        concentration_aggregation = concentration_cfg.get(
-            "concentration_aggregation", "max_absolute_effect"
-        )
-        concentration_summary = self.summarize_concentrations(
-            analysis_effects,
-            replicate_aggregation=replicate_aggregation,
-        )
+        concentration_aggregation = concentration_cfg.get("concentration_aggregation", "max_absolute_effect")
+        concentration_summary = self.summarize_concentrations(scoring_effects, replicate_aggregation=replicate_aggregation)
 
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
-        if inference_cfg.get("enabled", False) and not analysis_effects.empty:
+        if inference_cfg.get("enabled", False) and not scoring_effects.empty:
             inference_table = self.bootstrap_concentration_inference(
-                analysis_effects,
+                scoring_effects,
                 n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)),
                 confidence=float(inference_cfg.get("confidence", 0.95)),
                 seed=int(inference_cfg.get("seed", 42)),
@@ -458,25 +415,19 @@ class CardioScorePipeline:
 
         min_concentrations = int(concentration_cfg.get("min_concentrations", 1))
         effect_threshold_pct = float(concentration_cfg.get("effect_threshold_pct", 0.0))
-
         if not concentration_summary.empty:
             for compound, group in concentration_summary.groupby("compound"):
                 n_concentrations = group["concentration_uM"].nunique()
                 if n_concentrations < min_concentrations:
                     self.qc_log.append(
-                        f"Warning: {compound} has {n_concentrations} treated concentration(s); "
-                        f"configured minimum is {min_concentrations}. Score retained, "
-                        "but concentration-response coverage is limited."
+                        f"Warning: {compound} has {n_concentrations} treated concentration(s); configured minimum is {min_concentrations}. Score retained, but concentration-response coverage is limited."
                     )
 
         dose_response_fits = self.fit_dose_response(concentration_summary)
         dose_response_cfg = self.config.get("scoring", {})
         dose_response_weight = float(dose_response_cfg.get("dose_response_weight", 0.0))
 
-        agg = self.aggregate_compound_effects(
-            concentration_summary,
-            concentration_aggregation=concentration_aggregation,
-        )
+        agg = self.aggregate_compound_effects(concentration_summary, concentration_aggregation=concentration_aggregation)
         if not agg.empty:
             agg["effect_detected"] = agg["max_effect_pct"] >= effect_threshold_pct
 
@@ -485,18 +436,10 @@ class CardioScorePipeline:
         for _, row in agg.iterrows():
             compound = str(row["compound"])
             fits = dose_response_fits.get(compound, [])
-            treated_concentrations = concentration_summary.loc[
-                concentration_summary["compound"] == compound, "concentration_uM"
-            ]
+            treated_concentrations = concentration_summary.loc[concentration_summary["compound"] == compound, "concentration_uM"]
             min_concentration = float(treated_concentrations.min()) if not treated_concentrations.empty else np.nan
             max_concentration = float(treated_concentrations.max()) if not treated_concentrations.empty else np.nan
-            exposure_evidence = self.dose_response_exposure_evidence(
-                fits,
-                min_concentration,
-                max_concentration,
-                endpoint_weights,
-            )
-
+            exposure_evidence = self.dose_response_exposure_evidence(fits, min_concentration, max_concentration, endpoint_weights)
             endpoint_values = {
                 "fpd_change_pct": row["fpd_change_pct"],
                 "beat_rate_change_pct": row["beat_rate_change_pct"],
@@ -504,16 +447,14 @@ class CardioScorePipeline:
                 "stv_increase": row["stv_increase"],
                 "triangulation_proxy": row["triangulation_proxy"],
             }
-            scores.append(
-                self.engine.score_compound(
-                    compound=compound,
-                    endpoint_values=endpoint_values,
-                    max_concentration_uM=row["max_concentration_uM"],
-                    n_wells=int(row["n_wells"]),
-                    dose_response_evidence=exposure_evidence,
-                    dose_response_weight=dose_response_weight,
-                )
-            )
+            scores.append(self.engine.score_compound(
+                compound=compound,
+                endpoint_values=endpoint_values,
+                max_concentration_uM=row["max_concentration_uM"],
+                n_wells=int(row["n_wells"]),
+                dose_response_evidence=exposure_evidence,
+                dose_response_weight=dose_response_weight,
+            ))
 
         summary_rows = []
         for s in scores:
@@ -521,24 +462,21 @@ class CardioScorePipeline:
             fits = dose_response_fits.get(s.compound, [])
             successful_quality_fits = sum(fit.quality_pass for fit in fits)
             exposure_evidence = s.metadata.get("dose_response_evidence")
-            summary_rows.append(
-                {
-                    "compound": s.compound,
-                    "cardioscore": round(s.score, 4),
-                    "risk_class": s.risk_class,
-                    "max_concentration_uM": s.max_concentration_uM,
-                    "n_wells": s.n_wells,
-                    "n_independent_units": int(agg_row["n_independent_units"]),
-                    "concentrations_tested": int(agg_row["concentrations_tested"]),
-                    "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
-                    "effect_detected": bool(agg_row["effect_detected"]),
-                    "dose_response_fit_endpoints": successful_quality_fits,
-                    "dose_response_exposure_evidence": (
-                        round(float(exposure_evidence), 4) if exposure_evidence is not None else np.nan
-                    ),
-                    "interpretation": s.interpretation,
-                }
-            )
+            summary_rows.append({
+                "compound": s.compound,
+                "cardioscore": round(s.score, 4),
+                "risk_class": s.risk_class,
+                "max_concentration_uM": s.max_concentration_uM,
+                "n_wells": s.n_wells,
+                "n_independent_units": int(agg_row["n_independent_units"]),
+                "n_technical_wells": int(agg_row["n_technical_wells"]),
+                "concentrations_tested": int(agg_row["concentrations_tested"]),
+                "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
+                "effect_detected": bool(agg_row["effect_detected"]),
+                "dose_response_fit_endpoints": successful_quality_fits,
+                "dose_response_exposure_evidence": round(float(exposure_evidence), 4) if exposure_evidence is not None else np.nan,
+                "interpretation": s.interpretation,
+            })
 
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
