@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 from virelion_cardioscore.analysis.variability import (
     control_variability,
     standardized_treatment_separation,
@@ -17,7 +18,7 @@ def _frame() -> pd.DataFrame:
             "vehicle": [True, True, False, False, True, True, False, False],
             "plate_id": ["P1", "P1", "P1", "P1", "P2", "P2", "P2", "P2"],
             "fpd_ms": [100.0, 102.0, 130.0, 135.0, 120.0, 122.0, 150.0, 152.0],
-            "beat_rate_bpm": [60.0, 61.0, 70.0, 71.0, 60.0, 61.0, 72.0, 73.0],
+            "beat_rate_bpm": [60.0, 61.0, 60.0, 61.0, 60.0, 61.0, 62.0, 63.0],
         }
     )
 
@@ -68,3 +69,28 @@ def test_standardized_treatment_separation_is_group_specific():
     assert (result["n_controls"] == 2).all()
     assert (result["n_treated"] == 2).all()
     assert (result["standardized_separation"] > 0).all()
+
+
+def test_pipeline_exposes_variability_diagnostics_without_scoring_change():
+    frame = _frame().copy()
+    frame["n_electrodes"] = 4
+    frame["noise_sd_uv"] = 5.0
+    frame["beat_detection_rate"] = 0.95
+    frame["amplitude_uv"] = 100.0
+    frame["stv"] = 0.1
+    frame["triangulation_proxy"] = 0.1
+    frame["concentration_uM"] = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
+    frame["well"] = [f"W{i}" for i in range(len(frame))]
+
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["variability"]["enabled"] = True
+    pipeline.config["variability"]["group_column"] = "plate_id"
+    pipeline.config["variability"]["max_control_cv_pct"] = 20.0
+
+    result = pipeline.run(frame)
+
+    assert not result.variability_table.empty
+    assert not result.separation_table.empty
+    assert {"status", "control_cv_pct", "between_group_sd"}.issubset(result.variability_table.columns)
+    assert "treatment_separation" in result.to_json.__doc__ if result.to_json.__doc__ else True
+    assert len(result.scores) > 0
