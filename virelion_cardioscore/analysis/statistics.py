@@ -1,8 +1,8 @@
 """Bootstrap inference utilities for CardioScore concentration data.
 
-These functions provide uncertainty estimates for replicate-level responses and
-simple matched concentration-profile comparisons. They are inference helpers,
-not replacements for a prespecified statistical analysis plan.
+These functions provide descriptive uncertainty estimates for replicate-level
+responses and matched concentration-profile differences. They are inference
+helpers, not replacements for a prespecified statistical analysis plan.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ class ProfileDifference:
     differences: tuple[float, ...]
     ci_low: tuple[float, ...]
     ci_high: tuple[float, ...]
-    p_values: tuple[float, ...]
     n_bootstrap: int
     confidence: float
 
@@ -51,7 +50,6 @@ class ProfileDifference:
             "differences": list(self.differences),
             "ci_low": list(self.ci_low),
             "ci_high": list(self.ci_high),
-            "p_values": list(self.p_values),
             "n_bootstrap": self.n_bootstrap,
             "confidence": self.confidence,
         }
@@ -106,11 +104,11 @@ def bootstrap_profile_difference(
     confidence: float = 0.95,
     seed: Optional[int] = 42,
 ) -> ProfileDifference:
-    """Compare two replicate-level profiles at matched concentrations.
+    """Estimate matched concentration differences with bootstrap confidence intervals.
 
-    Each concentration is resampled independently within group A and group B.
-    The reported two-sided p-value is the fraction of bootstrap differences whose
-    sign is opposite the observed difference, doubled and clipped to one.
+    The returned intervals describe uncertainty under replicate resampling. No
+    p-value is reported because this percentile bootstrap distribution is centered
+    on the observed effect rather than generated under a null hypothesis.
     """
     _validate_bootstrap_args(n_bootstrap, confidence)
     common = sorted(set(group_a).intersection(group_b))
@@ -122,7 +120,6 @@ def bootstrap_profile_difference(
     differences: list[float] = []
     ci_low: list[float] = []
     ci_high: list[float] = []
-    p_values: list[float] = []
 
     for concentration in common:
         a = np.asarray(group_a[concentration], dtype=float)
@@ -140,23 +137,15 @@ def bootstrap_profile_difference(
         boot_diff = a[a_idx].mean(axis=1) - b[b_idx].mean(axis=1)
         low, high = np.quantile(boot_diff, [alpha / 2.0, 1.0 - alpha / 2.0])
 
-        if observed == 0.0:
-            p_value = 1.0
-        else:
-            opposite = np.mean(np.sign(boot_diff) == -np.sign(observed))
-            p_value = float(min(1.0, max(0.0, 2.0 * opposite)))
-
         differences.append(observed)
         ci_low.append(float(low))
         ci_high.append(float(high))
-        p_values.append(p_value)
 
     return ProfileDifference(
         concentrations=tuple(float(c) for c in common),
         differences=tuple(differences),
         ci_low=tuple(ci_low),
         ci_high=tuple(ci_high),
-        p_values=tuple(p_values),
         n_bootstrap=n_bootstrap,
         confidence=confidence,
     )

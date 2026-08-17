@@ -16,7 +16,6 @@ from typing import Optional
 
 import pandas as pd
 
-
 OPTIONAL_HIERARCHY_COLUMNS = (
     "biological_replicate",
     "batch_id",
@@ -57,6 +56,19 @@ def hierarchy_columns(df: pd.DataFrame) -> list[str]:
     ]
 
 
+def _require_complete_identifier(df: pd.DataFrame, column: str) -> None:
+    if df[column].isna().any():
+        missing = int(df[column].isna().sum())
+        raise ValueError(
+            f"Experimental-unit column {column!r} contains {missing} missing value(s); "
+            "missing identifiers cannot be treated as one shared unit."
+        )
+    if df[column].astype(str).str.strip().eq("").any():
+        raise ValueError(
+            f"Experimental-unit column {column!r} contains blank identifiers."
+        )
+
+
 def _resolve_scoring_column(df: pd.DataFrame, scoring_unit: str) -> str:
     if scoring_unit not in SUPPORTED_SCORING_UNITS:
         raise ValueError(
@@ -78,6 +90,7 @@ def _resolve_scoring_column(df: pd.DataFrame, scoring_unit: str) -> str:
             f"scoring_unit={scoring_unit!r} requires column {column!r}, "
             "but that metadata is not present in the dataset."
         )
+    _require_complete_identifier(df, column)
     return column
 
 
@@ -158,6 +171,9 @@ def summarize_experimental_units(
     else:
         unit_columns = ["compound", "concentration_uM", "well"]
 
+    for column in unit_columns[2:]:
+        _require_complete_identifier(effects, column)
+
     grouped = effects.groupby(unit_columns, sort=True, dropna=False)
     rows: list[dict] = []
     for keys, group in grouped:
@@ -166,6 +182,8 @@ def summarize_experimental_units(
         row = dict(zip(unit_columns, keys))
         row["n_wells"] = int(group["well"].nunique()) if "well" in group else len(group)
         for endpoint in endpoint_columns:
+            if endpoint not in group.columns:
+                continue
             values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
             row[f"{endpoint}_mean"] = float(values.mean()) if len(values) else float("nan")
             row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else float("nan")
@@ -190,6 +208,7 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
     else:
         unit = "well"
 
+    _require_complete_identifier(summary, unit)
     result = (
         summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[unit]
         .nunique()

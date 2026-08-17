@@ -24,7 +24,7 @@ def test_bootstrap_ci_rejects_tiny_sample():
         bootstrap_ci(np.array([1.0]), n_bootstrap=100)
 
 
-def test_profile_difference_detects_separated_groups():
+def test_profile_difference_reports_uncertainty_without_invalid_p_values():
     result = bootstrap_profile_difference(
         np.array([1.0, 10.0]),
         {1.0: np.array([10.0, 11.0, 9.0]), 10.0: np.array([20.0, 21.0, 19.0])},
@@ -36,7 +36,7 @@ def test_profile_difference_detects_separated_groups():
     assert result.concentrations == (1.0, 10.0)
     assert all(diff > 0 for diff in result.differences)
     assert all(low > 0 for low in result.ci_low)
-    assert all(p < 0.10 for p in result.p_values)
+    assert not hasattr(result, "p_values")
 
 
 def test_profile_difference_requires_matched_replicates():

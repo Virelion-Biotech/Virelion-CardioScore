@@ -81,8 +81,8 @@ class CardioScoreEngine:
         self.moderate_threshold = moderate_threshold
 
     def _load_config(self) -> dict:
-        with open(self.endpoint_config_path) as f:
-            return yaml.safe_load(f)
+        with open(self.endpoint_config_path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
 
     def _normalize_effect(
         self,
@@ -91,19 +91,21 @@ class CardioScoreEngine:
         threshold: float,
         max_contribution: float = 1.0,
     ) -> float:
+        """Map a directional endpoint effect to a bounded risk contribution."""
+        if not np.isfinite(value):
+            return 0.0
+        scale = threshold if threshold > 0 else 1.0
         if direction == "absolute":
             excess = max(0.0, abs(value) - threshold)
-            scale = threshold if threshold > 0 else 1.0
-            return float(np.clip(excess / (3.0 * scale), 0.0, max_contribution))
-        if direction == "increase":
+        elif direction == "increase":
             excess = max(0.0, value - threshold)
-            scale = threshold if threshold > 0 else 1.0
-            return float(np.clip(excess / (3.0 * scale), 0.0, max_contribution))
-        if direction == "decrease":
-            excess = max(0.0, -value - threshold) if value < 0 else max(0.0, value - threshold)
-            scale = threshold if threshold > 0 else 1.0
-            return float(np.clip(excess / (3.0 * scale), 0.0, max_contribution))
-        raise ValueError(f"Unknown direction: {direction}")
+        elif direction == "decrease":
+            # Negative values represent decreases. Positive values are not a
+            # decrease and therefore do not contribute to this directional endpoint.
+            excess = max(0.0, -value - threshold)
+        else:
+            raise ValueError(f"Unknown direction: {direction}")
+        return float(np.clip(excess / (3.0 * scale), 0.0, max_contribution))
 
     def score_compound(
         self,
@@ -187,19 +189,36 @@ class CardioScoreEngine:
             metadata=metadata,
         )
 
+    def _feature_endpoint_value(self, group: pd.DataFrame, name: str) -> float:
+        if name not in group.columns:
+            return 0.0
+        meta = self.endpoints[name]
+        direction = meta["direction"]
+        values = pd.to_numeric(group[name], errors="coerce").dropna()
+        if values.empty:
+            return 0.0
+        if direction == "absolute":
+            return float(values.abs().max())
+        if direction == "increase":
+            return float(values.max())
+        if direction == "decrease":
+            return float(values.min())
+        raise ValueError(f"Unknown direction: {direction}")
+
     def score_feature_table(self, df: pd.DataFrame) -> list[ScoreResult]:
         results = []
         for compound, group in df.groupby("compound"):
-            endpoint_values = {}
-            for ep in self.endpoints:
-                if ep in group.columns:
-                    endpoint_values[ep] = float(group[ep].abs().max())
-                else:
-                    endpoint_values[ep] = 0.0
+            endpoint_values = {
+                ep: self._feature_endpoint_value(group, ep)
+                for ep in self.endpoints
+            }
 
             max_conc = None
             if "concentration_uM" in group.columns:
-                treated = group.loc[~group.get("vehicle", False)] if "vehicle" in group.columns else group
+                if "vehicle" in group.columns:
+                    treated = group.loc[~group["vehicle"].astype(bool)]
+                else:
+                    treated = group
                 max_conc = float(treated["concentration_uM"].max()) if len(treated) else None
             n_wells = int(group["well"].nunique()) if "well" in group.columns else len(group)
 
