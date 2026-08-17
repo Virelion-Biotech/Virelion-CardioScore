@@ -1,6 +1,9 @@
 (function(){
   function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
   function sigmoid(x,ec50,hill){hill=hill||1.2;return 1/(1+Math.pow(ec50/Math.max(x,1e-9),hill))}
+  function escapeHtml(value){
+    return String(value).replace(/[&<>'"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[ch]});
+  }
 
   var PRESETS={
     mcm_mix:[{kind:'vaccine',tox:0.2},{kind:'antitoxin',tox:0.25},{kind:'antiviral',tox:0.35},{kind:'mcm',tox:1.0}],
@@ -55,31 +58,56 @@
     return rows;
   }
 
+  function parseCsvLine(line){
+    var cells=[], current='', quoted=false;
+    for(var i=0;i<line.length;i++){
+      var ch=line[i];
+      if(ch==='"'){
+        if(quoted && line[i+1]==='"'){current+='"';i++;}
+        else quoted=!quoted;
+      } else if(ch===',' && !quoted){cells.push(current);current='';}
+      else current+=ch;
+    }
+    if(quoted) throw new Error('CSV contains an unterminated quoted field.');
+    cells.push(current);
+    return cells;
+  }
+
   function parseCsv(text){
-    var lines=text.trim().split(/\r?\n/);
-    if(lines.length<2) throw new Error('CSV empty');
-    var hdr=lines[0].split(',').map(function(h){return h.trim().toLowerCase()});
-    var cIdx=hdr.findIndex(function(h){return h.replace(/\u03bc/g,'u')==='concentration_um'});
-    if(cIdx<0) throw new Error('Missing concentration_uM column');
+    var lines=text.replace(/^\uFEFF/,'').trim().split(/\r?\n/).filter(function(line){return line.trim()});
+    if(lines.length<2) throw new Error('CSV must contain a header and at least one data row.');
+    var hdr=parseCsvLine(lines[0]).map(function(h){return h.trim().toLowerCase().replace(/\u03bc/g,'u')});
+    var required=['compound','well','concentration_um','vehicle','fpd_ms','beat_rate_bpm','amplitude_uv','stv','triangulation_proxy','noise_sd_uv','n_electrodes','beat_detection_rate'];
+    var missing=required.filter(function(name){return hdr.indexOf(name)<0});
+    if(missing.length) throw new Error('CSV is missing required scientific column(s): '+missing.join(', '));
     var rows=[];
     for(var i=1;i<lines.length;i++){
-      if(!lines[i].trim()) continue;
-      var cols=lines[i].split(',');
-      var get=function(name,def){var j=hdr.indexOf(name);return j>=0?cols[j].trim():def};
-      var veh=String(get('vehicle','false')).toLowerCase();
+      var cols=parseCsvLine(lines[i]);
+      if(cols.length!==hdr.length) throw new Error('CSV row '+(i+1)+' has '+cols.length+' fields; expected '+hdr.length+'.');
+      var get=function(name){var j=hdr.indexOf(name);return cols[j].trim()};
+      var veh=String(get('vehicle')).toLowerCase();
+      if(['true','1','yes'].indexOf(veh)<0 && ['false','0','no'].indexOf(veh)<0) throw new Error('Invalid vehicle value on CSV row '+(i+1));
+      var numericNames=['concentration_um','fpd_ms','beat_rate_bpm','amplitude_uv','stv','triangulation_proxy','noise_sd_uv','n_electrodes','beat_detection_rate'];
+      var parsed={};
+      numericNames.forEach(function(name){
+        var value=parseFloat(get(name));
+        if(!Number.isFinite(value)) throw new Error('Invalid numeric value in '+name+' on CSV row '+(i+1));
+        parsed[name]=value;
+      });
+      if(parsed.concentration_um<0) throw new Error('concentration_uM cannot be negative on CSV row '+(i+1));
       rows.push({
-        compound:get('compound','Unknown'),
-        concentration_uM:parseFloat(cols[cIdx]),
-        well:get('well','W'+i),
+        compound:get('compound'),
+        concentration_uM:parsed.concentration_um,
+        well:get('well'),
         vehicle:veh==='true'||veh==='1'||veh==='yes',
-        fpd_ms:parseFloat(get('fpd_ms','280')),
-        beat_rate_bpm:parseFloat(get('beat_rate_bpm','55')),
-        amplitude_uv:parseFloat(get('amplitude_uv','180')),
-        stv:parseFloat(get('stv','0.04')),
-        triangulation_proxy:parseFloat(get('triangulation_proxy','0.18')),
-        noise_sd_uv:parseFloat(get('noise_sd_uv','8')),
-        n_electrodes:parseInt(get('n_electrodes','8'),10),
-        beat_detection_rate:parseFloat(get('beat_detection_rate','0.9'))
+        fpd_ms:parsed.fpd_ms,
+        beat_rate_bpm:parsed.beat_rate_bpm,
+        amplitude_uv:parsed.amplitude_uv,
+        stv:parsed.stv,
+        triangulation_proxy:parsed.triangulation_proxy,
+        noise_sd_uv:parsed.noise_sd_uv,
+        n_electrodes:parsed.n_electrodes,
+        beat_detection_rate:parsed.beat_detection_rate
       });
     }
     return rows;
@@ -88,8 +116,8 @@
   function applyQc(rows){
     var log=[], kept=[];
     rows.forEach(function(r){
-      var ok=(r.n_electrodes||8)>=4 && (r.noise_sd_uv||0)<=25 && (r.beat_detection_rate||1)>=0.7;
-      if(ok) kept.push(r); else log.push('Rejected '+r.compound+' '+r.well+' (noise/elec/bdr)');
+      var ok=(r.n_electrodes||0)>=4 && (r.noise_sd_uv||0)<=25 && (r.beat_detection_rate||0)>=0.7;
+      if(ok) kept.push(r); else log.push('Rejected '+escapeHtml(r.compound)+' '+escapeHtml(r.well)+' (noise/elec/bdr)');
     });
     log.push('QC: kept '+kept.length+'/'+rows.length+' wells');
     return {rows:kept,log:log};
@@ -99,7 +127,7 @@
     var excess=0;
     if(dir==='abs') excess=Math.max(0,Math.abs(val)-th);
     else if(dir==='inc') excess=Math.max(0,val-th);
-    else excess=val<0?Math.max(0,-val-th):Math.max(0,val-th);
+    else excess=val<0?Math.max(0,-val-th):0;
     var scale=th>0?th:1;
     return Math.min(1,excess/(3*scale));
   }
@@ -155,15 +183,15 @@
     else qc.style.display='none';
     var html='<div class="card"><h3>Summary — MCM / biodefense prioritization</h3><table><thead><tr><th>Candidate</th><th>CardioScore</th><th>Risk</th><th>Max uM</th><th>Wells</th></tr></thead><tbody>';
     results.forEach(function(r){
-      html+='<tr><td><strong>'+r.compound+'</strong></td><td>'+r.score.toFixed(3)+'</td><td><span class="badge badge-'+r.cls+'">'+r.cls+'</span></td><td>'+r.maxConc.toFixed(2)+'</td><td>'+r.nWells+'</td></tr>';
+      html+='<tr><td><strong>'+escapeHtml(r.compound)+'</strong></td><td>'+r.score.toFixed(3)+'</td><td><span class="badge badge-'+escapeHtml(r.cls)+'">'+escapeHtml(r.cls)+'</span></td><td>'+r.maxConc.toFixed(2)+'</td><td>'+r.nWells+'</td></tr>';
     });
     html+='</tbody></table></div>';
     results.forEach(function(r){
-      html+='<div class="card"><h3>'+r.compound+' <span class="badge badge-'+r.cls+'">'+r.cls+'</span></h3>';
+      html+='<div class="card"><h3>'+escapeHtml(r.compound)+' <span class="badge badge-'+escapeHtml(r.cls)+'">'+escapeHtml(r.cls)+'</span></h3>';
       html+='<p class="meta" style="margin:0 0 8px">CardioScore '+r.score.toFixed(3)+'</p>';
       r.contribs.forEach(function(c){
         var w=Math.max(2,Math.round(c.c*140));
-        html+='<div class="bar-wrap"><div style="width:170px;font-size:12px">'+c.name+'</div><div class="bar" style="width:'+w+'px"></div><span class="meta">'+c.c.toFixed(3)+' (w='+c.w+')</span></div>';
+        html+='<div class="bar-wrap"><div style="width:170px;font-size:12px">'+escapeHtml(c.name)+'</div><div class="bar" style="width:'+w+'px"></div><span class="meta">'+c.c.toFixed(3)+' (w='+c.w+')</span></div>';
       });
       html+='</div>';
     });
@@ -184,7 +212,7 @@
     var f=e.target.files&&e.target.files[0];
     if(!f){uploaded=null;return}
     var reader=new FileReader();
-    reader.onload=function(){try{uploaded=parseCsv(String(reader.result)); alert('Loaded '+uploaded.length+' rows');}catch(err){uploaded=null;alert(err.message)}};
+    reader.onload=function(){try{uploaded=parseCsv(String(reader.result)); alert('Loaded '+uploaded.length+' validated rows');}catch(err){uploaded=null;alert(err.message)}};
     reader.readAsText(f);
   });
 
@@ -210,6 +238,7 @@
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([text],{type:type}));
     a.download=name; a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href)},1000);
   }
   document.getElementById('exportJson').onclick=function(){
     if(!lastResults){alert('Run scoring first');return}
@@ -218,7 +247,7 @@
   document.getElementById('exportCsv').onclick=function(){
     if(!lastResults){alert('Run scoring first');return}
     var lines=['compound,cardioscore,risk_class,max_concentration_uM,n_wells'];
-    lastResults.forEach(function(r){lines.push([r.compound,r.score.toFixed(4),r.cls,r.maxConc,r.nWells].join(','))});
+    lastResults.forEach(function(r){lines.push([JSON.stringify(r.compound),r.score.toFixed(4),r.cls,r.maxConc,r.nWells].join(','))});
     download('cardioscore_summary.csv',lines.join('\n'),'text/csv');
   };
 
