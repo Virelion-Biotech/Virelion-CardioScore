@@ -45,6 +45,8 @@ concentration_response:
   # Optional 4-parameter logistic fitting; disabled by default.
   fit_curve: false
   fit_min_concentrations: 4
+  # A fit can be numerically converged yet still be a poor representation of the data.
+  fit_min_r_squared: 0.80
 
 scoring:
   endpoint_config: "cipa_endpoints.yaml"
