@@ -50,11 +50,14 @@ class NormalizationValidationResult:
         }
 
 
-def _group_control_stats(df: pd.DataFrame, group_column: str, endpoint: str) -> tuple[pd.Series, float | None]:
-    controls = df[df["vehicle"] == True]  # noqa: E712
+def _group_control_stats(
+    df: pd.DataFrame,
+    group_column: str,
+    endpoint: str,
+) -> tuple[pd.Series, float | None]:
+    controls = df[df["vehicle"] == True]
     values = pd.to_numeric(controls[endpoint], errors="coerce")
     group_means = values.groupby(controls[group_column], dropna=False).mean()
-    between_sd = float(group_means.std(ddof=1)) if len(group_means) > 1 else 0.0
     overall_mean = float(values.mean()) if values.notna().any() else np.nan
     cv = None if np.isclose(overall_mean, 0.0) else float(abs(values.std(ddof=1) / overall_mean) * 100.0)
     return group_means, cv
@@ -89,8 +92,8 @@ def validate_control_anchor_correction(
     before_group_means, before_cv = _group_control_stats(df, group_column, endpoint)
     after_group_means, after_cv = _group_control_stats(corrected, group_column, endpoint)
 
-    before_effects = df[df["vehicle"] == False].copy()  # noqa: E712
-    after_effects = corrected[corrected["vehicle"] == False].copy()  # noqa: E712
+    before_effects = df[df["vehicle"] == False].copy()
+    after_effects = corrected[corrected["vehicle"] == False].copy()
 
     def treatment_effects(frame: pd.DataFrame) -> pd.Series:
         controls = df[df["vehicle"] == True] if frame is before_effects else corrected[corrected["vehicle"] == True]
@@ -115,7 +118,7 @@ def validate_control_anchor_correction(
         control_cv_before_pct=before_cv,
         control_cv_after_pct=after_cv,
         treatment_effect_rmse=rmse,
-        n_groups=int(len(before_group_means)),
+        n_groups=len(before_group_means),
         n_controls=int(df["vehicle"].sum()),
         n_treated=int((~df["vehicle"].astype(bool)).sum()),
         passed_drift_reduction=(
