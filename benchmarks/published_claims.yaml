@@ -1,0 +1,78 @@
+# Qualitative / partial external-validation claims extracted from published MEA studies.
+# These are not CardioScore reference scores and must not be treated as such.
+
+claims:
+  - source_id: geiger2025_cardiac_nam_figshare
+    claim_id: geiger_moxifloxacin_prolongs_fpd
+    subject: moxifloxacin
+    evidence_type: endpoint_direction
+    endpoint: fpd
+    expected_direction: harmful_increase
+    condition: "hiPSC-CM MEA; moxifloxacin alone"
+    interpretation: "Moxifloxacin produces concentration-dependent corrected field-potential prolongation relative to vehicle."
+
+  - source_id: geiger2025_cardiac_nam_figshare
+    claim_id: geiger_cobicistat_shortens_fpd
+    subject: cobicistat
+    evidence_type: endpoint_direction
+    endpoint: fpd
+    expected_direction: protective_decrease
+    condition: "hiPSC-CM MEA; cobicistat alone"
+    interpretation: "Cobicistat produces concentration-dependent corrected field-potential shortening."
+
+  - source_id: geiger2025_cardiac_nam_figshare
+    claim_id: geiger_combo_attenuates_prolongation
+    subject: "moxifloxacin+cobicistat"
+    evidence_type: comparative_direction
+    endpoint: fpd
+    expected_direction: combo_less_harmful_than_moxifloxacin_alone
+    condition: "moxifloxacin with cobicistat in hiPSC-CM MEA"
+    interpretation: "Cobicistat attenuates moxifloxacin-induced repolarization prolongation."
+
+  - source_id: geiger2025_cardiac_nam_figshare
+    claim_id: geiger_ead_reversal
+    subject: "moxifloxacin+cobicistat"
+    evidence_type: arrhythmia_event
+    endpoint: ead_like_events
+    expected_direction: reduced_event_frequency
+    condition: "200 uM moxifloxacin followed by cobicistat"
+    reference_counts:
+      moxifloxacin_alone: "4/6 wells"
+      after_cobicistat: "0/6 wells"
+
+  - source_id: geiger2025_cardiac_nam_figshare
+    claim_id: geiger_tdp_category_shift
+    subject: "moxifloxacin+cobicistat"
+    evidence_type: published_risk_category
+    endpoint: tdp_risk
+    expected_category_transition: "high_or_intermediate_to_low"
+    condition: "CiPA TdP risk prediction applied to MEA responses"
+
+  - source_id: altrocchi2023_frontiers_reference
+    claim_id: altrocchi_high_risk_tkis
+    subject: "sunitinib,vandetanib,nilotinib"
+    evidence_type: published_risk_group
+    endpoint: overall_cardiotoxicity
+    expected_category: high
+    condition: "chronic hiPSC-CM MEA assessment"
+
+  - source_id: altrocchi2023_frontiers_reference
+    claim_id: altrocchi_low_risk_erlotinib
+    subject: erlotinib
+    evidence_type: published_risk_group
+    endpoint: overall_cardiotoxicity
+    expected_category: low
+    condition: "chronic hiPSC-CM MEA assessment"
+
+  - source_id: altrocchi2023_frontiers_reference
+    claim_id: altrocchi_doxorubicin_cessation
+    subject: doxorubicin
+    evidence_type: endpoint_effect
+    endpoint: beating_and_fpd
+    expected_direction: beating_cessation_and_repolarization_signal_loss_at_toxic_exposure
+    condition: "24-96 h exposure"
+
+rules:
+  - "Published qualitative claims may validate directionality, relative ordering, or categorical behavior only when the corresponding measurement is present in an input dataset."
+  - "Missing endpoints must remain missing; no score may be inferred from a qualitative claim."
+  - "Published claims must never be converted into fabricated numeric CardioScore references."
