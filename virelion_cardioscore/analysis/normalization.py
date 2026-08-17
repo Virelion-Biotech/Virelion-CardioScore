@@ -1,9 +1,4 @@
-"""Control-anchored batch normalization for CardioScore.
-
-The correction is intentionally conservative: group-specific shifts are learned
-from vehicle controls only and applied to all wells in that group. It is an
-exploratory normalization layer, not a mixed-effects or regulatory correction.
-"""
+"""Control-anchored batch normalization for CardioScore."""
 
 from __future__ import annotations
 
@@ -13,13 +8,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from virelion_cardioscore.analysis.normalization_assumptions import check_additive_correction_assumptions
+from virelion_cardioscore.analysis.normalization_assumptions import (
+    check_additive_correction_assumptions,
+)
 
 
 @dataclass(frozen=True)
 class CorrectionDiagnostic:
-    """Record how a control-anchored correction was applied."""
-
     group_column: str
     n_groups: int
     n_controls: int
@@ -44,16 +39,13 @@ def _resolve_group_column(df: pd.DataFrame, group_column: Optional[str]) -> str:
     if group_column is not None:
         if group_column not in df.columns:
             raise ValueError(f"Requested correction group column {group_column!r} is absent.")
-        column = group_column
-    else:
-        column = next((candidate for candidate in ("plate_id", "batch_id", "experiment_id") if candidate in df.columns), None)
-        if column is None:
-            raise ValueError(
-                "Control-anchored correction requires one of 'plate_id', 'batch_id', or 'experiment_id'."
-            )
-    if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
-        raise ValueError(f"Correction grouping column {column!r} contains missing or blank identifiers.")
-    return column
+        return group_column
+    for candidate in ("plate_id", "batch_id", "experiment_id"):
+        if candidate in df.columns:
+            return candidate
+    raise ValueError(
+        "Control-anchored correction requires one of 'plate_id', 'batch_id', or 'experiment_id'."
+    )
 
 
 def apply_control_anchor_correction(
@@ -63,8 +55,8 @@ def apply_control_anchor_correction(
     corrected_columns: Optional[list[str]] = None,
     min_controls_per_group: int = 2,
     require_all_groups: bool = True,
-    require_treatment_in_all_groups: bool = True,
     min_treated_per_group: int = 1,
+    require_treatment_in_all_groups: bool = True,
     max_shift_cv_pct: float = 50.0,
     fail_on_assumption_violation: bool = True,
 ) -> tuple[pd.DataFrame, CorrectionDiagnostic]:
@@ -76,7 +68,13 @@ def apply_control_anchor_correction(
 
     group = _resolve_group_column(df, group_column)
     if corrected_columns is None:
-        corrected_columns = ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]
+        corrected_columns = [
+            "fpd_ms",
+            "beat_rate_bpm",
+            "amplitude_uv",
+            "stv",
+            "triangulation_proxy",
+        ]
 
     missing_columns = [column for column in corrected_columns if column not in df.columns]
     if missing_columns:
@@ -114,7 +112,8 @@ def apply_control_anchor_correction(
     if not insufficient.empty and require_all_groups:
         raise ValueError(
             "Control-anchored correction requires at least "
-            f"{min_controls_per_group} vehicle wells per group; insufficient groups: {list(insufficient.index)}."
+            f"{min_controls_per_group} vehicle wells per group; insufficient groups: "
+            f"{list(insufficient.index)}."
         )
 
     usable_groups = group_sizes[group_sizes >= min_controls_per_group].index
