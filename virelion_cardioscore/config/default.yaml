@@ -37,6 +37,9 @@ features:
   window_s: 60.0
 
 concentration_response:
+  # Replicates are summarized within each concentration before compound-level scoring.
+  replicate_aggregation: "mean"
+  concentration_aggregation: "max_absolute_effect"
   min_concentrations: 3
   effect_threshold_pct: 10.0
   fit_curve: false
