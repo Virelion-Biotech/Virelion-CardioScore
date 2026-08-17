@@ -10,7 +10,7 @@ from virelion_cardioscore.preprocessing.beat_detection import (
     BeatDetectionConfig,
     detect_beats,
 )
-from virelion_cardioscore.preprocessing.filtering import FilterConfig, filter_trace
+from virelion_cardioscore.preprocessing.filtering import filter_trace
 
 
 @pytest.mark.parametrize("polarity", [1, -1])
@@ -73,14 +73,21 @@ def test_detect_beats_respects_refractory_period():
     trace += 100 * np.exp(-((t - 0.55) ** 2) / (2 * 0.003**2))
 
     result = detect_beats(
-        trace, fs_hz=fs, config=BeatDetectionConfig(refractory_ms=200.0, min_distance_ms=200.0)
+        trace,
+        fs_hz=fs,
+        config=BeatDetectionConfig(refractory_ms=200.0, min_distance_ms=200.0),
     )
     assert result.n_beats == 1
 
 
 def test_beat_detection_config_from_dict():
     cfg = BeatDetectionConfig.from_dict(
-        {"method": "peak", "min_prominence_uv": 15.0, "min_distance_ms": 300.0, "refractory_ms": 250.0}
+        {
+            "method": "peak",
+            "min_prominence_uv": 15.0,
+            "min_distance_ms": 300.0,
+            "refractory_ms": 250.0,
+        }
     )
     assert cfg.min_prominence_uv == 15.0
     assert cfg.min_distance_ms == 300.0
@@ -94,7 +101,7 @@ def test_stv_zero_for_perfectly_regular_beats():
     beat_time = 0.5
     while beat_time < 10:
         trace += 100 * np.exp(-((t - beat_time) ** 2) / (2 * 0.003**2))
-        beat_time += 1.0  # perfectly regular 1s IBI, no jitter
+        beat_time += 1.0
 
     result = detect_beats(trace, fs_hz=fs)
     assert result.stv < 0.01
