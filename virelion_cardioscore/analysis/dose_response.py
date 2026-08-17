@@ -35,6 +35,10 @@ class DoseResponseFit:
     r_squared: Optional[float] = None
     rmse: Optional[float] = None
     weighted: bool = False
+    monotonicity: Optional[float] = None
+    monotonic_direction: Optional[str] = None
+    ec50_boundary_flag: bool = False
+    ec50_uncertainty_fold: Optional[float] = None
     message: str = ""
 
     def to_dict(self) -> dict:
@@ -54,6 +58,10 @@ class DoseResponseFit:
             "r_squared": self.r_squared,
             "rmse": self.rmse,
             "weighted": self.weighted,
+            "monotonicity": self.monotonicity,
+            "monotonic_direction": self.monotonic_direction,
+            "ec50_boundary_flag": self.ec50_boundary_flag,
+            "ec50_uncertainty_fold": self.ec50_uncertainty_fold,
             "message": self.message,
         }
 
@@ -77,6 +85,19 @@ def _ci95(value: float, standard_error: float) -> tuple[float, float]:
     return value - delta, value + delta
 
 
+def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
+    """Return fraction of adjacent response changes matching the overall trend."""
+    if len(x) < 2:
+        return 1.0, "flat"
+    deltas = np.diff(y)
+    overall = float(y[-1] - y[0])
+    if np.isclose(overall, 0.0):
+        return 0.0, "flat"
+    direction = 1.0 if overall > 0 else -1.0
+    matches = np.sum((deltas * direction) >= 0.0)
+    return float(matches / len(deltas)), "increasing" if direction > 0 else "decreasing"
+
+
 def fit_4pl(
     concentrations: np.ndarray,
     responses: np.ndarray,
@@ -85,17 +106,15 @@ def fit_4pl(
     endpoint: str = "endpoint",
     min_points: int = 4,
     min_r_squared: float = 0.0,
+    min_monotonicity: float = 0.0,
+    ec50_boundary_factor: float = 2.0,
+    max_ec50_uncertainty_fold: float = 100.0,
 ) -> DoseResponseFit:
-    """Fit a bounded four-parameter logistic model with optional SEM weighting.
+    """Fit a bounded four-parameter logistic model with diagnostic quality gates.
 
-    ``response_sem`` should contain the within-concentration SEM for each mean
-    response. When supplied, it is used as ``sigma`` in ``scipy.optimize.curve_fit``
-    so concentrations with smaller replicate uncertainty contribute more strongly.
-    
-    ``quality_pass`` requires numerical convergence, finite parameter confidence
-    intervals, and R-squared >= ``min_r_squared``. A failed quality check does not
-    invalidate the numerical fit; it marks it as unsuitable for replacing the
-    heuristic scoring path.
+    ``response_sem`` is used as ``sigma`` when supplied. The fit is considered
+    high-quality only when R-squared, monotonicity, EC50 placement, and EC50
+    uncertainty all satisfy their configured thresholds.
     """
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
@@ -185,12 +204,51 @@ def fit_4pl(
     ec50_ci_low, ec50_ci_high = _ci95(ec50, ec50_se)
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
 
+    monotonicity, monotonic_direction = _monotonicity_score(x, y)
+    boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
+    boundary_high = ec50 > float(np.max(x)) / ec50_boundary_factor
+    ec50_boundary_flag = bool(boundary_low or boundary_high)
+
+    ec50_uncertainty_fold = None
+    if ec50 > 0 and ec50_ci_low > 0:
+        ec50_uncertainty_fold = float(ec50_ci_high / ec50_ci_low)
+
     finite_ci = all(
         np.isfinite(value)
         for value in [ec50_ci_low, ec50_ci_high, hill_ci_low, hill_ci_high]
     )
-    quality_pass = bool(np.isfinite(r_squared) and r_squared >= min_r_squared and finite_ci)
-    quality_message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria."
+    quality_pass = bool(
+        np.isfinite(r_squared)
+        and r_squared >= min_r_squared
+        and finite_ci
+        and ec50_ci_low > 0
+        and monotonicity >= min_monotonicity
+        and not ec50_boundary_flag
+        and (
+            ec50_uncertainty_fold is not None
+            and ec50_uncertainty_fold <= max_ec50_uncertainty_fold
+        )
+    )
+
+    reasons = []
+    if not np.isfinite(r_squared) or r_squared < min_r_squared:
+        reasons.append(f"R-squared below {min_r_squared:.2f}")
+    if monotonicity < min_monotonicity:
+        reasons.append(f"monotonicity below {min_monotonicity:.2f}")
+    if ec50_boundary_flag:
+        reasons.append("EC50 lies near/outside the tested concentration range")
+    if ec50_ci_low <= 0:
+        reasons.append("EC50 confidence interval is not strictly positive")
+    if ec50_uncertainty_fold is None or ec50_uncertainty_fold > max_ec50_uncertainty_fold:
+        reasons.append("EC50 uncertainty is too wide")
+    if not finite_ci:
+        reasons.append("parameter confidence intervals are non-finite")
+
+    message = (
+        "Fit passed quality criteria."
+        if quality_pass
+        else "Fit converged but failed quality criteria: " + "; ".join(dict.fromkeys(reasons))
+    )
 
     return DoseResponseFit(
         endpoint=endpoint,
@@ -208,7 +266,11 @@ def fit_4pl(
         r_squared=float(r_squared),
         rmse=rmse,
         weighted=sigma is not None,
-        message=quality_message,
+        monotonicity=monotonicity,
+        monotonic_direction=monotonic_direction,
+        ec50_boundary_flag=ec50_boundary_flag,
+        ec50_uncertainty_fold=ec50_uncertainty_fold,
+        message=message,
     )
 
 
@@ -218,6 +280,9 @@ def fit_concentration_series(
     endpoint_columns: Optional[list[str]] = None,
     min_points: int = 4,
     min_r_squared: float = 0.0,
+    min_monotonicity: float = 0.0,
+    ec50_boundary_factor: float = 2.0,
+    max_ec50_uncertainty_fold: float = 100.0,
 ) -> list[DoseResponseFit]:
     """Fit all requested endpoint mean columns in a concentration summary."""
     if endpoint_columns is None:
@@ -247,6 +312,9 @@ def fit_concentration_series(
                 endpoint=endpoint,
                 min_points=min_points,
                 min_r_squared=min_r_squared,
+                min_monotonicity=min_monotonicity,
+                ec50_boundary_factor=ec50_boundary_factor,
+                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
             )
         )
     return results
