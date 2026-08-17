@@ -35,6 +35,7 @@ def test_control_anchor_correction_aligns_group_control_means():
     assert diagnostic.n_controls == 4
     assert diagnostic.group_shifts["P1"]["fpd_ms"] == pytest.approx(10.0)
     assert diagnostic.group_shifts["P2"]["fpd_ms"] == pytest.approx(-10.0)
+    assert diagnostic.assumption_checks["fpd_ms"]["usable_for_additive_correction"] is True
 
 
 def test_control_anchor_preserves_within_group_treatment_control_difference():
@@ -83,3 +84,35 @@ def test_control_anchor_is_reproducible_and_diagnostic_serializes():
     payload = diagnostic.to_dict()
     assert payload["corrected_columns"] == ["fpd_ms", "beat_rate_bpm"]
     assert set(payload["group_shifts"]) == {"P1", "P2"}
+    assert set(payload["assumption_checks"]) == {"fpd_ms", "beat_rate_bpm"}
+
+
+def test_control_anchor_fails_closed_when_treatment_is_missing_from_a_group():
+    frame = _frame().copy()
+    frame.loc[frame["well"] == "T2", "vehicle"] = True
+
+    with pytest.raises(ValueError, match="Treatment observations are missing"):
+        apply_control_anchor_correction(
+            frame,
+            group_column="plate_id",
+            corrected_columns=["fpd_ms"],
+            min_controls_per_group=2,
+            require_all_groups=True,
+        )
+
+
+def test_control_anchor_can_report_but_not_fail_on_assumption_warning():
+    frame = _frame().copy()
+    frame.loc[frame["well"] == "T2", "vehicle"] = True
+
+    corrected, diagnostic = apply_control_anchor_correction(
+        frame,
+        group_column="plate_id",
+        corrected_columns=["fpd_ms"],
+        min_controls_per_group=2,
+        require_all_groups=True,
+        fail_on_assumption_violation=False,
+    )
+
+    assert np.isfinite(corrected["fpd_ms"]).all()
+    assert diagnostic.assumption_checks["fpd_ms"]["treatment_allocation_imbalanced"] is True
