@@ -1,4 +1,4 @@
-"""Analysis modules: statistics, dose-response fitting, and CardioScore engine."""
+"""Analysis modules: statistics, dose-response fitting, CardioScore engine, and QC diagnostics."""
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
 from virelion_cardioscore.analysis.dose_response import (
@@ -21,6 +21,11 @@ from virelion_cardioscore.analysis.statistics import (
     bootstrap_ci,
     bootstrap_profile_difference,
 )
+from virelion_cardioscore.analysis.variability import (
+    VariabilityDiagnostic,
+    control_variability,
+    standardized_treatment_separation,
+)
 
 __all__ = [
     "CardioScoreEngine",
@@ -38,6 +43,9 @@ __all__ = [
     "ProfileDifference",
     "bootstrap_ci",
     "bootstrap_profile_difference",
+    "VariabilityDiagnostic",
+    "control_variability",
+    "standardized_treatment_separation",
     "CardioScorePipeline",
     "PipelineResult",
 ]
