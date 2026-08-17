@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -71,7 +73,7 @@ def test_standardized_treatment_separation_is_group_specific():
     assert (result["standardized_separation"] > 0).all()
 
 
-def test_pipeline_exposes_variability_diagnostics_without_scoring_change():
+def test_pipeline_exposes_variability_diagnostics_without_scoring_change(tmp_path):
     frame = _frame().copy()
     frame["n_electrodes"] = 4
     frame["noise_sd_uv"] = 5.0
@@ -92,5 +94,11 @@ def test_pipeline_exposes_variability_diagnostics_without_scoring_change():
     assert not result.variability_table.empty
     assert not result.separation_table.empty
     assert {"status", "control_cv_pct", "between_group_sd"}.issubset(result.variability_table.columns)
-    assert "treatment_separation" in result.to_json.__doc__ if result.to_json.__doc__ else True
     assert len(result.scores) > 0
+
+    output = tmp_path / "result.json"
+    result.to_json(output)
+    payload = json.loads(output.read_text())
+    assert "variability" in payload
+    assert "treatment_separation" in payload
+    assert len(payload["variability"]) == len(result.variability_table)
