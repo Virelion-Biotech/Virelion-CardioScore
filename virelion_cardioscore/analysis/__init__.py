@@ -1,6 +1,7 @@
 """Analysis modules for CardioScore."""
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
+from virelion_cardioscore.analysis.concentration_drivers import ConcentrationDriver, concentration_drivers
 from virelion_cardioscore.analysis.dose_response import (
     DoseResponseFit,
     fit_4pl,
@@ -68,6 +69,8 @@ from virelion_cardioscore.analysis.variability import (
 __all__ = [
     "CardioScoreEngine",
     "ScoreResult",
+    "ConcentrationDriver",
+    "concentration_drivers",
     "DoseResponseFit",
     "fit_4pl",
     "fit_concentration_series",
