@@ -9,7 +9,6 @@ quality_control:
   min_electrodes_per_well: 4
   max_noise_sd_uv: 25.0
   min_beat_detection_rate: 0.7
-  # Optional STV-based irregularity proxy. This is not an arrhythmia detector.
   reject_wells_with_arrhythmia_proxy: false
   arrhythmia_proxy_max_stv: null
   log_rejections: true
@@ -37,7 +36,6 @@ features:
   window_s: 60.0
 
 experimental_units:
-  # Explicit analysis unit. Higher-level choices require the corresponding metadata.
   scoring_unit: "well"
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
@@ -45,18 +43,14 @@ experimental_units:
   fall_back_to_well: true
 
 control_normalization:
-  # Controls are normally matched within compound. Shared controls can be matched
-  # by plate, batch, biological replicate, or globally when the study design supports it.
   scope: "compound"
   require_matching_control: true
 
 variability:
-  # Optional plate/batch stability diagnostics. These never alter CardioScore.
   enabled: false
   group_column: null
   max_control_cv_pct: 20.0
   correction:
-    # Conservative control-anchored recentering; disabled by default.
     enabled: false
     corrected_columns:
       - "fpd_ms"
@@ -65,17 +59,15 @@ variability:
       - "stv"
       - "triangulation_proxy"
     min_controls_per_group: 2
+    # When true, every correction group must have sufficient vehicle controls
+    # and the configured minimum treated observations before correction is allowed.
     require_all_groups: true
     assumptions:
-      # Validation guardrails for the additive correction model.
-      require_treatment_in_all_groups: true
       min_treated_per_group: 1
       max_shift_cv_pct: 50.0
-      # Fail closed when assumptions are not met unless deliberately overridden for exploration.
       fail_closed: true
 
 mixed_effects:
-  # Optional random-intercept inference; never changes CardioScore automatically.
   enabled: false
   group_column: null
   treatment_column: "_treatment"
@@ -99,7 +91,6 @@ concentration_response:
   fit_max_ec50_uncertainty_fold: 100.0
 
 inference:
-  # Bootstrap uncertainty is opt-in and does not alter CardioScore.
   enabled: false
   n_bootstrap: 2000
   confidence: 0.95
