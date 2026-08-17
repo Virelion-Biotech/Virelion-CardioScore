@@ -32,6 +32,8 @@ _ENDPOINT_EFFECT_THRESHOLDS = {
     "triangulation_proxy_change": 0.20,
 }
 
+_DEFAULT_MIN_EC50_COVERAGE = 0.10
+
 
 @dataclass
 class DoseResponseFit:
@@ -56,6 +58,9 @@ class DoseResponseFit:
     harmful_effect_magnitude: Optional[float] = None
     effect_threshold: Optional[float] = None
     effect_size_pass: Optional[bool] = None
+    ec50_coverage: Optional[float] = None
+    min_ec50_coverage: Optional[float] = None
+    coverage_pass: Optional[bool] = None
     ec50_boundary_flag: bool = False
     ec50_uncertainty_fold: Optional[float] = None
     message: str = ""
@@ -83,6 +88,9 @@ class DoseResponseFit:
             "harmful_effect_magnitude": self.harmful_effect_magnitude,
             "effect_threshold": self.effect_threshold,
             "effect_size_pass": self.effect_size_pass,
+            "ec50_coverage": self.ec50_coverage,
+            "min_ec50_coverage": self.min_ec50_coverage,
+            "coverage_pass": self.coverage_pass,
             "ec50_boundary_flag": self.ec50_boundary_flag,
             "ec50_uncertainty_fold": self.ec50_uncertainty_fold,
             "message": self.message,
@@ -148,11 +156,14 @@ def fit_4pl(
     ec50_boundary_factor: float = 2.0,
     max_ec50_uncertainty_fold: float = 100.0,
     effect_threshold: float | None = None,
+    min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> DoseResponseFit:
     if effect_threshold is None:
         effect_threshold = _ENDPOINT_EFFECT_THRESHOLDS.get(endpoint)
     if effect_threshold is not None and effect_threshold < 0:
         raise ValueError("effect_threshold must be non-negative.")
+    if not 0.0 <= min_ec50_coverage <= 1.0:
+        raise ValueError("min_ec50_coverage must be between 0 and 1.")
 
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
@@ -166,7 +177,7 @@ def fit_4pl(
         sigma = sigma[finite]
 
     if len(x) < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, message=f"Need at least {min_points} positive concentrations; got {len(x)}.")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} positive concentrations; got {len(x)}.")
 
     order = np.argsort(x)
     x = x[order]
@@ -175,14 +186,14 @@ def fit_4pl(
         sigma = sigma[order]
 
     if np.unique(x).size < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=int(np.unique(x).size), effect_threshold=effect_threshold, message=f"Need at least {min_points} distinct positive concentrations.")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=int(np.unique(x).size), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
 
     span = float(np.max(y) - np.min(y))
     harmful_effect_magnitude = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
     effect_size_pass = None if effect_threshold is None or harmful_effect_magnitude is None else harmful_effect_magnitude >= effect_threshold
 
     if span <= 1e-12:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, harmful_effect_magnitude=harmful_effect_magnitude, effect_size_pass=False if effect_threshold is not None else None, message="Response has negligible dynamic range; 4PL fit is not identifiable.")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, harmful_effect_magnitude=harmful_effect_magnitude, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, coverage_pass=False, message="Response has negligible dynamic range; 4PL fit is not identifiable.")
 
     p0 = [float(np.min(y)), float(np.max(y)), float(np.median(x)), 1.0]
     y_min, y_max = float(np.min(y)), float(np.max(y))
@@ -193,7 +204,7 @@ def fit_4pl(
     try:
         params, covariance = curve_fit(four_parameter_logistic, x, y, p0=p0, bounds=(lower, upper), sigma=sigma, absolute_sigma=sigma is not None, maxfev=20000)
     except (RuntimeError, ValueError) as exc:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), weighted=sigma is not None, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, message=f"4PL optimization failed: {exc}")
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), weighted=sigma is not None, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, min_ec50_coverage=min_ec50_coverage, message=f"4PL optimization failed: {exc}")
 
     fitted = four_parameter_logistic(x, *params)
     residuals = y - fitted
@@ -211,9 +222,12 @@ def fit_4pl(
     boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
     boundary_high = ec50 > float(np.max(x)) / ec50_boundary_factor
     ec50_boundary_flag = bool(boundary_low or boundary_high)
+    log_span = float(np.log10(np.max(x) / np.min(x)))
+    ec50_coverage = float(np.clip(np.log10(np.max(x) / ec50) / log_span, 0.0, 1.0)) if log_span > 0 and ec50 > 0 else 0.0
+    coverage_pass = ec50_coverage >= min_ec50_coverage
     ec50_uncertainty_fold = float(ec50_ci_high / ec50_ci_low) if ec50 > 0 and ec50_ci_low > 0 else None
     finite_ci = all(np.isfinite(value) for value in [ec50_ci_low, ec50_ci_high, hill_ci_low, hill_ci_high])
-    quality_pass = bool(np.isfinite(r_squared) and r_squared >= min_r_squared and finite_ci and ec50_ci_low > 0 and monotonicity >= min_monotonicity and harm_direction_compatible is not False and (effect_size_pass is not False) and not ec50_boundary_flag and ec50_uncertainty_fold is not None and ec50_uncertainty_fold <= max_ec50_uncertainty_fold)
+    quality_pass = bool(np.isfinite(r_squared) and r_squared >= min_r_squared and finite_ci and ec50_ci_low > 0 and monotonicity >= min_monotonicity and harm_direction_compatible is not False and (effect_size_pass is not False) and coverage_pass and not ec50_boundary_flag and ec50_uncertainty_fold is not None and ec50_uncertainty_fold <= max_ec50_uncertainty_fold)
 
     reasons = []
     if not np.isfinite(r_squared) or r_squared < min_r_squared:
@@ -224,6 +238,8 @@ def fit_4pl(
         reasons.append("fitted concentration-response direction is not the configured harmful direction")
     if effect_size_pass is False:
         reasons.append(f"harmful response magnitude below configured effect threshold {float(effect_threshold):.4g}")
+    if not coverage_pass:
+        reasons.append(f"EC50 coverage below minimum {min_ec50_coverage:.2f}")
     if ec50_boundary_flag:
         reasons.append("EC50 lies near/outside the tested concentration range")
     if ec50_ci_low <= 0:
@@ -234,7 +250,7 @@ def fit_4pl(
         reasons.append("parameter confidence intervals are non-finite")
 
     message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria: " + "; ".join(dict.fromkeys(reasons))
-    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=float(params[0]), top=float(params[1]), r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
+    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=float(params[0]), top=float(params[1]), r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=harmful_effect_magnitude, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
 
 
 def fit_concentration_series(
@@ -248,6 +264,7 @@ def fit_concentration_series(
     min_monotonicity: float = 0.0,
     ec50_boundary_factor: float = 2.0,
     max_ec50_uncertainty_fold: float = 100.0,
+    min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> list[DoseResponseFit]:
     """Fit all requested endpoint mean columns in a concentration summary."""
     if endpoint_columns is None:
@@ -259,5 +276,20 @@ def fit_concentration_series(
         endpoint = endpoint_column.removesuffix("_mean")
         sem_column = endpoint_column.removesuffix("_mean") + "_sem"
         response_sem = concentration_summary[sem_column].to_numpy(dtype=float) if sem_column in concentration_summary.columns else None
-        results.append(fit_4pl(concentration_summary["concentration_uM"].to_numpy(dtype=float), concentration_summary[endpoint_column].to_numpy(dtype=float), response_sem=response_sem, endpoint=endpoint, endpoint_directions=endpoint_directions, min_points=min_points, min_r_squared=min_r_squared, min_monotonicity=min_monotonicity, ec50_boundary_factor=ec50_boundary_factor, max_ec50_uncertainty_fold=max_ec50_uncertainty_fold, effect_threshold=(endpoint_thresholds or {}).get(endpoint)))
+        results.append(
+            fit_4pl(
+                concentration_summary["concentration_uM"].to_numpy(dtype=float),
+                concentration_summary[endpoint_column].to_numpy(dtype=float),
+                response_sem=response_sem,
+                endpoint=endpoint,
+                endpoint_directions=endpoint_directions,
+                min_points=min_points,
+                min_r_squared=min_r_squared,
+                min_monotonicity=min_monotonicity,
+                ec50_boundary_factor=ec50_boundary_factor,
+                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
+                effect_threshold=(endpoint_thresholds or {}).get(endpoint),
+                min_ec50_coverage=min_ec50_coverage,
+            )
+        )
     return results
