@@ -17,6 +17,7 @@
 - Optional control-anchored batch normalization using vehicle-only group shifts, with before/after control variability reporting and JSON audit metadata.
 - Reusable normalization-validation utilities for testing drift reduction and preservation of within-group treatment-control effects on benchmark datasets.
 - Fail-closed normalization assumption checks for treatment allocation and additive-vs-scale drift warnings.
+- Optional random-intercept mixed-effects inference for endpoint-level treatment effects with plate/batch clustering; `statsmodels` is an optional dependency.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -34,6 +35,8 @@
 - The normalization-validation harness separately measures control-drift reduction and treatment-effect preservation; it does not turn those benchmark results into a regulatory validation claim.
 - Normalization now performs assumption checks before applying corrections and fails closed by default when treatment allocation or additive-shift assumptions are not met.
 - Symmetric positive/negative additive shifts are treated sign-invariantly in the assumption diagnostic to avoid false alarms from plate offsets in opposite directions.
+- The random-intercept mixed-effects model is inference-only: it quantifies treatment effects while accounting for group-level clustering and reports ICC, but it does not automatically alter CardioScore.
+- The mixed-effects model requires at least two groups and both treatment levels and should use a genuine experimental grouping variable such as plate, batch, or experiment.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
