@@ -77,12 +77,47 @@ class CardioScoreEngine:
         self.config = self._load_config()
         self.endpoints = self.config["endpoints"]
         self.risk_categories = self.config["risk_categories"]
-        self.low_threshold = low_threshold
-        self.moderate_threshold = moderate_threshold
+        self.low_threshold = float(low_threshold)
+        self.moderate_threshold = float(moderate_threshold)
+        if not 0.0 <= self.low_threshold < self.moderate_threshold <= 1.0:
+            raise ValueError("Risk thresholds must satisfy 0 <= low < moderate <= 1.")
 
     def _load_config(self) -> dict:
         with open(self.endpoint_config_path, encoding="utf-8") as handle:
-            return yaml.safe_load(handle)
+            config = yaml.safe_load(handle) or {}
+
+        if not isinstance(config.get("endpoints"), dict) or not config["endpoints"]:
+            raise ValueError("Endpoint configuration must define a non-empty 'endpoints' mapping.")
+        if not isinstance(config.get("risk_categories"), dict):
+            raise ValueError("Endpoint configuration must define 'risk_categories'.")
+
+        allowed_directions = {"absolute", "increase", "decrease"}
+        for name, meta in config["endpoints"].items():
+            if not isinstance(meta, dict):
+                raise ValueError(f"Endpoint {name!r} configuration must be a mapping.")
+            for key in ("weight", "effect_threshold", "direction"):
+                if key not in meta:
+                    raise ValueError(f"Endpoint {name!r} is missing required field {key!r}.")
+            weight = float(meta["weight"])
+            threshold = float(meta["effect_threshold"])
+            direction = str(meta["direction"])
+            if weight < 0:
+                raise ValueError(f"Endpoint {name!r} weight cannot be negative.")
+            if threshold < 0:
+                raise ValueError(f"Endpoint {name!r} effect_threshold cannot be negative.")
+            if direction not in allowed_directions:
+                raise ValueError(
+                    f"Endpoint {name!r} has unsupported direction {direction!r}; "
+                    f"expected one of {sorted(allowed_directions)}."
+                )
+
+        if sum(float(meta["weight"]) for meta in config["endpoints"].values()) <= 0:
+            raise ValueError("Endpoint weights must sum to a positive value.")
+        for category in ("low", "moderate", "high"):
+            meta = config["risk_categories"].get(category)
+            if not isinstance(meta, dict) or "label" not in meta:
+                raise ValueError(f"risk_categories.{category} must define a label.")
+        return config
 
     def _normalize_effect(
         self,
@@ -100,8 +135,6 @@ class CardioScoreEngine:
         elif direction == "increase":
             excess = max(0.0, value - threshold)
         elif direction == "decrease":
-            # Negative values represent decreases. Positive values are not a
-            # decrease and therefore do not contribute to this directional endpoint.
             excess = max(0.0, -value - threshold)
         else:
             raise ValueError(f"Unknown direction: {direction}")
@@ -138,7 +171,6 @@ class CardioScoreEngine:
             contrib = self._normalize_effect(raw, direction, thresh, max_c)
             weighted_sum += weight * contrib
             total_weight += weight
-
             contributions.append(
                 EndpointContribution(
                     name=name,
@@ -181,8 +213,8 @@ class CardioScoreEngine:
             compound=compound,
             score=score,
             risk_class=cat["label"],
-            risk_color=cat["color"],
-            interpretation=cat["interpretation"],
+            risk_color=cat.get("color", ""),
+            interpretation=cat.get("interpretation", ""),
             contributions=contributions,
             max_concentration_uM=max_concentration_uM,
             n_wells=n_wells,
