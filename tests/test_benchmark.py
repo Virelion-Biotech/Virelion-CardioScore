@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
 
 from virelion_cardioscore.analysis.benchmark import benchmark_summary, run_benchmark_manifest
@@ -50,6 +51,7 @@ def test_reference_benchmark_detects_known_score_and_class(tmp_path: Path):
                 "name": "known_effect",
                 "features": str(features_path),
                 "config": str(config_path),
+                "evidence_level": "processed_mea_summary",
                 "score_tolerance": 1e-6,
                 "expected": [
                     {"compound": "Known", "cardioscore": 0.30, "risk_class": "Moderate"}
@@ -72,6 +74,28 @@ def test_reference_benchmark_detects_known_score_and_class(tmp_path: Path):
         "n_failed": 0,
         "pass_rate": 1.0,
     }
+
+
+def test_benchmark_rejects_published_summary_as_full_numerical_reference(tmp_path: Path):
+    repo_root = Path(__file__).parents[1]
+    config_path = repo_root / "virelion_cardioscore" / "config" / "default.yaml"
+    features_path = tmp_path / "placeholder.csv"
+    pd.DataFrame().to_csv(features_path, index=False)
+    manifest = {
+        "datasets": [
+            {
+                "name": "published_only",
+                "features": str(features_path),
+                "config": str(config_path),
+                "evidence_level": "published_mea_summary",
+                "expected": [{"compound": "Known", "cardioscore": 0.4, "risk_class": "Moderate"}],
+            }
+        ]
+    }
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="full numerical benchmark"):
+        run_benchmark_manifest(manifest_path)
 
 
 def test_benchmark_summary_reports_failures():
