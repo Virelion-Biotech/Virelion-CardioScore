@@ -153,11 +153,21 @@ class CardioScoreEngine:
         if dose_response_weight > 0 and dose_response_evidence is None:
             raise ValueError("dose_response_evidence is required when dose_response_weight > 0")
 
+        missing = sorted(set(self.endpoints) - set(endpoint_values))
+        if missing:
+            raise ValueError(f"Scoring endpoint values are missing: {missing}")
+        non_finite = sorted(
+            name for name in self.endpoints
+            if not np.isfinite(float(endpoint_values[name]))
+        )
+        if non_finite:
+            raise ValueError(f"Scoring endpoint values must be finite: {non_finite}")
+
         contributions: list[EndpointContribution] = []
         weighted_sum = 0.0
         total_weight = 0.0
         for name, meta in self.endpoints.items():
-            raw = float(endpoint_values.get(name, 0.0))
+            raw = float(endpoint_values[name])
             weight = float(meta["weight"])
             contrib = self._normalize_effect(raw, meta["direction"], float(meta["effect_threshold"]), float(meta.get("max_contribution", 1.0)))
             weighted_sum += weight * contrib
