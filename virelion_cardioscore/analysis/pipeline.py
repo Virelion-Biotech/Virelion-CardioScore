@@ -2,7 +2,8 @@
 End-to-end CardioScore pipeline.
 
 Orchestrates quality control, vehicle normalization, replicate-aware
-concentration summaries, scoring, and report generation.
+concentration summaries, optional concentration-response fitting, scoring,
+and report generation.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import pandas as pd
 import yaml
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
+from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 
 
@@ -25,6 +27,7 @@ class PipelineResult:
     feature_table: pd.DataFrame
     summary_table: pd.DataFrame
     concentration_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    dose_response_fits: dict[str, list[DoseResponseFit]] = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
 
@@ -42,6 +45,10 @@ class PipelineResult:
             "scores": [s.to_dict() for s in self.scores],
             "summary": self.summary_table.to_dict(orient="records"),
             "concentration_summary": self.concentration_table.to_dict(orient="records"),
+            "dose_response_fits": {
+                compound: [fit.to_dict() for fit in fits]
+                for compound, fits in self.dose_response_fits.items()
+            },
         }
         with open(path, "w") as f:
             json.dump(payload, f, indent=2)
@@ -268,6 +275,25 @@ class CardioScorePipeline:
             )
         return pd.DataFrame(rows)
 
+    def fit_dose_response(self, concentration_summary: pd.DataFrame) -> dict[str, list[DoseResponseFit]]:
+        """Fit 4PL curves for each compound when explicitly enabled."""
+        concentration_cfg = self.config.get("concentration_response", {})
+        if not concentration_cfg.get("fit_curve", False) or concentration_summary.empty:
+            return {}
+
+        min_points = int(concentration_cfg.get("fit_min_concentrations", 4))
+        results: dict[str, list[DoseResponseFit]] = {}
+        for compound, group in concentration_summary.groupby("compound"):
+            fits = fit_concentration_series(group, min_points=min_points)
+            results[str(compound)] = fits
+            failures = [fit for fit in fits if not fit.success]
+            if failures:
+                self.qc_log.append(
+                    f"Dose-response fitting: {compound} has {len(failures)} endpoint fit(s) "
+                    f"that did not converge or lacked sufficient data."
+                )
+        return results
+
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         if isinstance(dataset, SyntheticMEADataset):
@@ -301,6 +327,8 @@ class CardioScorePipeline:
                         "but concentration-response coverage is limited."
                     )
 
+        dose_response_fits = self.fit_dose_response(concentration_summary)
+
         agg = self.aggregate_compound_effects(
             concentration_summary,
             concentration_aggregation=concentration_aggregation,
@@ -329,6 +357,8 @@ class CardioScorePipeline:
         summary_rows = []
         for s in scores:
             agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
+            fits = dose_response_fits.get(s.compound, [])
+            successful_fits = sum(fit.success for fit in fits)
             summary_rows.append(
                 {
                     "compound": s.compound,
@@ -339,6 +369,7 @@ class CardioScorePipeline:
                     "concentrations_tested": int(agg_row["concentrations_tested"]),
                     "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                     "effect_detected": bool(agg_row["effect_detected"]),
+                    "dose_response_fit_endpoints": successful_fits,
                     "interpretation": s.interpretation,
                 }
             )
@@ -352,6 +383,7 @@ class CardioScorePipeline:
             feature_table=effects,
             summary_table=summary,
             concentration_table=concentration_summary,
+            dose_response_fits=dose_response_fits,
             config=self.config,
             qc_log=self.qc_log,
         )
