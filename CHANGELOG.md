@@ -10,10 +10,12 @@
 - Matched concentration-profile bootstrap comparisons for exploratory between-group inference.
 - Opt-in pipeline inference output and JSON serialization; inference does not alter CardioScore.
 - Hierarchy-aware experimental-unit summaries recognizing optional biological replicate, batch, plate, and experiment metadata.
+- Explicit scoring-unit policy API supporting `well`, `biological_replicate`, `batch`, and `plate` with validation of required metadata.
 
 ### Methodology
 - Wells remain the default analysis unit when no higher-level metadata are available.
-- When biological-replicate metadata are supplied, technical wells are summarized within biological units before higher-level inference.
+- When biological-replicate metadata are supplied, technical wells can be summarized within biological units before higher-level inference.
+- The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
 ## [0.1.1] – 2026-08-16
