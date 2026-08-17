@@ -9,7 +9,9 @@ quality_control:
   min_electrodes_per_well: 4
   max_noise_sd_uv: 25.0
   min_beat_detection_rate: 0.7
-  reject_wells_with_arrhythmia_proxy: true
+  # Optional STV-based irregularity proxy. This is not an arrhythmia detector.
+  reject_wells_with_arrhythmia_proxy: false
+  arrhythmia_proxy_max_stv: null
   log_rejections: true
 
 preprocessing:
@@ -56,4 +58,5 @@ io:
   supported_formats:
     - "synthetic"
     - "csv_features"
+    - "csv_raw_traces"
   output_dir: "./outputs"
