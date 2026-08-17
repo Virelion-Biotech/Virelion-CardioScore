@@ -20,12 +20,20 @@ class WeightSensitivitySpec:
     """Relative perturbation applied to each endpoint weight in turn."""
 
     relative_change: float = 0.20
+    borderline_change_rate: float = 0.25
+    unstable_change_rate: float = 0.25
 
     def __post_init__(self) -> None:
         if self.relative_change < 0:
             raise ValueError("relative_change must be non-negative.")
         if self.relative_change >= 1.0:
             raise ValueError("relative_change must be less than 1.0.")
+        if not 0.0 <= self.borderline_change_rate <= 1.0:
+            raise ValueError("borderline_change_rate must be between 0 and 1.")
+        if not 0.0 <= self.unstable_change_rate <= 1.0:
+            raise ValueError("unstable_change_rate must be between 0 and 1.")
+        if self.unstable_change_rate < self.borderline_change_rate:
+            raise ValueError("unstable_change_rate must be >= borderline_change_rate.")
 
 
 def run_weight_sensitivity(
@@ -83,8 +91,20 @@ def run_weight_sensitivity(
     return pd.DataFrame(rows)
 
 
-def summarize_weight_sensitivity(results: pd.DataFrame) -> pd.DataFrame:
-    """Summarize score range and risk-class instability by compound."""
+def summarize_weight_sensitivity(
+    results: pd.DataFrame,
+    *,
+    borderline_change_rate: float = 0.25,
+    unstable_change_rate: float = 0.25,
+) -> pd.DataFrame:
+    """Summarize score range and risk-class instability by compound.
+
+    A compound is ``stable`` when no sensitivity perturbation changes its risk
+    class. It is ``borderline`` when the change rate is positive but below the
+    configured unstable threshold, and ``unstable`` when the change rate meets
+    or exceeds that threshold. The thresholds are analysis labels, not validated
+    scientific cutoffs.
+    """
     required = {
         "compound",
         "baseline_score",
@@ -95,8 +115,14 @@ def summarize_weight_sensitivity(results: pd.DataFrame) -> pd.DataFrame:
     missing = sorted(required - set(results.columns))
     if missing:
         raise ValueError(f"Sensitivity results are missing columns: {missing}.")
+    if not 0.0 <= borderline_change_rate <= 1.0:
+        raise ValueError("borderline_change_rate must be between 0 and 1.")
+    if not 0.0 <= unstable_change_rate <= 1.0:
+        raise ValueError("unstable_change_rate must be between 0 and 1.")
+    if unstable_change_rate < borderline_change_rate:
+        raise ValueError("unstable_change_rate must be >= borderline_change_rate.")
 
-    return (
+    summary = (
         results.groupby("compound", sort=True)
         .agg(
             baseline_score=("baseline_score", "first"),
@@ -108,3 +134,10 @@ def summarize_weight_sensitivity(results: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+    summary["sensitivity_class"] = "borderline"
+    summary.loc[summary["risk_class_change_rate"] == 0.0, "sensitivity_class"] = "stable"
+    summary.loc[
+        summary["risk_class_change_rate"] >= unstable_change_rate,
+        "sensitivity_class",
+    ] = "unstable"
+    return summary
