@@ -37,6 +37,11 @@ from virelion_cardioscore.analysis.normalization_validation import (
     validate_control_anchor_correction,
 )
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline, PipelineResult
+from virelion_cardioscore.analysis.robustness import (
+    RobustnessGrid,
+    run_robustness_matrix,
+    summarize_robustness_matrix,
+)
 from virelion_cardioscore.analysis.statistics import (
     BootstrapCI,
     ProfileDifference,
@@ -78,6 +83,9 @@ __all__ = [
     "make_known_effect_dataset",
     "conventional_treatment_effect",
     "true_treatment_effect",
+    "RobustnessGrid",
+    "run_robustness_matrix",
+    "summarize_robustness_matrix",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
     "NormalizationAssumptionCheck",
