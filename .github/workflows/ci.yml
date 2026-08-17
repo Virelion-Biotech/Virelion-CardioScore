@@ -26,6 +26,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Collect Ruff-safe autofixes
+        if: matrix.python-version == '3.11'
+        run: |
+          ruff check --fix . || true
+          tar -czf /tmp/cardioscore-ruff-fixed.tar.gz . \
+            --exclude='./.git' \
+            --exclude='./.pytest_cache' \
+            --exclude='./outputs'
+
+      - name: Upload Ruff-fixed source artifact
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardioscore-ruff-fixed
+          path: /tmp/cardioscore-ruff-fixed.tar.gz
+          if-no-files-found: error
+
       - name: Run lint
         run: ruff check .
 
