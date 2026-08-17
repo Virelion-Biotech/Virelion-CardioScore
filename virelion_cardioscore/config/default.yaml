@@ -77,7 +77,8 @@ mixed_effects:
   # Optional random-intercept inference; never changes CardioScore automatically.
   enabled: false
   group_column: null
-  treatment_column: "treatment"
+  # Treatment is derived from the vehicle flag by the pipeline helper.
+  treatment_column: "_treatment"
   endpoints:
     - "fpd_ms"
     - "beat_rate_bpm"
