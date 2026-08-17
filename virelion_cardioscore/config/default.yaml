@@ -73,6 +73,18 @@ variability:
       min_treated_per_group: 1
       max_shift_cv_pct: 50.0
 
+mixed_effects:
+  # Optional random-intercept inference; never changes CardioScore automatically.
+  enabled: false
+  group_column: null
+  treatment_column: "treatment"
+  endpoints:
+    - "fpd_ms"
+    - "beat_rate_bpm"
+    - "amplitude_uv"
+    - "stv"
+    - "triangulation_proxy"
+
 concentration_response:
   # Replicates are summarized within each concentration before compound-level scoring.
   replicate_aggregation: "mean"
