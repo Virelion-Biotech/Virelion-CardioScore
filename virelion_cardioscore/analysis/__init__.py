@@ -1,4 +1,4 @@
-"""Analysis modules: statistics, dose-response fitting, CardioScore engine, and QC diagnostics."""
+"""Analysis modules for CardioScore."""
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
 from virelion_cardioscore.analysis.dose_response import (
@@ -13,6 +13,10 @@ from virelion_cardioscore.analysis.hierarchy import (
     detect_hierarchy,
     hierarchy_columns,
     summarize_experimental_units,
+)
+from virelion_cardioscore.analysis.normalization import (
+    CorrectionDiagnostic,
+    apply_control_anchor_correction,
 )
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline, PipelineResult
 from virelion_cardioscore.analysis.statistics import (
@@ -39,6 +43,8 @@ __all__ = [
     "hierarchy_columns",
     "summarize_experimental_units",
     "count_independent_units",
+    "CorrectionDiagnostic",
+    "apply_control_anchor_correction",
     "BootstrapCI",
     "ProfileDifference",
     "bootstrap_ci",

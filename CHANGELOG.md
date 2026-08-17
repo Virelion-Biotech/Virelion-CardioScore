@@ -13,6 +13,7 @@
 - Explicit scoring-unit policy API supporting `well`, `biological_replicate`, `batch`, and `plate` with validation of required metadata.
 - Explicit vehicle-control normalization scope supporting `compound`, `plate`, `batch`, `biological_replicate`, and `global` controls.
 - Optional plate/batch control-stability diagnostics with control CV, between-group SD, and exploratory treatment-to-control separation.
+- HTML reporting of control-stability and plate/batch diagnostics when variability analysis is enabled.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -23,7 +24,7 @@
 - The default vehicle scope remains `compound`, preserving historical behavior unless a study explicitly uses shared plate/batch/global controls.
 - Plate/batch variability diagnostics are QC/inference outputs only and do not alter CardioScore.
 - The variability layer does not claim a mixed-effects model; it identifies control instability that should be addressed before confirmatory inference.
-- Variability diagnostics are now exposed through `PipelineResult` and JSON as `variability` and `treatment_separation` tables.
+- Variability diagnostics are now exposed through `PipelineResult` and JSON as `variability` and `treatment_separation` tables, and are surfaced in the HTML report when available.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
