@@ -44,10 +44,14 @@ jobs:
 
       - name: Build and validate wheel
         run: |
-          rm -rf /tmp/cardioscore-dist /tmp/cardioscore-wheel-env
+          rm -rf /tmp/cardioscore-dist /tmp/cardioscore-wheel-env /tmp/cardioscore-wheel-demo
           mkdir -p /tmp/cardioscore-dist
           pip wheel . --no-deps -w /tmp/cardioscore-dist
           python -m venv /tmp/cardioscore-wheel-env
           /tmp/cardioscore-wheel-env/bin/python -m pip install --upgrade pip
           /tmp/cardioscore-wheel-env/bin/pip install /tmp/cardioscore-dist/*.whl
+          /tmp/cardioscore-wheel-env/bin/python -m pip check
           /tmp/cardioscore-wheel-env/bin/cardioscore version
+          /tmp/cardioscore-wheel-env/bin/cardioscore demo --output-dir /tmp/cardioscore-wheel-demo
+          test -f /tmp/cardioscore-wheel-demo/summary.csv
+          test -f /tmp/cardioscore-wheel-demo/report.html
