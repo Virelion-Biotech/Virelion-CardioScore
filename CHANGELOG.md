@@ -21,6 +21,7 @@
 - Concentration-specific mixed-effects pipeline helper that models each compound × concentration × endpoint separately rather than pooling doses.
 - Opt-in hierarchical CardioScore pipeline wrapper that augments standard pipeline results with mixed-effects inference and JSON/HTML reporting.
 - Conventional-vs-hierarchical effect concordance analysis reporting absolute/relative disagreement and direction agreement.
+- Synthetic hierarchical stress-test generator with known treatment effects, additive plate drift, multiplicative scale drift, and treatment-allocation imbalance scenarios.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -43,6 +44,7 @@
 - The mixed-effects model requires at least two groups and both treatment levels and should use a genuine experimental grouping variable such as plate, batch, or experiment.
 - The hierarchical wrapper augments standard CardioScore output without altering the core scoring path or default results.
 - Conventional-vs-hierarchical concordance is a diagnostic only. Disagreement does not establish that either estimator is correct; it identifies analyses where clustering may materially affect the estimated treatment effect.
+- Synthetic stress tests encode known ground truth so that treatment-effect bias from plate drift or allocation imbalance can be detected independently of the scorer's own assumptions.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
