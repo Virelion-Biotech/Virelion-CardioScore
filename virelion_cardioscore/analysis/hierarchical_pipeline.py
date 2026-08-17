@@ -44,14 +44,14 @@ class HierarchicalPipelineResult:
     def to_html(self, path: str | Path) -> None:
         path = Path(path)
         self.base.to_html(path)
-        html = path.read_text(encoding="utf-8")
         if self.mixed_effects_table.empty:
             return
+        html = path.read_text(encoding="utf-8")
 
         columns = [
             "compound", "concentration_uM", "endpoint", "status",
             "treatment_effect", "treatment_se", "treatment_pvalue", "icc",
-            "n_groups", "n_observations",
+            "group_column", "n_groups", "n_observations",
         ]
         present = [column for column in columns if column in self.mixed_effects_table.columns]
         header = "".join(f"<th>{column}</th>" for column in present)
@@ -70,7 +70,7 @@ class HierarchicalPipelineResult:
         card = f"""
         <div class=\"card\">
           <h2 style=\"margin-top:0\">Hierarchical Mixed-Effects Inference</h2>
-          <p class=\"meta\">Inference only; these models do not alter CardioScore.</p>
+          <p class=\"meta\">Inference only; these models use the same QC/normalization population as the base run and do not alter CardioScore.</p>
           <table>
             <thead><tr>{header}</tr></thead>
             <tbody>{''.join(rows)}</tbody>
@@ -103,10 +103,14 @@ class HierarchicalCardioScorePipeline:
             return HierarchicalPipelineResult(base_result, pd.DataFrame())
 
         raw = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
+        analysis_df = self.base.apply_qc(raw)
+        if self.config.get("variability", {}).get("correction", {}).get("enabled", False):
+            analysis_df, _ = self.base.apply_control_anchor_normalization(analysis_df)
+
         group_column = cfg.get("group_column")
         if group_column is None:
             for candidate in ("plate_id", "batch_id", "experiment_id"):
-                if candidate in raw.columns:
+                if candidate in analysis_df.columns:
                     group_column = candidate
                     break
         if group_column is None:
@@ -114,10 +118,12 @@ class HierarchicalCardioScorePipeline:
                 "mixed_effects.enabled requires a genuine grouping column such as "
                 "plate_id, batch_id, or experiment_id."
             )
+        if analysis_df[group_column].isna().any() or analysis_df[group_column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Mixed-effects grouping column {group_column!r} contains missing or blank identifiers.")
 
         endpoints = list(cfg.get("endpoints", []))
         rows = fit_compound_concentration_mixed_effects(
-            raw,
+            analysis_df,
             group_column=group_column,
             endpoints=endpoints,
             vehicle_column=cfg.get("vehicle_column", "vehicle"),
