@@ -72,6 +72,33 @@ def test_pipeline_uses_configured_endpoint_file():
     assert pipeline.engine.endpoint_config_path.name == "cipa_endpoints.yaml"
 
 
+def test_score_result_reports_independent_units_separately():
+    engine = CardioScoreEngine()
+    result = engine.score_compound(
+        "A",
+        {
+            "fpd_change_pct": 0.0,
+            "beat_rate_change_pct": 0.0,
+            "amplitude_change_pct": 0.0,
+            "stv_increase": 0.0,
+            "triangulation_proxy": 0.0,
+        },
+        n_wells=8,
+        n_independent_units=4,
+    )
+    payload = result.to_dict()
+    assert payload["n_wells"] == 8
+    assert payload["n_independent_units"] == 4
+
+
+def test_normalization_config_uses_single_all_groups_guardrail():
+    pipeline = CardioScorePipeline.from_defaults()
+    assumptions = pipeline.config["variability"]["correction"]["assumptions"]
+    assert "require_treatment_in_all_groups" not in assumptions
+    assert pipeline.config["variability"]["correction"]["require_all_groups"] is True
+    assert assumptions["fail_closed"] is True
+
+
 def test_raw_trace_metadata_survive_feature_extraction(tmp_path):
     frame = pd.DataFrame(
         {
