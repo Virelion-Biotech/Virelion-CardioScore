@@ -214,9 +214,28 @@ class CardioScorePipeline:
         return pd.DataFrame(records)
 
     def prepare_scoring_effects(self, effects: pd.DataFrame) -> pd.DataFrame:
-        scoring_unit = self.config.get("experimental_units", {}).get("scoring_unit", "well")
+        unit_cfg = self.config.get("experimental_units", {})
+        scoring_unit = unit_cfg.get("scoring_unit", "well")
+        if scoring_unit != "well" and unit_cfg.get("fall_back_to_well", False):
+            required_map = {
+                "biological_replicate": unit_cfg.get("biological_unit_column"),
+                "batch": unit_cfg.get("batch_unit_column"),
+                "plate": unit_cfg.get("plate_unit_column"),
+            }
+            requested_column = required_map.get(scoring_unit)
+            if requested_column and requested_column not in effects.columns:
+                self.qc_log.append(
+                    f"Experimental-unit column {requested_column!r} is absent; falling back to well-level scoring."
+                )
+                scoring_unit = "well"
         try:
-            prepared = aggregate_to_scoring_units(effects, scoring_unit=scoring_unit)
+            prepared = aggregate_to_scoring_units(
+                effects,
+                scoring_unit=scoring_unit,
+                biological_unit_column=unit_cfg.get("biological_unit_column"),
+                batch_unit_column=unit_cfg.get("batch_unit_column"),
+                plate_unit_column=unit_cfg.get("plate_unit_column"),
+            )
         except ValueError as exc:
             raise ValueError(f"Experimental-unit configuration is invalid: {exc}") from exc
         if scoring_unit != "well":
@@ -307,31 +326,47 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def aggregate_compound_effects(concentration_summary: pd.DataFrame, concentration_aggregation: str = "max_absolute_effect") -> pd.DataFrame:
+    def aggregate_compound_effects(
+        concentration_summary: pd.DataFrame,
+        concentration_aggregation: str = "max_absolute_effect",
+        endpoint_directions: dict[str, str] | None = None,
+    ) -> pd.DataFrame:
         if concentration_summary.empty:
             return pd.DataFrame()
         if concentration_aggregation != "max_absolute_effect":
             raise ValueError(f"Unsupported concentration_aggregation: {concentration_aggregation!r}. Expected 'max_absolute_effect'.")
+        endpoint_directions = endpoint_directions or {
+            "fpd_change_pct": "absolute",
+            "beat_rate_change_pct": "absolute",
+            "amplitude_change_pct": "decrease",
+            "stv_increase": "increase",
+            "triangulation_proxy_change": "increase",
+        }
         rows = []
         for compound, group in concentration_summary.groupby("compound"):
-            def max_abs(column: str) -> float:
+            def aggregate_endpoint(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
-                return float(values.abs().max()) if len(values) else 0.0
-            def max_positive(column: str) -> float:
-                values = pd.to_numeric(group[column], errors="coerce").dropna()
-                return float(values.max()) if len(values) else 0.0
-            def min_value(column: str) -> float:
-                values = pd.to_numeric(group[column], errors="coerce").dropna()
-                return float(values.min()) if len(values) else 0.0
+                if values.empty:
+                    return 0.0
+                endpoint = column[:-6] if column.endswith("_mean") else column
+                direction = endpoint_directions.get(endpoint, "absolute")
+                if direction == "decrease":
+                    return float(values.min())
+                if direction == "increase":
+                    return float(values.max())
+                if direction == "absolute":
+                    return float(values.abs().max())
+                raise ValueError(f"Unsupported endpoint direction: {direction!r} for {endpoint!r}.")
+
             technical_wells = int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum())
             independent_units = int(group["n_replicates"].sum())
             rows.append({
                 "compound": compound,
-                "fpd_change_pct": max_abs("fpd_change_pct_mean"),
-                "beat_rate_change_pct": max_abs("beat_rate_change_pct_mean"),
-                "amplitude_change_pct": min_value("amplitude_change_pct_mean"),
-                "stv_increase": max_positive("stv_increase_mean"),
-                "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
+                "fpd_change_pct": aggregate_endpoint("fpd_change_pct_mean"),
+                "beat_rate_change_pct": aggregate_endpoint("beat_rate_change_pct_mean"),
+                "amplitude_change_pct": aggregate_endpoint("amplitude_change_pct_mean"),
+                "stv_increase": aggregate_endpoint("stv_increase_mean"),
+                "triangulation_proxy": aggregate_endpoint("triangulation_proxy_change_mean"),
                 "max_concentration_uM": float(group["concentration_uM"].max()),
                 "n_wells": technical_wells,
                 "n_independent_units": independent_units,
