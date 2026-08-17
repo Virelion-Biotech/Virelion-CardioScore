@@ -121,7 +121,7 @@
       var concentrationEffects=[];
       Object.keys(byConc).forEach(function(key){
         var group=byConc[key];
-        concentrationEffects.push({concentration_uM:Number(key),fpd:mean(group.map(function(r){return 100*(r.fpd_ms-v.fpd)/v.fpd})),rate:mean(group.map(function(r){return 100*(r.beat_rate_bpm-v.rate)/v.rate})),amp:mean(group.map(function(r){return 100*(r.amplitude_uv-v.amp)/v.amp})),stv:mean(group.map(function(r){return (r.stv-v.stv)/Math.max(Math.abs(v.stv),1e-6)})),tri:mean(group.map(function(r){return (r.triangulation_proxy-v.tri)/Math.max(Math.abs(v.tri),1e-6)})});
+        concentrationEffects.push({concentration_uM:Number(key),fpd:mean(group.map(function(r){return 100*(r.fpd_ms-v.fpd)/v.fpd})),rate:mean(group.map(function(r){return 100*(r.beat_rate_bpm-v.rate)/v.rate})),amp:mean(group.map(function(r){return 100*(r.amplitude_uv-v.amp)/v.amp})),stv:mean(group.map(function(r){return (r.stv-v.stv)/Math.max(Math.abs(v.stv),1e-6)})),tri:mean(group.map(function(r){return (r.triangulation_proxy-v.tri)/Math.max(Math.abs(v.tri),1e-6)}))});
       });
       if(!concentrationEffects.length)return;
       var endpoints={fpd_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)})),beat_rate_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)})),amplitude_change_pct:Math.min.apply(null,concentrationEffects.map(function(e){return e.amp})),stv_increase:Math.max.apply(null,concentrationEffects.map(function(e){return e.stv})),triangulation_proxy:Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))};
