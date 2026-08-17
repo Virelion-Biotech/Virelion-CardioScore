@@ -57,11 +57,11 @@ def check_additive_correction_assumptions(
 ) -> NormalizationAssumptionCheck:
     """Assess treatment allocation and additive-shift plausibility.
 
-    This is a screening diagnostic, not a formal statistical test. A high
-    additive-shift CV indicates that group baseline differences are highly
-    heterogeneous relative to their magnitude, which can make a single additive
-    correction less defensible. The geometric shift CV is a complementary check
-    for scale-like drift, calculated from positive group control means.
+    This is a screening diagnostic, not a formal statistical test. The
+    additive-shift metric uses absolute shift magnitudes so symmetric positive
+    and negative plate offsets are not falsely classified as heterogeneous.
+    The geometric metric measures dispersion of positive control baselines on a
+    log scale and acts only as a scale-drift warning.
     """
     required = {"vehicle", group_column, endpoint}
     missing = sorted(required - set(df.columns))
@@ -82,16 +82,16 @@ def check_additive_correction_assumptions(
 
     positive_means = control_means[control_means > 0]
     if len(positive_means) > 1:
-        geometric_shifts = np.log(positive_means / float(positive_means.mean()))
-        geometric_cv = float(abs(geometric_shifts.std(ddof=1) / geometric_shifts.mean()) * 100.0) if not np.isclose(geometric_shifts.mean(), 0.0) else 0.0
+        log_sd = float(np.log(positive_means).std(ddof=1))
+        geometric_cv = float((np.exp(log_sd) - 1.0) * 100.0)
     else:
         geometric_cv = None
 
     if len(additive_shifts) > 1:
-        shift_mean = float(additive_shifts.abs().mean())
+        abs_shift_mean = float(additive_shifts.abs().mean())
         shift_cv = (
-            float(abs(additive_shifts.std(ddof=1) / shift_mean) * 100.0)
-            if not np.isclose(shift_mean, 0.0)
+            float(abs(additive_shifts.abs().std(ddof=1) / abs_shift_mean) * 100.0)
+            if not np.isclose(abs_shift_mean, 0.0)
             else 0.0
         )
     else:
@@ -99,21 +99,25 @@ def check_additive_correction_assumptions(
 
     total_groups = int(control_means.size)
     treated_counts = treated.groupby(group_column, dropna=False).size()
-    groups_with_treatment = int(sum(group in treated_counts.index and treated_counts[group] >= min_treated_per_group for group in control_means.index))
+    groups_with_treatment = int(
+        sum(
+            group in treated_counts.index and treated_counts[group] >= min_treated_per_group
+            for group in control_means.index
+        )
+    )
     coverage = groups_with_treatment / total_groups if total_groups else 0.0
     imbalance = groups_with_treatment < total_groups if require_treatment_in_all_groups else False
     scale_like = bool(
         len(positive_means) >= 2
         and geometric_cv is not None
-        and shift_cv is not None
-        and shift_cv > max_shift_cv_pct
+        and geometric_cv > max_shift_cv_pct
     )
 
     usable = not imbalance and not scale_like
     if imbalance:
         message = "Treatment observations are missing or insufficient in at least one control group."
     elif scale_like:
-        message = "Group shifts are heterogeneous relative to baseline magnitude; additive recentering may be a poor model."
+        message = "Positive group control baselines show scale-like dispersion above the configured threshold; additive recentering may be a poor model."
     else:
         message = "No obvious treatment-allocation or scale-drift warning was detected."
 
