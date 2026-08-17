@@ -30,6 +30,12 @@ def test_html_report_includes_variability_diagnostics(tmp_path):
                 "status": ["stable"],
             }
         ),
+        # write_html_report's normalization card reads these too -- match
+        # PipelineResult's real defaults (empty dict / empty DataFrame) so
+        # this stand-in behaves like an unconfigured pipeline run rather
+        # than raising an AttributeError before the assertion is reached.
+        normalization_diagnostic={},
+        variability_before_correction=pd.DataFrame(),
         separation_table=pd.DataFrame(
             {
                 "compound": ["A"],
