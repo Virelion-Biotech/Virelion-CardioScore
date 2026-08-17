@@ -28,6 +28,7 @@ def test_dose_response_evidence_contribution_is_optional():
     assert evidence_score.score > baseline.score
     assert any(c.name == "dose_response_exposure_evidence" for c in evidence_score.contributions)
     assert evidence_score.metadata["dose_response_evidence"] == pytest.approx(1.0)
+    assert evidence_score.to_dict()["metadata"]["dose_response_weight"] == pytest.approx(0.20)
 
 
 def test_dose_response_weight_requires_valid_evidence():
