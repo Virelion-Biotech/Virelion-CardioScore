@@ -1,6 +1,10 @@
-"""Feature extraction APIs for MEA recordings."""
+"""Public feature-extraction API.
 
-from virelion_cardioscore.features.endpoints import (
+This module preserves the intended ``virelion_cardioscore.features`` import
+path while the implementation lives in ``preprocessing.endpoints``.
+"""
+
+from virelion_cardioscore.preprocessing.endpoints import (
     DEFAULT_REPOL_SEARCH_MS,
     BeatEndpoints,
     ElectrodeFeatures,
