@@ -72,15 +72,16 @@ def test_mixed_effects_recovers_treatment_effect_in_balanced_drift_case():
     assert 0.0 <= result.icc <= 1.0
 
 
-def test_multiplicative_drift_is_explicitly_represented():
+def test_multiplicative_drift_with_treatment_imbalance_is_not_additive():
     spec = StressTestSpec(
         treatment_effect=10.0,
         group_offsets=(0.0, 0.0, 0.0, 0.0),
         group_scales=(0.8, 0.9, 1.1, 1.2),
+        groups_with_treatment=(2, 3),
         seed=5,
     )
     data = make_known_effect_dataset(spec)
 
     estimate = conventional_treatment_effect(data)
 
-    assert estimate != pytest.approx(true_treatment_effect(spec), abs=0.5)
+    assert abs(estimate - true_treatment_effect(spec)) > 0.5
