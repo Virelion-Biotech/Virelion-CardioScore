@@ -168,6 +168,10 @@ class CardioScorePipeline:
             effects = df.copy()
             effects["vehicle"] = False
             effects["max_effect_pct"] = effects[["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct"]].abs().max(axis=1)
+            if "stv_increase" in effects.columns:
+                effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["stv_increase"].abs() * 100.0)
+            if "triangulation_proxy_change" in effects.columns:
+                effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["triangulation_proxy_change"].abs() * 100.0)
             return effects
         records = []
         optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id"]
