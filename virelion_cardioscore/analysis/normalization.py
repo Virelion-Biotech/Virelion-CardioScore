@@ -13,9 +13,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from virelion_cardioscore.analysis.normalization_assumptions import (
-    check_additive_correction_assumptions,
-)
+from virelion_cardioscore.analysis.normalization_assumptions import check_additive_correction_assumptions
 
 
 @dataclass(frozen=True)
@@ -46,13 +44,16 @@ def _resolve_group_column(df: pd.DataFrame, group_column: Optional[str]) -> str:
     if group_column is not None:
         if group_column not in df.columns:
             raise ValueError(f"Requested correction group column {group_column!r} is absent.")
-        return group_column
-    for candidate in ("plate_id", "batch_id", "experiment_id"):
-        if candidate in df.columns:
-            return candidate
-    raise ValueError(
-        "Control-anchored correction requires one of 'plate_id', 'batch_id', or 'experiment_id'."
-    )
+        column = group_column
+    else:
+        column = next((candidate for candidate in ("plate_id", "batch_id", "experiment_id") if candidate in df.columns), None)
+        if column is None:
+            raise ValueError(
+                "Control-anchored correction requires one of 'plate_id', 'batch_id', or 'experiment_id'."
+            )
+    if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
+        raise ValueError(f"Correction grouping column {column!r} contains missing or blank identifiers.")
+    return column
 
 
 def apply_control_anchor_correction(
@@ -62,21 +63,12 @@ def apply_control_anchor_correction(
     corrected_columns: Optional[list[str]] = None,
     min_controls_per_group: int = 2,
     require_all_groups: bool = True,
+    require_treatment_in_all_groups: bool = True,
     min_treated_per_group: int = 1,
     max_shift_cv_pct: float = 50.0,
     fail_on_assumption_violation: bool = True,
 ) -> tuple[pd.DataFrame, CorrectionDiagnostic]:
-    """Recenter selected endpoints using vehicle-only group control means.
-
-    For each experimental group ``g`` and endpoint ``x``:
-
-        corrected_x = x - mean(vehicle_g) + mean(vehicle_all)
-
-    This preserves within-group treatment-control differences while expressing
-    observations on a common control-centered scale. Before applying the
-    correction, the function checks treatment allocation and additive-shift
-    assumptions and can fail closed when those assumptions are violated.
-    """
+    """Recenter selected endpoints using vehicle-only group control means."""
     if df.empty:
         raise ValueError("Cannot correct an empty dataset.")
     if "vehicle" not in df.columns:
@@ -84,13 +76,7 @@ def apply_control_anchor_correction(
 
     group = _resolve_group_column(df, group_column)
     if corrected_columns is None:
-        corrected_columns = [
-            "fpd_ms",
-            "beat_rate_bpm",
-            "amplitude_uv",
-            "stv",
-            "triangulation_proxy",
-        ]
+        corrected_columns = ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]
 
     missing_columns = [column for column in corrected_columns if column not in df.columns]
     if missing_columns:
@@ -110,7 +96,7 @@ def apply_control_anchor_correction(
             endpoint=column,
             min_treated_per_group=min_treated_per_group,
             max_shift_cv_pct=max_shift_cv_pct,
-            require_treatment_in_all_groups=require_all_groups,
+            require_treatment_in_all_groups=require_treatment_in_all_groups,
         )
         assumption_checks[column] = check.to_dict()
         if fail_on_assumption_violation and not check.usable_for_additive_correction:
@@ -119,7 +105,7 @@ def apply_control_anchor_correction(
             )
 
     working = df.copy()
-    controls = working[working["vehicle"] == True]  # noqa: E712
+    controls = working[working["vehicle"].astype(bool)]
     if controls.empty:
         raise ValueError("Control-anchored correction requires at least one vehicle well.")
 
@@ -128,8 +114,7 @@ def apply_control_anchor_correction(
     if not insufficient.empty and require_all_groups:
         raise ValueError(
             "Control-anchored correction requires at least "
-            f"{min_controls_per_group} vehicle wells per group; insufficient groups: "
-            f"{list(insufficient.index)}."
+            f"{min_controls_per_group} vehicle wells per group; insufficient groups: {list(insufficient.index)}."
         )
 
     usable_groups = group_sizes[group_sizes >= min_controls_per_group].index
