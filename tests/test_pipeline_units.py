@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
@@ -8,14 +7,12 @@ from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
 def _dataset() -> pd.DataFrame:
     rows = []
-    for i, (well, bio, fpd) in enumerate(
-        [
-            ("W1", "B1", 100.0),
-            ("W2", "B1", 120.0),
-            ("W3", "B2", 140.0),
-            ("W4", "B2", 160.0),
-        ]
-    ):
+    for well, bio, fpd in [
+        ("W1", "B1", 100.0),
+        ("W2", "B1", 120.0),
+        ("W3", "B2", 140.0),
+        ("W4", "B2", 160.0),
+    ]:
         rows.append(
             {
                 "compound": "A",
