@@ -100,18 +100,24 @@ def test_normalization_config_uses_single_all_groups_guardrail():
 
 
 def test_raw_trace_metadata_survive_feature_extraction(tmp_path):
+    # filter_trace requires at least 10 samples per electrode, so the trace
+    # needs to be long enough to actually reach feature extraction rather
+    # than failing on that guard before metadata propagation is even tested.
+    n_samples = 20
+    time_s = [round(i * 0.001, 3) for i in range(n_samples)]
+    voltage_uv = [0.0, 1.0, 0.0, -1.0] * (n_samples // 4)
     frame = pd.DataFrame(
         {
-            "compound": ["A", "A", "A", "A"],
-            "well": ["W1"] * 4,
-            "concentration_uM": [0.0] * 4,
-            "vehicle": [True] * 4,
-            "electrode_id": ["E1"] * 4,
-            "time_s": [0.000, 0.001, 0.002, 0.003],
-            "voltage_uv": [0.0, 1.0, 0.0, -1.0],
-            "plate_id": ["P1"] * 4,
-            "batch_id": ["B1"] * 4,
-            "biological_replicate": ["BR1"] * 4,
+            "compound": ["A"] * n_samples,
+            "well": ["W1"] * n_samples,
+            "concentration_uM": [0.0] * n_samples,
+            "vehicle": [True] * n_samples,
+            "electrode_id": ["E1"] * n_samples,
+            "time_s": time_s,
+            "voltage_uv": voltage_uv,
+            "plate_id": ["P1"] * n_samples,
+            "batch_id": ["B1"] * n_samples,
+            "biological_replicate": ["BR1"] * n_samples,
         }
     )
     source = tmp_path / "raw.csv"
