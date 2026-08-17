@@ -8,6 +8,10 @@
       .replace(/[&<>\"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[ch]})
       .replace(/\x27/g,'&#39;');
   }
+  function numericOrDefault(id, fallback){
+    var value=Number(document.getElementById(id).value);
+    return Number.isFinite(value)?value:fallback;
+  }
 
   var PRESETS={
     mcm_mix:[['vaccine',0.2],['antitoxin',0.25],['antiviral',0.35],['mcm',1.0]],
@@ -99,10 +103,6 @@
     return Math.min(1,excess/(3*(th>0?th:1)));
   }
 
-  // Browser contract: well-level equivalent of the Python pipeline only.
-  // It matches vehicle normalization, concentration-level replicate means,
-  // directional endpoint aggregation, and weighted scoring. It does not
-  // attempt hierarchical biological-replicate or dose-response fitting.
   function scoreRows(rows,weights,thLow,thMod){
     var byCompound={};
     rows.forEach(function(r){
@@ -115,64 +115,21 @@
       var vehicleRows=rowsForCompound.filter(function(r){return r.vehicle});
       var treatedRows=rowsForCompound.filter(function(r){return !r.vehicle});
       if(!vehicleRows.length||!treatedRows.length)return;
-      var v={
-        fpd:mean(vehicleRows.map(function(r){return r.fpd_ms})),
-        rate:mean(vehicleRows.map(function(r){return r.beat_rate_bpm})),
-        amp:mean(vehicleRows.map(function(r){return r.amplitude_uv})),
-        stv:mean(vehicleRows.map(function(r){return r.stv})),
-        tri:mean(vehicleRows.map(function(r){return r.triangulation_proxy}))
-      };
-
+      var v={fpd:mean(vehicleRows.map(function(r){return r.fpd_ms})),rate:mean(vehicleRows.map(function(r){return r.beat_rate_bpm})),amp:mean(vehicleRows.map(function(r){return r.amplitude_uv})),stv:mean(vehicleRows.map(function(r){return r.stv})),tri:mean(vehicleRows.map(function(r){return r.triangulation_proxy}))};
       var byConc={};
-      treatedRows.forEach(function(r){
-        var key=String(r.concentration_uM);
-        if(!byConc[key])byConc[key]=[];
-        byConc[key].push(r);
-      });
+      treatedRows.forEach(function(r){var key=String(r.concentration_uM);if(!byConc[key])byConc[key]=[];byConc[key].push(r)});
       var concentrationEffects=[];
       Object.keys(byConc).forEach(function(key){
         var group=byConc[key];
-        concentrationEffects.push({
-          concentration_uM:Number(key),
-          fpd:mean(group.map(function(r){return 100*(r.fpd_ms-v.fpd)/v.fpd})),
-          rate:mean(group.map(function(r){return 100*(r.beat_rate_bpm-v.rate)/v.rate})),
-          amp:mean(group.map(function(r){return 100*(r.amplitude_uv-v.amp)/v.amp})),
-          stv:mean(group.map(function(r){return (r.stv-v.stv)/Math.max(Math.abs(v.stv),1e-6)})),
-          tri:mean(group.map(function(r){return (r.triangulation_proxy-v.tri)/Math.max(Math.abs(v.tri),1e-6)}))
-        });
+        concentrationEffects.push({concentration_uM:Number(key),fpd:mean(group.map(function(r){return 100*(r.fpd_ms-v.fpd)/v.fpd})),rate:mean(group.map(function(r){return 100*(r.beat_rate_bpm-v.rate)/v.rate})),amp:mean(group.map(function(r){return 100*(r.amplitude_uv-v.amp)/v.amp})),stv:mean(group.map(function(r){return (r.stv-v.stv)/Math.max(Math.abs(v.stv),1e-6)})),tri:mean(group.map(function(r){return (r.triangulation_proxy-v.tri)/Math.max(Math.abs(v.tri),1e-6)})});
       });
       if(!concentrationEffects.length)return;
-
-      var endpoints={
-        fpd_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)})),
-        beat_rate_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)})),
-        amplitude_change_pct:Math.min.apply(null,concentrationEffects.map(function(e){return e.amp})),
-        stv_increase:Math.max.apply(null,concentrationEffects.map(function(e){return e.stv})),
-        triangulation_proxy:Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))
-      };
-      var defs=[
-        ['fpd_change_pct',weights.fpd,10,'abs'],
-        ['beat_rate_change_pct',weights.rate,15,'abs'],
-        ['amplitude_change_pct',weights.amp,20,'dec'],
-        ['stv_increase',weights.stv,0.15,'inc'],
-        ['triangulation_proxy',weights.tri,0.20,'inc']
-      ];
+      var endpoints={fpd_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)})),beat_rate_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)})),amplitude_change_pct:Math.min.apply(null,concentrationEffects.map(function(e){return e.amp})),stv_increase:Math.max.apply(null,concentrationEffects.map(function(e){return e.stv})),triangulation_proxy:Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))};
+      var defs=[['fpd_change_pct',weights.fpd,10,'abs'],['beat_rate_change_pct',weights.rate,15,'abs'],['amplitude_change_pct',weights.amp,20,'dec'],['stv_increase',weights.stv,0.15,'inc'],['triangulation_proxy',weights.tri,0.20,'inc']];
       var sum=0,tw=0,contribs=[];
-      defs.forEach(function(d){
-        var c=normalizeValue(endpoints[d[0]],d[3],d[2]);
-        sum+=d[1]*c;tw+=d[1];
-        contribs.push({name:d[0],raw:endpoints[d[0]],c:c,w:d[1]});
-      });
+      defs.forEach(function(d){var c=normalizeValue(endpoints[d[0]],d[3],d[2]);sum+=d[1]*c;tw+=d[1];contribs.push({name:d[0],raw:endpoints[d[0]],c:c,w:d[1]})});
       var score=Math.min(1,Math.max(0,tw?sum/tw:0));
-      results.push({
-        compound:name,
-        score:score,
-        cls:score<thLow?'Low':(score<thMod?'Moderate':'High'),
-        maxConc:Math.max.apply(null,concentrationEffects.map(function(e){return e.concentration_uM})),
-        nWells:treatedRows.length,
-        nConcentrations:concentrationEffects.length,
-        contribs:contribs
-      });
+      results.push({compound:name,score:score,cls:score<thLow?'Low':(score<thMod?'Moderate':'High'),maxConc:Math.max.apply(null,concentrationEffects.map(function(e){return e.concentration_uM})),nWells:treatedRows.length,nConcentrations:concentrationEffects.length,contribs:contribs});
     });
     return results.sort(function(a,b){return b.score-a.score});
   }
@@ -192,10 +149,10 @@
     });
     document.getElementById('out').innerHTML=html;
   }
-  function weights(){return{fpd:+document.getElementById('w_fpd').value||0.3,rate:+document.getElementById('w_rate').value||0.15,amp:+document.getElementById('w_amp').value||0.15,stv:+document.getElementById('w_stv').value||0.25,tri:+document.getElementById('w_tri').value||0.15}}
+  function weights(){return{fpd:numericOrDefault('w_fpd',0.3),rate:numericOrDefault('w_rate',0.15),amp:numericOrDefault('w_amp',0.15),stv:numericOrDefault('w_stv',0.25),tri:numericOrDefault('w_tri',0.15)}}
 
   document.getElementById('csvFile').addEventListener('change',function(e){var f=e.target.files&&e.target.files[0];if(!f){uploaded=null;return}var reader=new FileReader();reader.onload=function(){try{uploaded=parseCsv(String(reader.result));alert('Loaded '+uploaded.length+' validated rows')}catch(err){uploaded=null;alert(err.message)}};reader.readAsText(f)});
-  document.getElementById('run').onclick=function(){var rows=uploaded&&uploaded.length?uploaded:generate(+document.getElementById('nComp').value||4,+document.getElementById('nConc').value||6,+document.getElementById('seed').value||42,document.getElementById('preset').value,document.getElementById('includeToxic').checked);var qc=applyQc(rows);render(scoreRows(qc.rows,weights(),+document.getElementById('th_low').value||0.3,+document.getElementById('th_mod').value||0.6),qc.log)};
+  document.getElementById('run').onclick=function(){var rows=uploaded&&uploaded.length?uploaded:generate(numericOrDefault('nComp',4),numericOrDefault('nConc',6),numericOrDefault('seed',42),document.getElementById('preset').value,document.getElementById('includeToxic').checked);var qc=applyQc(rows);render(scoreRows(qc.rows,weights(),numericOrDefault('th_low',0.3),numericOrDefault('th_mod',0.6)),qc.log)};
   document.getElementById('clear').onclick=function(){document.getElementById('out').innerHTML='';document.getElementById('qc').style.display='none';lastResults=null};
   function download(name,text,type){var a=document.createElement('a');var url=URL.createObjectURL(new Blob([text],{type:type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
   document.getElementById('exportJson').onclick=function(){if(!lastResults){alert('Run scoring first');return}download('cardioscore_results.json',JSON.stringify({qc:lastQc,scores:lastResults},null,2),'application/json')};
