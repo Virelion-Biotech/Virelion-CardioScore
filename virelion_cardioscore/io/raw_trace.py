@@ -142,7 +142,7 @@ def load_raw_traces_csv(path: str | Path) -> list[RawWellRecording]:
             keys = (keys,)
         base_count = 4
         compound, well, conc, vehicle = keys[:base_count]
-        metadata = dict(zip(metadata_columns, keys[base_count:]))
+        metadata = dict(zip(metadata_columns, keys[base_count:], strict=True))
         electrode_traces: dict[str, np.ndarray] = {}
         fs_values = []
         for electrode_id, edf in well_df.groupby("electrode_id", sort=False):

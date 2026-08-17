@@ -32,10 +32,6 @@ from virelion_cardioscore.preprocessing.filtering import (
     filter_trace,
 )
 
-# Typical iPSC-CM repolarization deflection follows the depolarization spike
-# by roughly 150-400ms; the window is intentionally wide since compounds
-# under test can prolong or shorten this substantially (that prolongation is
-# exactly the FPD-change signal CardioScore is meant to catch).
 DEFAULT_REPOL_SEARCH_MS = (80.0, 450.0)
 
 
@@ -102,13 +98,7 @@ def _find_repolarization_peak(
     min_prominence_uv: float,
     search_window_ms: tuple[float, float] = DEFAULT_REPOL_SEARCH_MS,
 ) -> tuple[Optional[int], Optional[float]]:
-    """
-    Search after a depolarization spike for the repolarization deflection.
-
-    Returns (repol_idx, repol_width_ms) or (None, None) if nothing is found
-    in the search window -- which happens for beats near the end of the
-    trace, or when repolarization is too subtle to distinguish from noise.
-    """
+    """Search after a depolarization spike for the repolarization deflection."""
     start = depol_idx + int(round(search_window_ms[0] / 1000.0 * fs_hz))
     end = depol_idx + int(round(search_window_ms[1] / 1000.0 * fs_hz))
     end = min(end, len(trace))
@@ -116,9 +106,6 @@ def _find_repolarization_peak(
         return None, None
 
     window = trace[start:end]
-
-    # Repolarization is expected to be the opposite polarity of the
-    # depolarization spike, and reliably smaller in amplitude.
     if depol_amplitude_uv >= 0:
         search_signal = -window
     else:
@@ -130,16 +117,13 @@ def _find_repolarization_peak(
     if len(peak_indices) == 0:
         return None, None
 
-    # Take the most prominent candidate in the window as the repolarization peak.
     best = int(np.argmax(props["prominences"]))
     repol_idx_local = int(peak_indices[best])
     repol_idx = start + repol_idx_local
-
     widths, _, _, _ = signal.peak_widths(
         search_signal, [repol_idx_local], rel_height=0.5
     )
     repol_width_ms = float(widths[0] / fs_hz * 1000.0)
-
     return repol_idx, repol_width_ms
 
 
@@ -150,10 +134,7 @@ def extract_electrode_features(
     beat_config: Optional[BeatDetectionConfig] = None,
     repol_search_ms: tuple[float, float] = DEFAULT_REPOL_SEARCH_MS,
 ) -> ElectrodeFeatures:
-    """
-    Run the full filter -> detect beats -> find repolarization -> aggregate
-    chain for one electrode's raw voltage trace.
-    """
+    """Run the full filter -> beat detection -> repolarization chain."""
     filter_config = filter_config or FilterConfig()
     beat_config = beat_config or BeatDetectionConfig()
 
@@ -163,8 +144,7 @@ def extract_electrode_features(
 
     fpd_values: list[float] = []
     triangulation_values: list[float] = []
-
-    for idx, amp in zip(beats.beat_indices, beats.amplitudes_uv):
+    for idx, amp in zip(beats.beat_indices, beats.amplitudes_uv, strict=True):
         repol_idx, repol_width_ms = _find_repolarization_peak(
             filtered,
             depol_idx=int(idx),
@@ -177,11 +157,6 @@ def extract_electrode_features(
             fpd_ms = (repol_idx - idx) / fs_hz * 1000.0
             fpd_values.append(fpd_ms)
             if repol_width_ms is not None and fpd_ms > 0:
-                # Triangulation proxy: how broad the repolarization deflection
-                # is relative to the overall FPD. A wider, more dispersed
-                # repolarization phase relative to total duration is the
-                # engineering stand-in for classic APD triangulation
-                # (APD90 - APD30) risk.
                 triangulation_values.append(repol_width_ms / fpd_ms)
 
     return ElectrodeFeatures(
@@ -205,25 +180,7 @@ def extract_well_features(
     repol_search_ms: tuple[float, float] = DEFAULT_REPOL_SEARCH_MS,
     min_beat_detection_rate: float = 0.5,
 ) -> WellFeatures:
-    """
-    Aggregate multiple electrode traces from the same well into a single
-    well-level feature row.
-
-    Parameters
-    ----------
-    electrode_traces : dict[str, np.ndarray]
-        Maps electrode id -> raw voltage trace (uV) for that electrode.
-    fs_hz : float
-        Sampling rate, shared across electrodes in the well.
-    min_beat_detection_rate : float
-        Electrodes below this detection rate are excluded from the
-        well-level average (treated as too unreliable to contribute), but
-        still counted toward n_electrodes so QC downstream can see them.
-
-    Returns
-    -------
-    WellFeatures
-    """
+    """Aggregate multiple electrode traces from the same well into a well-level row."""
     if not electrode_traces:
         raise ValueError("electrode_traces is empty; need at least one electrode")
 
@@ -242,9 +199,6 @@ def extract_well_features(
     }
 
     if not reliable:
-        # Nothing usable -- surface zeros rather than raising, so a bad well
-        # gets caught by pipeline QC thresholds (which already reject on
-        # beat_detection_rate) instead of crashing the whole batch.
         return WellFeatures(
             fpd_ms=0.0,
             beat_rate_bpm=0.0,
@@ -268,6 +222,6 @@ def extract_well_features(
         triangulation_proxy=float(np.mean(tri_vals)) if tri_vals else 0.0,
         noise_sd_uv=float(np.mean([f.noise_sd_uv for f in per_electrode.values()])),
         n_electrodes=len(electrode_traces),
-        beat_detection_rate=float(np.mean([f.beat_detection_rate for f in per_electrode.values()])),
+        beat_detection_rate=float(np.mean([f.beat_detection_rate for f in reliable.values()])),
         electrode_features=per_electrode,
     )

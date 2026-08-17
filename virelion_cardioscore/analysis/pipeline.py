@@ -390,6 +390,9 @@ class CardioScorePipeline:
         dose_response_fits = self.fit_dose_response(concentration_summary)
         dose_response_weight = float(self.config.get("scoring", {}).get("dose_response_weight", 0.0))
         agg = self.aggregate_compound_effects(concentration_summary)
+        if not agg.empty and not scoring_effects.empty:
+            compound_unit_counts = scoring_effects.groupby("compound", sort=False)["well"].nunique()
+            agg["n_independent_units"] = agg["compound"].map(compound_unit_counts).fillna(0).astype(int)
         if not agg.empty:
             agg["effect_detected"] = agg["max_effect_pct"] >= float(concentration_cfg.get("effect_threshold_pct", 0.0))
         scores = []

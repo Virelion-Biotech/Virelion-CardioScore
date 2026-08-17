@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-statsmodels = pytest.importorskip("statsmodels")
-
 from virelion_cardioscore.analysis.mixed_effects import fit_random_intercept
+
+statsmodels = pytest.importorskip("statsmodels")
 
 
 def _dataset() -> pd.DataFrame:
@@ -14,7 +14,7 @@ def _dataset() -> pd.DataFrame:
     rows = []
     for plate, plate_shift in [("P1", 0.0), ("P2", 8.0), ("P3", -6.0), ("P4", 4.0)]:
         for treatment in [0, 1]:
-            for replicate in range(3):
+            for _replicate in range(3):
                 rows.append(
                     {
                         "plate_id": plate,
