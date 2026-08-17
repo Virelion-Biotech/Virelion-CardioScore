@@ -46,6 +46,7 @@ class ScoreResult:
             "interpretation": self.interpretation,
             "max_concentration_uM": self.max_concentration_uM,
             "n_wells": self.n_wells,
+            "metadata": self.metadata,
             "contributions": [
                 {
                     "endpoint": c.name,
@@ -113,12 +114,7 @@ class CardioScoreEngine:
         dose_response_evidence: Optional[float] = None,
         dose_response_weight: float = 0.0,
     ) -> ScoreResult:
-        """Score a compound with optional non-overlapping exposure-response evidence.
-
-        ``dose_response_evidence`` is a separate evidence dimension, not another
-        electrophysiology endpoint. It should only be supplied for quality-passing
-        dose-response fits and is disabled by default with zero weight.
-        """
+        """Score a compound with optional non-overlapping exposure-response evidence."""
         if dose_response_weight < 0:
             raise ValueError("dose_response_weight must be non-negative")
         if dose_response_evidence is not None and not 0.0 <= dose_response_evidence <= 1.0:
@@ -151,6 +147,7 @@ class CardioScoreEngine:
                 )
             )
 
+        metadata = {}
         if dose_response_weight > 0 and dose_response_evidence is not None:
             weighted_sum += dose_response_weight * dose_response_evidence
             total_weight += dose_response_weight
@@ -166,6 +163,8 @@ class CardioScoreEngine:
                     ),
                 )
             )
+            metadata["dose_response_evidence"] = float(dose_response_evidence)
+            metadata["dose_response_weight"] = float(dose_response_weight)
 
         score = float(np.clip(weighted_sum / total_weight if total_weight > 0 else 0.0, 0.0, 1.0))
 
@@ -175,11 +174,6 @@ class CardioScoreEngine:
             cat = self.risk_categories["moderate"]
         else:
             cat = self.risk_categories["high"]
-
-        metadata = {}
-        if dose_response_evidence is not None:
-            metadata["dose_response_evidence"] = float(dose_response_evidence)
-            metadata["dose_response_weight"] = float(dose_response_weight)
 
         return ScoreResult(
             compound=compound,
