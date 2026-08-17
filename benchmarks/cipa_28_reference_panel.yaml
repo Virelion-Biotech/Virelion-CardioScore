@@ -1,0 +1,63 @@
+# Frozen published-label panel derived from Blinova et al. 2018 CiPA Myocyte Validation Study.
+# These are independent clinical TdP risk labels, not CardioScore outputs.
+# Numerical/raw-data benchmarking requires the official CiPA dataset download.
+
+source_id: cipa_blinova_2018_myocyte_validation
+source_doi: "10.1016/j.celrep.2018.08.079"
+source_url: "https://cipaproject.org/data-resources/"
+study_design:
+  drugs: 28
+  independent_sites: 10
+  site_cell_type_combinations: 15
+  concentrations_per_drug: 4
+  replicate_wells_per_concentration: "5-6 nominal; <5 marked in source where applicable"
+  platforms: "4 MEA platforms and 1 VSO platform"
+
+risk_categories:
+  high:
+    - azimilide
+    - bepridil
+    - disopyramide
+    - dofetilide
+    - ibutilide
+    - quinidine
+    - sotalol
+    - vandetanib
+  intermediate:
+    - astemizole
+    - chlorpromazine
+    - cisapride
+    - clarithromycin
+    - clozapine
+    - domperidone
+    - droperidol
+    - ondansetron
+    - pimozide
+    - risperidone
+    - terfenadine
+  low:
+    - diltiazem
+    - loratadine
+    - ranolazine
+    - metoprolol
+    - mexiletine
+    - nifedipine
+    - nitrendipine
+    - tamoxifen
+    - verapamil
+
+published_directional_claims:
+  - compound: verapamil
+    claim: "No verapamil-induced repolarization prolongation or arrhythmias were observed at any concentrations studied."
+    evidence_type: qualitative
+  - compound: terfenadine
+    claim: "No sites observed terfenadine-induced arrhythmia-like events; repolarization prolongation occurred in 11 of 15 datasets."
+    evidence_type: qualitative
+  - compound: dofetilide
+    claim: "Statistically significant repolarization prolongation or arrhythmia-like events were observed in 14 of 15 datasets across the studied concentration range."
+    evidence_type: qualitative
+
+benchmark_rules:
+  - "Never convert a published qualitative claim into a fabricated endpoint value."
+  - "Use raw-data benchmarking only after the official CiPA dataset has been independently downloaded and standardized."
+  - "Risk labels are external reference labels and must not be used to tune CardioScore weights on the same benchmark set."
