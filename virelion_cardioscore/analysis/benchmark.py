@@ -13,6 +13,14 @@ import yaml
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
 
+_ALLOWED_EVIDENCE_LEVELS = {
+    "raw_mea_dataset",
+    "processed_mea_summary",
+    "published_mea_summary",
+}
+_EXECUTABLE_EVIDENCE_LEVELS = {"raw_mea_dataset", "processed_mea_summary"}
+
+
 @dataclass(frozen=True)
 class BenchmarkComparison:
     dataset: str
@@ -61,9 +69,21 @@ def run_benchmark_manifest(manifest_path: str | Path) -> list[BenchmarkCompariso
     base_dir = manifest_path.resolve().parent
     for entry in entries:
         name = str(entry.get("name", "unnamed"))
+        evidence_level = str(entry.get("evidence_level", "raw_mea_dataset"))
+        if evidence_level not in _ALLOWED_EVIDENCE_LEVELS:
+            raise ValueError(
+                f"Benchmark dataset {name!r} has unsupported evidence_level {evidence_level!r}."
+            )
+        if evidence_level not in _EXECUTABLE_EVIDENCE_LEVELS:
+            raise ValueError(
+                f"Benchmark dataset {name!r} is {evidence_level!r}; full numerical benchmark "
+                "requires raw_mea_dataset or processed_mea_summary evidence."
+            )
         features_path = _resolve_path(base_dir, str(entry["features"]))
         config_path = _resolve_path(base_dir, str(entry["config"]))
         tolerance = float(entry.get("score_tolerance", 0.01))
+        if tolerance < 0:
+            raise ValueError(f"Benchmark dataset {name!r} score_tolerance cannot be negative.")
         expected = entry.get("expected", [])
         if not isinstance(expected, list) or not expected:
             raise ValueError(f"Benchmark dataset {name!r} has no expected reference rows.")

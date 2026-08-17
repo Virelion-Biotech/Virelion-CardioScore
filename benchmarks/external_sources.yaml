@@ -1,0 +1,78 @@
+# External MEA validation sources.
+# These entries are provenance records, not fabricated benchmark references.
+# A source becomes executable only after its raw/processed data are downloaded,
+# standardized, and independently checked against the publication.
+
+sources:
+  - id: cardio_pymea_dryad_2022
+    status: ready_for_download
+    evidence_level: raw_mea_dataset
+    title: "Cardio PyMEA: A user-friendly, open-source Python application for cardiomyocyte microelectrode array analysis"
+    year: 2022
+    repository: Dryad
+    doi: "10.5068/D14H5C"
+    url: "https://doi.org/10.5068/D14H5C"
+    files:
+      - "Day9__Nov1_130pm.txt"
+      - "File_Parameter_List.xlsx"
+      - "README_cardio_pymea.txt"
+      - "untreated_MEA120_only.xlsx"
+    benchmark_scope:
+      - raw_trace_ingestion
+      - beat_detection
+      - endpoint_extraction
+      - reproducibility_against_cardio_pymea
+    note: "Public raw MEA recordings are available; full recordings are also linked by the dataset."
+
+  - id: patel2019_cipa_dryad
+    status: ready_for_download
+    evidence_level: raw_mea_dataset
+    title: "Assessment of Proarrhythmic Potential of Drugs in Optogenetically Paced iPSC-CMs"
+    year: 2019
+    repository: Dryad
+    doi: "10.5061/dryad.mg2565q"
+    url: "https://doi.org/10.5061/dryad.mg2565q"
+    benchmark_scope:
+      - endpoint_recovery
+      - concentration_response
+      - compound_ranking
+      - published_tdp_risk_category
+    target_design: "28 blinded CiPA compounds across multiple doses"
+    note: "Priority external validation source because published low/intermediate/high TdP categories provide independent labels."
+
+  - id: geiger2025_cardiac_nam_figshare
+    status: ready_for_download
+    evidence_level: processed_mea_summary
+    title: "Towards human cardiac new approach methodologies (NAMs) to evaluate the combination of repolarization prolonging and shortening drugs: a pilot study"
+    year: 2025
+    repository: Figshare
+    doi: "10.6084/m9.figshare.30466295"
+    url: "https://doi.org/10.6084/m9.figshare.30466295"
+    files:
+      - "NIHMS2123424-supplement-Raw_Data_Summary.xlsx"
+    benchmark_scope:
+      - fpd_directionality
+      - concentration_response
+      - protective_vs_harmful_direction
+      - combination_effects
+    target_design: "Moxifloxacin and cobicistat alone and in combination in hiPSC-CM MEA"
+    note: "Excellent directional validation source; the publication reports moxifloxacin-associated FPD prolongation and cobicistat-associated shortening/attenuation."
+
+  - id: altrocchi2023_frontiers_reference
+    status: published_summary_only
+    evidence_level: published_mea_summary
+    title: "Evaluation of chronic drug-induced electrophysiological and cytotoxic effects using human-induced pluripotent stem cell-derived cardiomyocytes (hiPSC-CMs)"
+    year: 2023
+    repository: Frontiers in Pharmacology
+    doi: "10.3389/fphar.2023.1229960"
+    url: "https://doi.org/10.3389/fphar.2023.1229960"
+    benchmark_scope:
+      - qualitative_compound_ranking
+      - fpd_directionality
+      - chronic_vs_acute_interpretation
+    note: "Useful for qualitative validation only unless the supplementary measurements are obtained and standardized."
+
+validation_rules:
+  raw_mea_dataset: "May be used for full pipeline benchmarking after independent preprocessing/standardization."
+  processed_mea_summary: "May validate endpoint direction and selected concentration-response behavior; do not fabricate missing endpoints."
+  published_mea_summary: "Use only for qualitative/partial validation unless machine-readable measurements are independently obtained."
