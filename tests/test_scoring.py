@@ -216,6 +216,40 @@ def test_replicates_are_aggregated_within_concentration():
     assert first["fpd_change_pct_sd"] == pytest.approx(np.sqrt(200.0))
 
 
+def test_median_replicate_aggregation_is_supported():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "concentration_uM": [1.0, 1.0, 1.0],
+            "well": ["W1", "W2", "W3"],
+            "fpd_change_pct": [10.0, 20.0, 100.0],
+            "beat_rate_change_pct": [0.0, 0.0, 0.0],
+            "amplitude_change_pct": [0.0, 0.0, 0.0],
+            "stv_increase": [0.0, 0.0, 0.0],
+            "triangulation_proxy_change": [0.0, 0.0, 0.0],
+        }
+    )
+    summary = CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="median")
+    assert summary.iloc[0]["fpd_change_pct_mean"] == pytest.approx(20.0)
+
+
+def test_invalid_aggregation_settings_are_rejected():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A"],
+            "concentration_uM": [1.0],
+            "well": ["W1"],
+            "fpd_change_pct": [10.0],
+            "beat_rate_change_pct": [0.0],
+            "amplitude_change_pct": [0.0],
+            "stv_increase": [0.0],
+            "triangulation_proxy_change": [0.0],
+        }
+    )
+    with pytest.raises(ValueError, match="Unsupported replicate_aggregation"):
+        CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="bogus")
+
+
 def test_compound_aggregation_uses_concentration_means_not_single_wells():
     concentration_summary = pd.DataFrame(
         {
