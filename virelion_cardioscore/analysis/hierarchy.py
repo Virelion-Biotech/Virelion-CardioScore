@@ -24,6 +24,8 @@ OPTIONAL_HIERARCHY_COLUMNS = (
     "experiment_id",
 )
 
+SUPPORTED_SCORING_UNITS = ("well", "biological_replicate", "batch", "plate")
+
 
 @dataclass(frozen=True)
 class HierarchySpec:
@@ -55,6 +57,73 @@ def hierarchy_columns(df: pd.DataFrame) -> list[str]:
     ]
 
 
+def _resolve_scoring_column(df: pd.DataFrame, scoring_unit: str) -> str:
+    if scoring_unit not in SUPPORTED_SCORING_UNITS:
+        raise ValueError(
+            f"Unsupported scoring_unit: {scoring_unit!r}. "
+            f"Expected one of {SUPPORTED_SCORING_UNITS}."
+        )
+
+    if scoring_unit == "well":
+        column = "well"
+    elif scoring_unit == "biological_replicate":
+        column = "biological_replicate"
+    elif scoring_unit == "batch":
+        column = "batch_id" if "batch_id" in df.columns else "experiment_id"
+    else:
+        column = "plate_id"
+
+    if column not in df.columns:
+        raise ValueError(
+            f"scoring_unit={scoring_unit!r} requires column {column!r}, "
+            "but that metadata is not present in the dataset."
+        )
+    return column
+
+
+def aggregate_to_scoring_units(
+    effects: pd.DataFrame,
+    *,
+    scoring_unit: str = "well",
+    endpoint_columns: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """Aggregate technical wells to the configured independent scoring unit.
+
+    ``well`` preserves historical behavior. Higher-level choices average all
+    retained technical wells belonging to the same independent unit at a given
+    compound/concentration before concentration-level summaries are calculated.
+    """
+    if effects.empty or scoring_unit == "well":
+        return effects.copy()
+
+    if endpoint_columns is None:
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+            "max_effect_pct",
+        ]
+
+    unit_column = _resolve_scoring_column(effects, scoring_unit)
+    group_columns = ["compound", "concentration_uM", unit_column]
+    rows: list[dict] = []
+    for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        row = dict(zip(group_columns, keys))
+        row["well"] = f"{scoring_unit}:{keys[-1]}"
+        row["n_wells"] = int(group["well"].nunique())
+        for endpoint in endpoint_columns:
+            if endpoint not in group.columns:
+                continue
+            values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
+            row[endpoint] = float(values.mean()) if len(values) else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def summarize_experimental_units(
     effects: pd.DataFrame,
     *,
@@ -75,7 +144,7 @@ def summarize_experimental_units(
             "beat_rate_change_pct",
             "amplitude_change_pct",
             "stv_increase",
-            "triangulation_proxy_change",
+            "triangulation_proxy",
         ]
 
     metadata = hierarchy_columns(effects)
