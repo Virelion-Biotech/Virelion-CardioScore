@@ -18,6 +18,14 @@ from virelion_cardioscore.analysis.normalization import (
     CorrectionDiagnostic,
     apply_control_anchor_correction,
 )
+from virelion_cardioscore.analysis.normalization_assumptions import (
+    NormalizationAssumptionCheck,
+    check_additive_correction_assumptions,
+)
+from virelion_cardioscore.analysis.normalization_validation import (
+    NormalizationValidationResult,
+    validate_control_anchor_correction,
+)
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline, PipelineResult
 from virelion_cardioscore.analysis.statistics import (
     BootstrapCI,
@@ -45,6 +53,10 @@ __all__ = [
     "count_independent_units",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
+    "NormalizationAssumptionCheck",
+    "check_additive_correction_assumptions",
+    "NormalizationValidationResult",
+    "validate_control_anchor_correction",
     "BootstrapCI",
     "ProfileDifference",
     "bootstrap_ci",
