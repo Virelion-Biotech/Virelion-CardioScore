@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine
@@ -106,3 +107,17 @@ def test_multiple_extreme_endpoints_cross_high_threshold(engine: CardioScoreEngi
     result = engine.score_compound("all_extreme", values)
     assert result.score > 0.60
     assert result.risk_class == "High"
+
+
+def test_missing_endpoint_values_fail_closed(engine: CardioScoreEngine):
+    values = _zero_case()
+    values.pop("stv_increase")
+    with pytest.raises(ValueError, match="missing"):
+        engine.score_compound("incomplete", values)
+
+
+def test_non_finite_endpoint_values_fail_closed(engine: CardioScoreEngine):
+    values = _zero_case()
+    values["stv_increase"] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        engine.score_compound("nan", values)
