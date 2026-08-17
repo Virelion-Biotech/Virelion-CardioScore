@@ -358,7 +358,7 @@ class CardioScorePipeline:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 if values.empty:
                     return 0.0
-                endpoint = column[:-6] if column.endswith("_mean") else column
+                endpoint = column.removesuffix("_mean")
                 direction = endpoint_directions.get(endpoint, "absolute")
                 if direction == "decrease":
                     return float(values.min())
