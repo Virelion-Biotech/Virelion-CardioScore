@@ -1,10 +1,9 @@
-"""
-End-to-end CardioScore pipeline.
+"""End-to-end CardioScore pipeline.
 
 Orchestrates quality control, vehicle normalization, replicate-aware
-concentration summaries, optional concentration-response fitting, optional
-bootstrap inference, optional control-variability diagnostics, scoring,
-and report generation.
+concentration summaries, optional control-anchored normalization,
+dose-response fitting, bootstrap inference, variability diagnostics,
+scoring, and report generation.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ import yaml
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
 from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
 from virelion_cardioscore.analysis.hierarchy import aggregate_to_scoring_units
+from virelion_cardioscore.analysis.normalization import apply_control_anchor_correction
 from virelion_cardioscore.analysis.statistics import bootstrap_ci
 from virelion_cardioscore.analysis.variability import control_variability, standardized_treatment_separation
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
@@ -32,7 +32,9 @@ class PipelineResult:
     concentration_table: pd.DataFrame = field(default_factory=pd.DataFrame)
     inference_table: pd.DataFrame = field(default_factory=pd.DataFrame)
     variability_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    variability_before_correction: pd.DataFrame = field(default_factory=pd.DataFrame)
     separation_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    normalization_diagnostic: dict = field(default_factory=dict)
     dose_response_fits: dict[str, list[DoseResponseFit]] = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
@@ -53,7 +55,9 @@ class PipelineResult:
             "concentration_summary": self.concentration_table.to_dict(orient="records"),
             "inference": self.inference_table.to_dict(orient="records"),
             "variability": self.variability_table.to_dict(orient="records"),
+            "variability_before_correction": self.variability_before_correction.to_dict(orient="records"),
             "treatment_separation": self.separation_table.to_dict(orient="records"),
+            "normalization": self.normalization_diagnostic,
             "dose_response_fits": {
                 compound: [fit.to_dict() for fit in fits]
                 for compound, fits in self.dose_response_fits.items()
@@ -123,9 +127,8 @@ class CardioScorePipeline:
                 )
                 if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
                     details += f", stv={row['stv']:.3f}"
-                self.qc_log.append(
-                    f"Rejected {row['compound']} {row['well']} ({details})"
-                )
+                self.qc_log.append(f"Rejected {row['compound']} {row['well']} ({details})")
+
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
 
@@ -250,19 +253,12 @@ class CardioScorePipeline:
         max_cv = float(cfg.get("max_control_cv_pct", 20.0))
         variability_table = control_variability(df, group_column=group_column, max_control_cv_pct=max_cv)
         separation_table = pd.DataFrame()
-
         if variability_table.empty:
             return variability_table, separation_table
 
         resolved_group = str(variability_table.iloc[0]["group_column"])
         separation_frames = []
-        for endpoint in [
-            "fpd_ms",
-            "beat_rate_bpm",
-            "amplitude_uv",
-            "stv",
-            "triangulation_proxy",
-        ]:
+        for endpoint in ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]:
             if endpoint in df.columns:
                 separation_frames.append(
                     standardized_treatment_separation(
@@ -275,11 +271,33 @@ class CardioScorePipeline:
             separation_table = pd.concat(separation_frames, ignore_index=True)
 
         for _, row in variability_table.iterrows():
-            if row["status"] == "high_variability":
-                self.qc_log.append(f"Warning: {row['endpoint']} {row['message']}")
-            elif row["status"] == "insufficient_groups":
+            if row["status"] in {"high_variability", "insufficient_groups"}:
                 self.qc_log.append(f"Warning: {row['endpoint']} {row['message']}")
         return variability_table, separation_table
+
+    def apply_control_anchor_normalization(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+        """Apply optional control-anchored group correction and return audit metadata."""
+        cfg = self.config.get("variability", {}).get("correction", {})
+        if not cfg.get("enabled", False):
+            return df, {}
+        if not self.config.get("variability", {}).get("enabled", False):
+            raise ValueError("variability.correction.enabled requires variability.enabled=true.")
+
+        corrected_columns = cfg.get("corrected_columns")
+        min_controls = int(cfg.get("min_controls_per_group", 2))
+        group_column = self.config.get("variability", {}).get("group_column")
+        corrected, diagnostic = apply_control_anchor_correction(
+            df,
+            group_column=group_column,
+            corrected_columns=corrected_columns,
+            min_controls_per_group=min_controls,
+            require_all_groups=bool(cfg.get("require_all_groups", True)),
+        )
+        self.qc_log.append(
+            f"Control normalization: applied control-anchored recentering across "
+            f"{diagnostic.n_groups} groups using {diagnostic.n_controls} vehicle wells."
+        )
+        return corrected, diagnostic.to_dict()
 
     @staticmethod
     def summarize_concentrations(effects: pd.DataFrame, replicate_aggregation: str = "mean") -> pd.DataFrame:
@@ -290,7 +308,13 @@ class CardioScorePipeline:
                 "Unsupported replicate_aggregation: "
                 f"{replicate_aggregation!r}. Expected 'mean' or 'median'."
             )
-        endpoint_columns = ["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"]
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+        ]
         grouped = effects.groupby(["compound", "concentration_uM"], sort=True)
         rows = []
         for (compound, concentration), group in grouped:
@@ -386,7 +410,14 @@ class CardioScorePipeline:
         max_ec50_uncertainty_fold = float(concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0))
         results: dict[str, list[DoseResponseFit]] = {}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(group, min_points=min_points, min_r_squared=min_r_squared, min_monotonicity=min_monotonicity, ec50_boundary_factor=ec50_boundary_factor, max_ec50_uncertainty_fold=max_ec50_uncertainty_fold)
+            fits = fit_concentration_series(
+                group,
+                min_points=min_points,
+                min_r_squared=min_r_squared,
+                min_monotonicity=min_monotonicity,
+                ec50_boundary_factor=ec50_boundary_factor,
+                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
+            )
             results[str(compound)] = fits
             failed = [fit for fit in fits if not fit.success]
             poor_quality = [fit for fit in fits if fit.success and not fit.quality_pass]
@@ -419,7 +450,21 @@ class CardioScorePipeline:
         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
         df = self.apply_qc(df)
 
-        variability_table, separation_table = self.run_variability_diagnostics(df)
+        variability_cfg = self.config.get("variability", {})
+        variability_before, _ = self.run_variability_diagnostics(df)
+        normalization_diagnostic: dict = {}
+        if variability_cfg.get("correction", {}).get("enabled", False):
+            df, normalization_diagnostic = self.apply_control_anchor_normalization(df)
+            variability_after, separation_table = self.run_variability_diagnostics(df)
+            if variability_after.empty:
+                variability_after = control_variability(
+                    df,
+                    group_column=variability_cfg.get("group_column"),
+                    max_control_cv_pct=float(variability_cfg.get("max_control_cv_pct", 20.0)),
+                )
+        else:
+            variability_after, separation_table = self.run_variability_diagnostics(df)
+
         effects = self.compute_effects(df)
         scoring_effects = self.prepare_scoring_effects(effects)
 
@@ -472,14 +517,16 @@ class CardioScorePipeline:
                 "stv_increase": row["stv_increase"],
                 "triangulation_proxy": row["triangulation_proxy"],
             }
-            scores.append(self.engine.score_compound(
-                compound=compound,
-                endpoint_values=endpoint_values,
-                max_concentration_uM=row["max_concentration_uM"],
-                n_wells=int(row["n_wells"]),
-                dose_response_evidence=exposure_evidence,
-                dose_response_weight=dose_response_weight,
-            ))
+            scores.append(
+                self.engine.score_compound(
+                    compound=compound,
+                    endpoint_values=endpoint_values,
+                    max_concentration_uM=row["max_concentration_uM"],
+                    n_wells=int(row["n_wells"]),
+                    dose_response_evidence=exposure_evidence,
+                    dose_response_weight=dose_response_weight,
+                )
+            )
 
         summary_rows = []
         for s in scores:
@@ -487,21 +534,23 @@ class CardioScorePipeline:
             fits = dose_response_fits.get(s.compound, [])
             successful_quality_fits = sum(fit.quality_pass for fit in fits)
             exposure_evidence = s.metadata.get("dose_response_evidence")
-            summary_rows.append({
-                "compound": s.compound,
-                "cardioscore": round(s.score, 4),
-                "risk_class": s.risk_class,
-                "max_concentration_uM": s.max_concentration_uM,
-                "n_wells": s.n_wells,
-                "n_independent_units": int(agg_row["n_independent_units"]),
-                "n_technical_wells": int(agg_row["n_technical_wells"]),
-                "concentrations_tested": int(agg_row["concentrations_tested"]),
-                "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
-                "effect_detected": bool(agg_row["effect_detected"]),
-                "dose_response_fit_endpoints": successful_quality_fits,
-                "dose_response_exposure_evidence": round(float(exposure_evidence), 4) if exposure_evidence is not None else np.nan,
-                "interpretation": s.interpretation,
-            })
+            summary_rows.append(
+                {
+                    "compound": s.compound,
+                    "cardioscore": round(s.score, 4),
+                    "risk_class": s.risk_class,
+                    "max_concentration_uM": s.max_concentration_uM,
+                    "n_wells": s.n_wells,
+                    "n_independent_units": int(agg_row["n_independent_units"]),
+                    "n_technical_wells": int(agg_row["n_technical_wells"]),
+                    "concentrations_tested": int(agg_row["concentrations_tested"]),
+                    "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
+                    "effect_detected": bool(agg_row["effect_detected"]),
+                    "dose_response_fit_endpoints": successful_quality_fits,
+                    "dose_response_exposure_evidence": round(float(exposure_evidence), 4) if exposure_evidence is not None else np.nan,
+                    "interpretation": s.interpretation,
+                }
+            )
 
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
@@ -513,8 +562,10 @@ class CardioScorePipeline:
             summary_table=summary,
             concentration_table=concentration_summary,
             inference_table=inference_table,
-            variability_table=variability_table,
+            variability_table=variability_after,
+            variability_before_correction=variability_before,
             separation_table=separation_table,
+            normalization_diagnostic=normalization_diagnostic,
             dose_response_fits=dose_response_fits,
             config=self.config,
             qc_log=self.qc_log,
