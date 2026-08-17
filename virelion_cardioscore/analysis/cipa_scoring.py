@@ -76,7 +76,6 @@ class CardioScoreEngine:
         if not 0.0 <= self.low_threshold < self.moderate_threshold <= 1.0:
             raise ValueError("Risk thresholds must satisfy 0 <= low < moderate <= 1.")
 
-        # Keep the endpoint YAML and pipeline threshold configuration from silently disagreeing.
         low_max = self.risk_categories["low"].get("max_score")
         moderate_max = self.risk_categories["moderate"].get("max_score")
         if low_max is not None and not np.isclose(float(low_max), self.low_threshold):
@@ -199,9 +198,9 @@ class CardioScoreEngine:
             metadata["dose_response_weight"] = float(dose_response_weight)
 
         score = float(np.clip(weighted_sum / total_weight if total_weight > 0 else 0.0, 0.0, 1.0))
-        if score <= self.low_threshold:
+        if score < self.low_threshold:
             cat = self.risk_categories["low"]
-        elif score <= self.moderate_threshold:
+        elif score < self.moderate_threshold:
             cat = self.risk_categories["moderate"]
         else:
             cat = self.risk_categories["high"]
