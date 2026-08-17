@@ -57,8 +57,15 @@ def test_pipeline_end_to_end():
 
     assert len(result.scores) == 3
     assert not result.summary_table.empty
+    assert not result.concentration_table.empty
     assert "cardioscore" in result.summary_table.columns
     assert "risk_class" in result.summary_table.columns
+    assert "concentrations_tested" in result.summary_table.columns
+    assert "max_effect_pct" in result.summary_table.columns
+    assert "effect_detected" in result.summary_table.columns
+    assert {"n_replicates", "fpd_change_pct_mean", "fpd_change_pct_sd"}.issubset(
+        result.concentration_table.columns
+    )
     assert len(result.qc_log) > 0
 
 
@@ -139,3 +146,129 @@ def test_raw_trace_required_columns_are_explicit():
         "time_s",
         "voltage_uv",
     }
+
+
+def _qc_frame(stv_values: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "compound": ["TestComp"] * len(stv_values),
+            "well": [f"A{i:02d}" for i in range(len(stv_values))],
+            "n_electrodes": [4] * len(stv_values),
+            "noise_sd_uv": [5.0] * len(stv_values),
+            "beat_detection_rate": [0.95] * len(stv_values),
+            "stv": stv_values,
+        }
+    )
+
+
+def test_optional_stv_irregularity_proxy_can_reject_wells():
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["quality_control"]["reject_wells_with_arrhythmia_proxy"] = True
+    pipeline.config["quality_control"]["arrhythmia_proxy_max_stv"] = 0.5
+
+    kept = pipeline.apply_qc(_qc_frame([0.1, 0.8]))
+
+    assert len(kept) == 1
+    assert kept.iloc[0]["well"] == "A00"
+    assert "stv=0.800" in " ".join(pipeline.qc_log)
+
+
+def test_irregularity_proxy_requires_explicit_threshold():
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["quality_control"]["reject_wells_with_arrhythmia_proxy"] = True
+    pipeline.config["quality_control"]["arrhythmia_proxy_max_stv"] = None
+
+    kept = pipeline.apply_qc(_qc_frame([0.1, 0.8]))
+
+    assert len(kept) == 2
+    assert any("max_stv is not configured" in msg for msg in pipeline.qc_log)
+
+
+def test_concentration_coverage_warning_is_reported_without_silent_exclusion():
+    dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
+    pipeline = CardioScorePipeline.from_defaults()
+    result = pipeline.run(dataset)
+
+    assert len(result.scores) == 1
+    assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
+    assert any("configured minimum is 3" in msg for msg in result.qc_log)
+
+
+def test_replicates_are_aggregated_within_concentration():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "concentration_uM": [1.0, 1.0, 2.0],
+            "well": ["W1", "W2", "W3"],
+            "fpd_change_pct": [10.0, 30.0, 40.0],
+            "beat_rate_change_pct": [0.0, 0.0, 0.0],
+            "amplitude_change_pct": [0.0, 0.0, 0.0],
+            "stv_increase": [0.0, 0.0, 0.0],
+            "triangulation_proxy_change": [0.0, 0.0, 0.0],
+        }
+    )
+
+    concentration_summary = CardioScorePipeline.summarize_concentrations(effects)
+    first = concentration_summary.loc[concentration_summary["concentration_uM"] == 1.0].iloc[0]
+
+    assert first["n_replicates"] == 2
+    assert first["fpd_change_pct_mean"] == pytest.approx(20.0)
+    assert first["fpd_change_pct_sd"] == pytest.approx(np.sqrt(200.0))
+
+
+def test_median_replicate_aggregation_is_supported():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "concentration_uM": [1.0, 1.0, 1.0],
+            "well": ["W1", "W2", "W3"],
+            "fpd_change_pct": [10.0, 20.0, 100.0],
+            "beat_rate_change_pct": [0.0, 0.0, 0.0],
+            "amplitude_change_pct": [0.0, 0.0, 0.0],
+            "stv_increase": [0.0, 0.0, 0.0],
+            "triangulation_proxy_change": [0.0, 0.0, 0.0],
+        }
+    )
+    summary = CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="median")
+    assert summary.iloc[0]["fpd_change_pct_mean"] == pytest.approx(20.0)
+
+
+def test_invalid_aggregation_settings_are_rejected():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A"],
+            "concentration_uM": [1.0],
+            "well": ["W1"],
+            "fpd_change_pct": [10.0],
+            "beat_rate_change_pct": [0.0],
+            "amplitude_change_pct": [0.0],
+            "stv_increase": [0.0],
+            "triangulation_proxy_change": [0.0],
+        }
+    )
+    with pytest.raises(ValueError, match="Unsupported replicate_aggregation"):
+        CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="bogus")
+
+
+def test_compound_aggregation_uses_concentration_means_not_single_wells():
+    concentration_summary = pd.DataFrame(
+        {
+            "compound": ["A", "A"],
+            "concentration_uM": [1.0, 2.0],
+            "n_replicates": [2, 2],
+            "fpd_change_pct_mean": [20.0, 35.0],
+            "beat_rate_change_pct_mean": [0.0, 0.0],
+            "amplitude_change_pct_mean": [-5.0, -15.0],
+            "stv_increase_mean": [0.05, 0.10],
+            "triangulation_proxy_change_mean": [0.02, 0.04],
+            "max_effect_pct_mean": [20.0, 35.0],
+        }
+    )
+
+    aggregate = CardioScorePipeline.aggregate_compound_effects(concentration_summary)
+    row = aggregate.iloc[0]
+
+    assert row["fpd_change_pct"] == pytest.approx(35.0)
+    assert row["amplitude_change_pct"] == pytest.approx(-15.0)
+    assert row["n_wells"] == 4
+    assert row["concentrations_tested"] == 2
