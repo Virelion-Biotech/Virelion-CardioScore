@@ -15,6 +15,7 @@ from virelion_cardioscore.io.raw_trace import RawTraceSchemaError, load_raw_trac
 from virelion_cardioscore.io.synthetic import load_synthetic_dataset
 from virelion_cardioscore.preprocessing.beat_detection import BeatDetectionConfig
 from virelion_cardioscore.preprocessing.filtering import FilterConfig
+from virelion_cardioscore.reporting.diagnostics import enrich_html_report, enrich_json_report
 
 
 @click.group()
@@ -40,7 +41,9 @@ def demo(n_compounds: int, n_concentrations: int, seed: int, output_dir: str) ->
     result = CardioScorePipeline.from_defaults().run(dataset)
     result.to_csv(out / "summary.csv")
     result.to_json(out / "scores.json")
+    enrich_json_report(result, out / "scores.json")
     result.to_html(out / "report.html")
+    enrich_html_report(result, out / "report.html")
     click.echo(result.summary_table.to_string(index=False))
     click.echo(f"Outputs written to {out.resolve()}/")
 
@@ -87,9 +90,11 @@ def run(config: str, output_dir: str, features: str | None, raw_traces: str | No
         generated.append("summary.csv")
     if reporting.get("generate_json", True):
         result.to_json(out / "scores.json")
+        enrich_json_report(result, out / "scores.json")
         generated.append("scores.json")
     if reporting.get("generate_html", True):
         result.to_html(out / "report.html")
+        enrich_html_report(result, out / "report.html")
         generated.append("report.html")
 
     click.echo(result.summary_table.to_string(index=False))
