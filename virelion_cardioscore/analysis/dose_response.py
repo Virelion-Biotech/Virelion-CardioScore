@@ -16,6 +16,15 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
+_ENDPOINT_HARM_DIRECTIONS = {
+    "fpd_change_pct": "absolute",
+    "beat_rate_change_pct": "absolute",
+    "amplitude_change_pct": "decrease",
+    "stv_increase": "increase",
+    "triangulation_proxy_change": "increase",
+}
+
+
 @dataclass
 class DoseResponseFit:
     """Result and diagnostics for a four-parameter logistic concentration-response fit."""
@@ -37,6 +46,7 @@ class DoseResponseFit:
     weighted: bool = False
     monotonicity: Optional[float] = None
     monotonic_direction: Optional[str] = None
+    harm_direction_compatible: Optional[bool] = None
     ec50_boundary_flag: bool = False
     ec50_uncertainty_fold: Optional[float] = None
     message: str = ""
@@ -60,6 +70,7 @@ class DoseResponseFit:
             "weighted": self.weighted,
             "monotonicity": self.monotonicity,
             "monotonic_direction": self.monotonic_direction,
+            "harm_direction_compatible": self.harm_direction_compatible,
             "ec50_boundary_flag": self.ec50_boundary_flag,
             "ec50_uncertainty_fold": self.ec50_uncertainty_fold,
             "message": self.message,
@@ -98,6 +109,16 @@ def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
     return float(matches / len(deltas)), "increasing" if direction > 0 else "decreasing"
 
 
+def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None) -> bool | None:
+    """Check whether a fitted monotonic trend points in the configured harmful direction."""
+    expected = _ENDPOINT_HARM_DIRECTIONS.get(endpoint)
+    if expected is None or monotonic_direction in {None, "flat"}:
+        return None if expected is None else False
+    if expected == "absolute":
+        return True
+    return monotonic_direction == expected
+
+
 def fit_4pl(
     concentrations: np.ndarray,
     responses: np.ndarray,
@@ -113,8 +134,8 @@ def fit_4pl(
     """Fit a bounded four-parameter logistic model with diagnostic quality gates.
 
     ``response_sem`` is used as ``sigma`` when supplied. The fit is considered
-    high-quality only when R-squared, monotonicity, EC50 placement, and EC50
-    uncertainty all satisfy their configured thresholds.
+    high-quality only when R-squared, monotonicity, harm-direction compatibility,
+    EC50 placement, and EC50 uncertainty all satisfy their configured thresholds.
     """
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
@@ -205,6 +226,7 @@ def fit_4pl(
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
 
     monotonicity, monotonic_direction = _monotonicity_score(x, y)
+    harm_direction_compatible = _harm_direction_compatible(endpoint, monotonic_direction)
     boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
     boundary_high = ec50 > float(np.max(x)) / ec50_boundary_factor
     ec50_boundary_flag = bool(boundary_low or boundary_high)
@@ -223,6 +245,7 @@ def fit_4pl(
         and finite_ci
         and ec50_ci_low > 0
         and monotonicity >= min_monotonicity
+        and harm_direction_compatible is not False
         and not ec50_boundary_flag
         and (
             ec50_uncertainty_fold is not None
@@ -235,6 +258,8 @@ def fit_4pl(
         reasons.append(f"R-squared below {min_r_squared:.2f}")
     if monotonicity < min_monotonicity:
         reasons.append(f"monotonicity below {min_monotonicity:.2f}")
+    if harm_direction_compatible is False:
+        reasons.append("fitted concentration-response direction is not the configured harmful direction")
     if ec50_boundary_flag:
         reasons.append("EC50 lies near/outside the tested concentration range")
     if ec50_ci_low <= 0:
@@ -268,6 +293,7 @@ def fit_4pl(
         weighted=sigma is not None,
         monotonicity=monotonicity,
         monotonic_direction=monotonic_direction,
+        harm_direction_compatible=harm_direction_compatible,
         ec50_boundary_flag=ec50_boundary_flag,
         ec50_uncertainty_fold=ec50_uncertainty_fold,
         message=message,
