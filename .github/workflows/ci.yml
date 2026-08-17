@@ -27,6 +27,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mixed]"
 
+      - name: Validate browser JavaScript
+        run: node --check web/app.js
+
       - name: Run lint
         run: ruff check .
 

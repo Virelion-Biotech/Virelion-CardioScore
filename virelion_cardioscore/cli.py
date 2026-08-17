@@ -4,12 +4,14 @@ Command-line interface for Virelion CardioScore.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
 import pandas as pd
 
 from virelion_cardioscore import __version__
+from virelion_cardioscore.analysis.benchmark import benchmark_summary, run_benchmark_manifest
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 from virelion_cardioscore.io.raw_trace import RawTraceSchemaError, load_raw_traces_to_feature_table
 from virelion_cardioscore.io.synthetic import load_synthetic_dataset
@@ -100,6 +102,25 @@ def run(config: str, output_dir: str, features: str | None, raw_traces: str | No
     click.echo(result.summary_table.to_string(index=False))
     click.echo(f"Results written to {out.resolve()}")
     click.echo(f"Generated: {', '.join(generated) if generated else 'no report files (disabled by config)'}")
+
+
+@main.command()
+@click.option("--manifest", required=True, type=click.Path(exists=True), help="YAML/JSON benchmark manifest")
+@click.option("--output", type=click.Path(), help="Optional JSON results path")
+def benchmark(manifest: str, output: str | None) -> None:
+    """Run locked reference benchmarks and fail on score/classification drift."""
+    try:
+        results = run_benchmark_manifest(manifest)
+    except (KeyError, ValueError, OSError, pd.errors.ParserError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    summary = benchmark_summary(results)
+    payload = {"summary": summary, "comparisons": [item.to_dict() for item in results]}
+    click.echo(json.dumps(payload, indent=2))
+    if output:
+        Path(output).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if summary["n_failed"]:
+        raise click.ClickException(f"Benchmark failed: {summary['n_failed']} comparison(s) outside tolerance or risk class mismatch.")
 
 
 @main.command()
