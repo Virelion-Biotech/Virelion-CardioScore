@@ -51,6 +51,13 @@ concentration_response:
   fit_ec50_boundary_factor: 2.0
   fit_max_ec50_uncertainty_fold: 100.0
 
+inference:
+  # Bootstrap uncertainty is opt-in and does not alter CardioScore.
+  enabled: false
+  n_bootstrap: 2000
+  confidence: 0.95
+  seed: 42
+
 scoring:
   endpoint_config: "cipa_endpoints.yaml"
   low_threshold: 0.30
