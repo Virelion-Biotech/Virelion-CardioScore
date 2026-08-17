@@ -176,10 +176,18 @@ class CardioScorePipeline:
         return pd.DataFrame(records)
 
     @staticmethod
-    def summarize_concentrations(effects: pd.DataFrame) -> pd.DataFrame:
-        """Average biological/technical replicates within each compound-concentration."""
+    def summarize_concentrations(
+        effects: pd.DataFrame,
+        replicate_aggregation: str = "mean",
+    ) -> pd.DataFrame:
+        """Summarize replicates within each compound-concentration group."""
         if effects.empty:
             return pd.DataFrame()
+        if replicate_aggregation not in {"mean", "median"}:
+            raise ValueError(
+                "Unsupported replicate_aggregation: "
+                f"{replicate_aggregation!r}. Expected 'mean' or 'median'."
+            )
 
         endpoint_columns = [
             "fpd_change_pct",
@@ -198,7 +206,8 @@ class CardioScorePipeline:
             }
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
-                row[f"{endpoint}_mean"] = float(values.mean()) if len(values) else np.nan
+                aggregator = values.mean if replicate_aggregation == "mean" else values.median
+                row[f"{endpoint}_mean"] = float(aggregator()) if len(values) else np.nan
                 row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else np.nan
                 row[f"{endpoint}_sem"] = (
                     float(values.std(ddof=1) / np.sqrt(len(values))) if len(values) > 1 else np.nan
@@ -216,10 +225,18 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def aggregate_compound_effects(concentration_summary: pd.DataFrame) -> pd.DataFrame:
-        """Aggregate concentration-level means into compound-level scoring inputs."""
+    def aggregate_compound_effects(
+        concentration_summary: pd.DataFrame,
+        concentration_aggregation: str = "max_absolute_effect",
+    ) -> pd.DataFrame:
+        """Aggregate concentration-level summaries into compound-level scoring inputs."""
         if concentration_summary.empty:
             return pd.DataFrame()
+        if concentration_aggregation != "max_absolute_effect":
+            raise ValueError(
+                "Unsupported concentration_aggregation: "
+                f"{concentration_aggregation!r}. Expected 'max_absolute_effect'."
+            )
 
         rows = []
         for compound, group in concentration_summary.groupby("compound"):
@@ -260,9 +277,17 @@ class CardioScorePipeline:
 
         df = self.apply_qc(df)
         effects = self.compute_effects(df)
-        concentration_summary = self.summarize_concentrations(effects)
 
         concentration_cfg = self.config.get("concentration_response", {})
+        replicate_aggregation = concentration_cfg.get("replicate_aggregation", "mean")
+        concentration_aggregation = concentration_cfg.get(
+            "concentration_aggregation", "max_absolute_effect"
+        )
+        concentration_summary = self.summarize_concentrations(
+            effects,
+            replicate_aggregation=replicate_aggregation,
+        )
+
         min_concentrations = int(concentration_cfg.get("min_concentrations", 1))
         effect_threshold_pct = float(concentration_cfg.get("effect_threshold_pct", 0.0))
 
@@ -276,7 +301,10 @@ class CardioScorePipeline:
                         "but concentration-response coverage is limited."
                     )
 
-        agg = self.aggregate_compound_effects(concentration_summary)
+        agg = self.aggregate_compound_effects(
+            concentration_summary,
+            concentration_aggregation=concentration_aggregation,
+        )
         if not agg.empty:
             agg["effect_detected"] = agg["max_effect_pct"] >= effect_threshold_pct
 
