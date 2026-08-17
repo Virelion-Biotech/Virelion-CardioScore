@@ -2,8 +2,9 @@
 
 This module provides an explicit four-parameter logistic (4PL) fit for
 concentration-response series. Fitting is optional and should not be
-interpreted as regulatory validation. Series with insufficient concentrations
-or failed optimization return a structured failure instead of a fabricated fit.
+interpreted as regulatory validation. Series with insufficient concentrations,
+failed optimization, or poor fit quality return structured diagnostics instead
+of silently replacing the replicate-summary heuristic.
 """
 
 from __future__ import annotations
@@ -17,30 +18,42 @@ from scipy.optimize import curve_fit
 
 @dataclass
 class DoseResponseFit:
-    """Result of a four-parameter logistic concentration-response fit."""
+    """Result and diagnostics for a four-parameter logistic concentration-response fit."""
 
     endpoint: str
     success: bool
+    quality_pass: bool
     n_points: int
     ec50: Optional[float] = None
+    ec50_ci_low: Optional[float] = None
+    ec50_ci_high: Optional[float] = None
     hill_slope: Optional[float] = None
+    hill_ci_low: Optional[float] = None
+    hill_ci_high: Optional[float] = None
     bottom: Optional[float] = None
     top: Optional[float] = None
     r_squared: Optional[float] = None
     rmse: Optional[float] = None
+    weighted: bool = False
     message: str = ""
 
     def to_dict(self) -> dict:
         return {
             "endpoint": self.endpoint,
             "success": self.success,
+            "quality_pass": self.quality_pass,
             "n_points": self.n_points,
             "ec50": self.ec50,
+            "ec50_ci_low": self.ec50_ci_low,
+            "ec50_ci_high": self.ec50_ci_high,
             "hill_slope": self.hill_slope,
+            "hill_ci_low": self.hill_ci_low,
+            "hill_ci_high": self.hill_ci_high,
             "bottom": self.bottom,
             "top": self.top,
             "r_squared": self.r_squared,
             "rmse": self.rmse,
+            "weighted": self.weighted,
             "message": self.message,
         }
 
@@ -59,24 +72,49 @@ def four_parameter_logistic(
     return bottom + (top - bottom) / (1.0 + (ec50 / concentration) ** hill_slope)
 
 
+def _ci95(value: float, standard_error: float) -> tuple[float, float]:
+    delta = 1.96 * standard_error
+    return value - delta, value + delta
+
+
 def fit_4pl(
     concentrations: np.ndarray,
     responses: np.ndarray,
     *,
+    response_sem: Optional[np.ndarray] = None,
     endpoint: str = "endpoint",
     min_points: int = 4,
+    min_r_squared: float = 0.0,
 ) -> DoseResponseFit:
-    """Fit a bounded four-parameter logistic model."""
+    """Fit a bounded four-parameter logistic model with optional SEM weighting.
+
+    ``response_sem`` should contain the within-concentration SEM for each mean
+    response. When supplied, it is used as ``sigma`` in ``scipy.optimize.curve_fit``
+    so concentrations with smaller replicate uncertainty contribute more strongly.
+    
+    ``quality_pass`` requires numerical convergence, finite parameter confidence
+    intervals, and R-squared >= ``min_r_squared``. A failed quality check does not
+    invalidate the numerical fit; it marks it as unsuitable for replacing the
+    heuristic scoring path.
+    """
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
+    sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
+
     finite = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    if sigma is not None:
+        finite &= np.isfinite(sigma) & (sigma > 0)
+
     x = x[finite]
     y = y[finite]
+    if sigma is not None:
+        sigma = sigma[finite]
 
     if len(x) < min_points:
         return DoseResponseFit(
             endpoint=endpoint,
             success=False,
+            quality_pass=False,
             n_points=len(x),
             message=f"Need at least {min_points} positive concentrations; got {len(x)}.",
         )
@@ -84,10 +122,14 @@ def fit_4pl(
     order = np.argsort(x)
     x = x[order]
     y = y[order]
+    if sigma is not None:
+        sigma = sigma[order]
+
     if np.unique(x).size < min_points:
         return DoseResponseFit(
             endpoint=endpoint,
             success=False,
+            quality_pass=False,
             n_points=int(np.unique(x).size),
             message=f"Need at least {min_points} distinct positive concentrations.",
         )
@@ -97,6 +139,7 @@ def fit_4pl(
         return DoseResponseFit(
             endpoint=endpoint,
             success=False,
+            quality_pass=False,
             n_points=len(x),
             message="Response has negligible dynamic range; 4PL fit is not identifiable.",
         )
@@ -109,19 +152,23 @@ def fit_4pl(
     upper = [y_max + margin, y_max + margin, float(np.max(x)) * 1e6, 10.0]
 
     try:
-        params, _ = curve_fit(
+        params, covariance = curve_fit(
             four_parameter_logistic,
             x,
             y,
             p0=p0,
             bounds=(lower, upper),
+            sigma=sigma,
+            absolute_sigma=sigma is not None,
             maxfev=20000,
         )
     except (RuntimeError, ValueError) as exc:
         return DoseResponseFit(
             endpoint=endpoint,
             success=False,
+            quality_pass=False,
             n_points=len(x),
+            weighted=sigma is not None,
             message=f"4PL optimization failed: {exc}",
         )
 
@@ -132,17 +179,36 @@ def fit_4pl(
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
     rmse = float(np.sqrt(np.mean(residuals**2)))
 
+    standard_errors = np.sqrt(np.clip(np.diag(covariance), 0.0, np.inf))
+    ec50, hill_slope = float(params[2]), float(params[3])
+    ec50_se, hill_se = float(standard_errors[2]), float(standard_errors[3])
+    ec50_ci_low, ec50_ci_high = _ci95(ec50, ec50_se)
+    hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
+
+    finite_ci = all(
+        np.isfinite(value)
+        for value in [ec50_ci_low, ec50_ci_high, hill_ci_low, hill_ci_high]
+    )
+    quality_pass = bool(np.isfinite(r_squared) and r_squared >= min_r_squared and finite_ci)
+    quality_message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria."
+
     return DoseResponseFit(
         endpoint=endpoint,
         success=True,
+        quality_pass=quality_pass,
         n_points=len(x),
-        ec50=float(params[2]),
-        hill_slope=float(params[3]),
+        ec50=ec50,
+        ec50_ci_low=float(ec50_ci_low),
+        ec50_ci_high=float(ec50_ci_high),
+        hill_slope=hill_slope,
+        hill_ci_low=float(hill_ci_low),
+        hill_ci_high=float(hill_ci_high),
         bottom=float(params[0]),
         top=float(params[1]),
         r_squared=float(r_squared),
         rmse=rmse,
-        message="4PL fit converged.",
+        weighted=sigma is not None,
+        message=quality_message,
     )
 
 
@@ -151,6 +217,7 @@ def fit_concentration_series(
     *,
     endpoint_columns: Optional[list[str]] = None,
     min_points: int = 4,
+    min_r_squared: float = 0.0,
 ) -> list[DoseResponseFit]:
     """Fit all requested endpoint mean columns in a concentration summary."""
     if endpoint_columns is None:
@@ -167,12 +234,19 @@ def fit_concentration_series(
         if endpoint_column not in concentration_summary.columns:
             continue
         endpoint = endpoint_column.removesuffix("_mean")
+        sem_column = endpoint_column.removesuffix("_mean") + "_sem"
+        response_sem = None
+        if sem_column in concentration_summary.columns:
+            response_sem = concentration_summary[sem_column].to_numpy(dtype=float)
+
         results.append(
             fit_4pl(
                 concentration_summary["concentration_uM"].to_numpy(dtype=float),
                 concentration_summary[endpoint_column].to_numpy(dtype=float),
+                response_sem=response_sem,
                 endpoint=endpoint,
                 min_points=min_points,
+                min_r_squared=min_r_squared,
             )
         )
     return results
