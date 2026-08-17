@@ -1,10 +1,4 @@
-"""
-Transparent CardioScore engine.
-
-Aggregates multiple electrophysiological endpoints into a continuous risk score
-and a categorical Low / Moderate / High classification. Every contribution is
-inspectable.
-"""
+"""Transparent CardioScore engine."""
 
 from __future__ import annotations
 
@@ -36,6 +30,7 @@ class ScoreResult:
     contributions: list[EndpointContribution] = field(default_factory=list)
     max_concentration_uM: Optional[float] = None
     n_wells: int = 0
+    n_independent_units: int = 0
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +41,7 @@ class ScoreResult:
             "interpretation": self.interpretation,
             "max_concentration_uM": self.max_concentration_uM,
             "n_wells": self.n_wells,
+            "n_independent_units": self.n_independent_units,
             "metadata": self.metadata,
             "contributions": [
                 {
@@ -70,9 +66,7 @@ class CardioScoreEngine:
         moderate_threshold: float = 0.60,
     ):
         if endpoint_config_path is None:
-            endpoint_config_path = (
-                Path(__file__).resolve().parent.parent / "config" / "cipa_endpoints.yaml"
-            )
+            endpoint_config_path = Path(__file__).resolve().parent.parent / "config" / "cipa_endpoints.yaml"
         self.endpoint_config_path = Path(endpoint_config_path)
         self.config = self._load_config()
         self.endpoints = self.config["endpoints"]
@@ -82,15 +76,25 @@ class CardioScoreEngine:
         if not 0.0 <= self.low_threshold < self.moderate_threshold <= 1.0:
             raise ValueError("Risk thresholds must satisfy 0 <= low < moderate <= 1.")
 
+        # Keep the endpoint YAML and pipeline threshold configuration from silently disagreeing.
+        low_max = self.risk_categories["low"].get("max_score")
+        moderate_max = self.risk_categories["moderate"].get("max_score")
+        if low_max is not None and not np.isclose(float(low_max), self.low_threshold):
+            raise ValueError(
+                "risk_categories.low.max_score disagrees with the configured low_threshold."
+            )
+        if moderate_max is not None and not np.isclose(float(moderate_max), self.moderate_threshold):
+            raise ValueError(
+                "risk_categories.moderate.max_score disagrees with the configured moderate_threshold."
+            )
+
     def _load_config(self) -> dict:
         with open(self.endpoint_config_path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
-
         if not isinstance(config.get("endpoints"), dict) or not config["endpoints"]:
             raise ValueError("Endpoint configuration must define a non-empty 'endpoints' mapping.")
         if not isinstance(config.get("risk_categories"), dict):
             raise ValueError("Endpoint configuration must define 'risk_categories'.")
-
         allowed_directions = {"absolute", "increase", "decrease"}
         for name, meta in config["endpoints"].items():
             if not isinstance(meta, dict):
@@ -110,7 +114,6 @@ class CardioScoreEngine:
                     f"Endpoint {name!r} has unsupported direction {direction!r}; "
                     f"expected one of {sorted(allowed_directions)}."
                 )
-
         if sum(float(meta["weight"]) for meta in config["endpoints"].values()) <= 0:
             raise ValueError("Endpoint weights must sum to a positive value.")
         for category in ("low", "moderate", "high"):
@@ -119,14 +122,7 @@ class CardioScoreEngine:
                 raise ValueError(f"risk_categories.{category} must define a label.")
         return config
 
-    def _normalize_effect(
-        self,
-        value: float,
-        direction: str,
-        threshold: float,
-        max_contribution: float = 1.0,
-    ) -> float:
-        """Map a directional endpoint effect to a bounded risk contribution."""
+    def _normalize_effect(self, value: float, direction: str, threshold: float, max_contribution: float = 1.0) -> float:
         if not np.isfinite(value):
             return 0.0
         scale = threshold if threshold > 0 else 1.0
@@ -146,10 +142,10 @@ class CardioScoreEngine:
         endpoint_values: dict[str, float],
         max_concentration_uM: Optional[float] = None,
         n_wells: int = 0,
+        n_independent_units: int = 0,
         dose_response_evidence: Optional[float] = None,
         dose_response_weight: float = 0.0,
     ) -> ScoreResult:
-        """Score a compound with optional non-overlapping exposure-response evidence."""
         if dose_response_weight < 0:
             raise ValueError("dose_response_weight must be non-negative")
         if dose_response_evidence is not None and not 0.0 <= dose_response_evidence <= 1.0:
@@ -160,15 +156,10 @@ class CardioScoreEngine:
         contributions: list[EndpointContribution] = []
         weighted_sum = 0.0
         total_weight = 0.0
-
         for name, meta in self.endpoints.items():
             raw = float(endpoint_values.get(name, 0.0))
             weight = float(meta["weight"])
-            direction = meta["direction"]
-            thresh = float(meta["effect_threshold"])
-            max_c = float(meta.get("max_contribution", 1.0))
-
-            contrib = self._normalize_effect(raw, direction, thresh, max_c)
+            contrib = self._normalize_effect(raw, meta["direction"], float(meta["effect_threshold"]), float(meta.get("max_contribution", 1.0)))
             weighted_sum += weight * contrib
             total_weight += weight
             contributions.append(
@@ -191,24 +182,16 @@ class CardioScoreEngine:
                     raw_value=float(dose_response_evidence),
                     contribution=float(dose_response_evidence),
                     weight=float(dose_response_weight),
-                    description=(
-                        "Exposure-response evidence from quality-passing 4PL fits; "
-                        "fraction of the tested log-concentration range above the fitted EC50."
-                    ),
+                    description="Exposure-response evidence from quality-passing 4PL fits.",
                 )
             )
             metadata["dose_response_evidence"] = float(dose_response_evidence)
             metadata["dose_response_weight"] = float(dose_response_weight)
 
         score = float(np.clip(weighted_sum / total_weight if total_weight > 0 else 0.0, 0.0, 1.0))
-
-        if score < self.low_threshold:
-            cat = self.risk_categories["low"]
-        elif score < self.moderate_threshold:
-            cat = self.risk_categories["moderate"]
-        else:
-            cat = self.risk_categories["high"]
-
+        cat = self.risk_categories["low"] if score < self.low_threshold else (
+            self.risk_categories["moderate"] if score < self.moderate_threshold else self.risk_categories["high"]
+        )
         return ScoreResult(
             compound=compound,
             score=score,
@@ -218,6 +201,7 @@ class CardioScoreEngine:
             contributions=contributions,
             max_concentration_uM=max_concentration_uM,
             n_wells=n_wells,
+            n_independent_units=n_independent_units,
             metadata=metadata,
         )
 
@@ -225,41 +209,24 @@ class CardioScoreEngine:
         if name not in group.columns:
             return 0.0
         meta = self.endpoints[name]
-        direction = meta["direction"]
         values = pd.to_numeric(group[name], errors="coerce").dropna()
         if values.empty:
             return 0.0
-        if direction == "absolute":
+        if meta["direction"] == "absolute":
             return float(values.abs().max())
-        if direction == "increase":
+        if meta["direction"] == "increase":
             return float(values.max())
-        if direction == "decrease":
+        if meta["direction"] == "decrease":
             return float(values.min())
-        raise ValueError(f"Unknown direction: {direction}")
+        raise ValueError(f"Unknown direction: {meta['direction']}")
 
     def score_feature_table(self, df: pd.DataFrame) -> list[ScoreResult]:
+        required = {"compound", *self.endpoints.keys()}
+        missing = sorted(required - set(df.columns))
+        if missing:
+            raise ValueError(f"Feature table is missing scoring endpoint(s): {missing}")
         results = []
-        for compound, group in df.groupby("compound"):
-            endpoint_values = {
-                ep: self._feature_endpoint_value(group, ep)
-                for ep in self.endpoints
-            }
-
-            max_conc = None
-            if "concentration_uM" in group.columns:
-                if "vehicle" in group.columns:
-                    treated = group.loc[~group["vehicle"].astype(bool)]
-                else:
-                    treated = group
-                max_conc = float(treated["concentration_uM"].max()) if len(treated) else None
-            n_wells = int(group["well"].nunique()) if "well" in group.columns else len(group)
-
-            results.append(
-                self.score_compound(
-                    compound=str(compound),
-                    endpoint_values=endpoint_values,
-                    max_concentration_uM=max_conc,
-                    n_wells=n_wells,
-                )
-            )
+        for compound, group in df.groupby("compound", sort=True):
+            endpoint_values = {name: self._feature_endpoint_value(group, name) for name in self.endpoints}
+            results.append(self.score_compound(str(compound), endpoint_values, n_wells=len(group), n_independent_units=len(group)))
         return results
