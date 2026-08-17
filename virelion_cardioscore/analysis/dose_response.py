@@ -3,8 +3,8 @@
 This module provides an explicit four-parameter logistic (4PL) fit for
 concentration-response series. Fitting is optional and should not be
 interpreted as regulatory validation. Series with insufficient concentrations,
-failed optimization, or poor fit quality return structured diagnostics instead
-of silently replacing the replicate-summary heuristic.
+failed optimization, poor fit quality, or biologically trivial responses return
+structured diagnostics instead of silently becoming scoring evidence.
 """
 
 from __future__ import annotations
@@ -47,6 +47,9 @@ class DoseResponseFit:
     monotonicity: Optional[float] = None
     monotonic_direction: Optional[str] = None
     harm_direction_compatible: Optional[bool] = None
+    harmful_effect_magnitude: Optional[float] = None
+    effect_threshold: Optional[float] = None
+    effect_size_pass: Optional[bool] = None
     ec50_boundary_flag: bool = False
     ec50_uncertainty_fold: Optional[float] = None
     message: str = ""
@@ -71,6 +74,9 @@ class DoseResponseFit:
             "monotonicity": self.monotonicity,
             "monotonic_direction": self.monotonic_direction,
             "harm_direction_compatible": self.harm_direction_compatible,
+            "harmful_effect_magnitude": self.harmful_effect_magnitude,
+            "effect_threshold": self.effect_threshold,
+            "effect_size_pass": self.effect_size_pass,
             "ec50_boundary_flag": self.ec50_boundary_flag,
             "ec50_uncertainty_fold": self.ec50_uncertainty_fold,
             "message": self.message,
@@ -119,6 +125,20 @@ def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None) -
     return monotonic_direction == expected
 
 
+def _harmful_effect_magnitude(y: np.ndarray, endpoint: str) -> float | None:
+    """Return observed harmful response magnitude in the endpoint's native units."""
+    direction = _ENDPOINT_HARM_DIRECTIONS.get(endpoint)
+    if direction is None:
+        return None
+    if direction == "absolute":
+        return float(np.max(np.abs(y)))
+    if direction == "increase":
+        return float(max(0.0, np.max(y)))
+    if direction == "decrease":
+        return float(max(0.0, -np.min(y)))
+    raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
+
+
 def fit_4pl(
     concentrations: np.ndarray,
     responses: np.ndarray,
@@ -130,13 +150,18 @@ def fit_4pl(
     min_monotonicity: float = 0.0,
     ec50_boundary_factor: float = 2.0,
     max_ec50_uncertainty_fold: float = 100.0,
+    effect_threshold: float | None = None,
 ) -> DoseResponseFit:
-    """Fit a bounded four-parameter logistic model with diagnostic quality gates.
+    """Fit a bounded 4PL model with direction and effect-size quality gates.
 
-    ``response_sem`` is used as ``sigma`` when supplied. The fit is considered
-    high-quality only when R-squared, monotonicity, harm-direction compatibility,
-    EC50 placement, and EC50 uncertainty all satisfy their configured thresholds.
+    ``response_sem`` is used as ``sigma`` when supplied. When ``effect_threshold``
+    is supplied for a configured endpoint, a fit is scoring-quality only if its
+    observed response contains a harmful effect at least that large in the
+    endpoint's native units.
     """
+    if effect_threshold is not None and effect_threshold < 0:
+        raise ValueError("effect_threshold must be non-negative.")
+
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
     sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
@@ -156,6 +181,7 @@ def fit_4pl(
             success=False,
             quality_pass=False,
             n_points=len(x),
+            effect_threshold=effect_threshold,
             message=f"Need at least {min_points} positive concentrations; got {len(x)}.",
         )
 
@@ -171,6 +197,7 @@ def fit_4pl(
             success=False,
             quality_pass=False,
             n_points=int(np.unique(x).size),
+            effect_threshold=effect_threshold,
             message=f"Need at least {min_points} distinct positive concentrations.",
         )
 
@@ -181,8 +208,18 @@ def fit_4pl(
             success=False,
             quality_pass=False,
             n_points=len(x),
+            effect_threshold=effect_threshold,
+            harmful_effect_magnitude=_harmful_effect_magnitude(y, endpoint),
+            effect_size_pass=False if effect_threshold is not None else None,
             message="Response has negligible dynamic range; 4PL fit is not identifiable.",
         )
+
+    harmful_effect_magnitude = _harmful_effect_magnitude(y, endpoint)
+    effect_size_pass = (
+        None
+        if effect_threshold is None or harmful_effect_magnitude is None
+        else harmful_effect_magnitude >= effect_threshold
+    )
 
     p0 = [float(np.min(y)), float(np.max(y)), float(np.median(x)), 1.0]
     y_min = float(np.min(y))
@@ -209,6 +246,9 @@ def fit_4pl(
             quality_pass=False,
             n_points=len(x),
             weighted=sigma is not None,
+            harmful_effect_magnitude=harmful_effect_magnitude,
+            effect_threshold=effect_threshold,
+            effect_size_pass=effect_size_pass,
             message=f"4PL optimization failed: {exc}",
         )
 
@@ -246,6 +286,7 @@ def fit_4pl(
         and ec50_ci_low > 0
         and monotonicity >= min_monotonicity
         and harm_direction_compatible is not False
+        and (effect_size_pass is not False)
         and not ec50_boundary_flag
         and (
             ec50_uncertainty_fold is not None
@@ -260,6 +301,10 @@ def fit_4pl(
         reasons.append(f"monotonicity below {min_monotonicity:.2f}")
     if harm_direction_compatible is False:
         reasons.append("fitted concentration-response direction is not the configured harmful direction")
+    if effect_size_pass is False:
+        reasons.append(
+            f"harmful response magnitude below configured effect threshold {float(effect_threshold):.4g}"
+        )
     if ec50_boundary_flag:
         reasons.append("EC50 lies near/outside the tested concentration range")
     if ec50_ci_low <= 0:
@@ -294,6 +339,9 @@ def fit_4pl(
         monotonicity=monotonicity,
         monotonic_direction=monotonic_direction,
         harm_direction_compatible=harm_direction_compatible,
+        harmful_effect_magnitude=harmful_effect_magnitude,
+        effect_threshold=effect_threshold,
+        effect_size_pass=effect_size_pass,
         ec50_boundary_flag=ec50_boundary_flag,
         ec50_uncertainty_fold=ec50_uncertainty_fold,
         message=message,
@@ -304,6 +352,8 @@ def fit_concentration_series(
     concentration_summary,
     *,
     endpoint_columns: Optional[list[str]] = None,
+    endpoint_directions: Optional[dict[str, str]] = None,
+    endpoint_thresholds: Optional[dict[str, float]] = None,
     min_points: int = 4,
     min_r_squared: float = 0.0,
     min_monotonicity: float = 0.0,
@@ -319,6 +369,9 @@ def fit_concentration_series(
             "stv_increase_mean",
             "triangulation_proxy_change_mean",
         ]
+
+    if endpoint_directions:
+        _ENDPOINT_HARM_DIRECTIONS.update(endpoint_directions)
 
     results: list[DoseResponseFit] = []
     for endpoint_column in endpoint_columns:
@@ -341,6 +394,7 @@ def fit_concentration_series(
                 min_monotonicity=min_monotonicity,
                 ec50_boundary_factor=ec50_boundary_factor,
                 max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
+                effect_threshold=(endpoint_thresholds or {}).get(endpoint),
             )
         )
     return results
