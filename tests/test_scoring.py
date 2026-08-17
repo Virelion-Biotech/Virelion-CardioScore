@@ -57,11 +57,15 @@ def test_pipeline_end_to_end():
 
     assert len(result.scores) == 3
     assert not result.summary_table.empty
+    assert not result.concentration_table.empty
     assert "cardioscore" in result.summary_table.columns
     assert "risk_class" in result.summary_table.columns
     assert "concentrations_tested" in result.summary_table.columns
     assert "max_effect_pct" in result.summary_table.columns
     assert "effect_detected" in result.summary_table.columns
+    assert {"n_replicates", "fpd_change_pct_mean", "fpd_change_pct_sd"}.issubset(
+        result.concentration_table.columns
+    )
     assert len(result.qc_log) > 0
 
 
@@ -188,3 +192,49 @@ def test_concentration_coverage_warning_is_reported_without_silent_exclusion():
     assert len(result.scores) == 1
     assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
     assert any("configured minimum is 3" in msg for msg in result.qc_log)
+
+
+def test_replicates_are_aggregated_within_concentration():
+    effects = pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "concentration_uM": [1.0, 1.0, 2.0],
+            "well": ["W1", "W2", "W3"],
+            "fpd_change_pct": [10.0, 30.0, 40.0],
+            "beat_rate_change_pct": [0.0, 0.0, 0.0],
+            "amplitude_change_pct": [0.0, 0.0, 0.0],
+            "stv_increase": [0.0, 0.0, 0.0],
+            "triangulation_proxy_change": [0.0, 0.0, 0.0],
+        }
+    )
+
+    concentration_summary = CardioScorePipeline.summarize_concentrations(effects)
+    first = concentration_summary.loc[concentration_summary["concentration_uM"] == 1.0].iloc[0]
+
+    assert first["n_replicates"] == 2
+    assert first["fpd_change_pct_mean"] == pytest.approx(20.0)
+    assert first["fpd_change_pct_sd"] == pytest.approx(np.sqrt(200.0))
+
+
+def test_compound_aggregation_uses_concentration_means_not_single_wells():
+    concentration_summary = pd.DataFrame(
+        {
+            "compound": ["A", "A"],
+            "concentration_uM": [1.0, 2.0],
+            "n_replicates": [2, 2],
+            "fpd_change_pct_mean": [20.0, 35.0],
+            "beat_rate_change_pct_mean": [0.0, 0.0],
+            "amplitude_change_pct_mean": [-5.0, -15.0],
+            "stv_increase_mean": [0.05, 0.10],
+            "triangulation_proxy_change_mean": [0.02, 0.04],
+            "max_effect_pct_mean": [20.0, 35.0],
+        }
+    )
+
+    aggregate = CardioScorePipeline.aggregate_compound_effects(concentration_summary)
+    row = aggregate.iloc[0]
+
+    assert row["fpd_change_pct"] == pytest.approx(35.0)
+    assert row["amplitude_change_pct"] == pytest.approx(-15.0)
+    assert row["n_wells"] == 4
+    assert row["concentrations_tested"] == 2
