@@ -67,6 +67,11 @@ variability:
       - "triangulation_proxy"
     min_controls_per_group: 2
     require_all_groups: true
+    assumptions:
+      # Validation guardrails for the additive correction model.
+      require_treatment_in_all_groups: true
+      min_treated_per_group: 1
+      max_shift_cv_pct: 50.0
 
 concentration_response:
   # Replicates are summarized within each concentration before compound-level scoring.
