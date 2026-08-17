@@ -85,10 +85,23 @@ def test_missing_requested_metadata_is_rejected():
 
 
 def test_batch_alias_supports_experiment_id():
+    # plate_id genuinely has two distinct values (P1, P2) in this fixture,
+    # so aliasing it to experiment_id and grouping by "batch" correctly
+    # produces two groups -- one per distinct experiment_id, each averaging
+    # its own 4 technical wells. (A single-group expectation here would only
+    # make sense if batch_id, which actually is constant at "Batch1", had
+    # been the column renamed instead.)
     effects = _effects().drop(columns=["batch_id"]).rename(columns={"plate_id": "experiment_id"})
     aggregated = aggregate_to_scoring_units(effects, scoring_unit="batch")
-    assert len(aggregated) == 1
-    assert aggregated.iloc[0]["experiment_id"] == "P1"
+
+    assert len(aggregated) == 2
+    assert set(aggregated["experiment_id"]) == {"P1", "P2"}
+
+    by_experiment = aggregated.set_index("experiment_id")
+    assert by_experiment.loc["P1", "n_wells"] == 4
+    assert by_experiment.loc["P1", "fpd_change_pct"] == pytest.approx((10 + 12 + 20 + 22) / 4)
+    assert by_experiment.loc["P2", "n_wells"] == 4
+    assert by_experiment.loc["P2", "fpd_change_pct"] == pytest.approx((30 + 32 + 40 + 42) / 4)
 
 
 def test_invalid_scoring_unit_is_rejected():
