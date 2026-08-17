@@ -47,6 +47,9 @@ concentration_response:
   fit_min_concentrations: 4
   # A fit can be numerically converged yet still be a poor representation of the data.
   fit_min_r_squared: 0.80
+  fit_min_monotonicity: 0.80
+  fit_ec50_boundary_factor: 2.0
+  fit_max_ec50_uncertainty_fold: 100.0
 
 scoring:
   endpoint_config: "cipa_endpoints.yaml"
