@@ -43,6 +43,12 @@ from virelion_cardioscore.analysis.statistics import (
     bootstrap_ci,
     bootstrap_profile_difference,
 )
+from virelion_cardioscore.analysis.stress_tests import (
+    StressTestSpec,
+    conventional_treatment_effect,
+    make_known_effect_dataset,
+    true_treatment_effect,
+)
 from virelion_cardioscore.analysis.variability import (
     VariabilityDiagnostic,
     control_variability,
@@ -68,6 +74,10 @@ __all__ = [
     "HierarchicalPipelineResult",
     "compare_effect_estimates",
     "summarize_effect_concordance",
+    "StressTestSpec",
+    "make_known_effect_dataset",
+    "conventional_treatment_effect",
+    "true_treatment_effect",
     "CorrectionDiagnostic",
     "apply_control_anchor_correction",
     "NormalizationAssumptionCheck",
