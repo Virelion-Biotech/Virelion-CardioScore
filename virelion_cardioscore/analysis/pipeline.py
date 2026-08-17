@@ -17,6 +17,7 @@ import yaml
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
 from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
+from virelion_cardioscore.analysis.hierarchy import aggregate_to_scoring_units
 from virelion_cardioscore.analysis.statistics import bootstrap_ci
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 
@@ -125,6 +126,12 @@ class CardioScorePipeline:
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate vehicle-normalized effects for each treated well."""
         records = []
+        optional_metadata = [
+            "biological_replicate",
+            "batch_id",
+            "experiment_id",
+            "plate_id",
+        ]
         for compound, group in df.groupby("compound"):
             vehicle = group[group["vehicle"] == True]  # noqa: E712
             treated = group[group["vehicle"] == False]
@@ -163,26 +170,48 @@ class CardioScorePipeline:
                 ])
                 max_effect_pct = max(finite_effects) if finite_effects else np.nan
 
-                records.append(
-                    {
-                        "compound": compound,
-                        "concentration_uM": row["concentration_uM"],
-                        "well": row["well"],
-                        "vehicle": False,
-                        "fpd_ms": row["fpd_ms"],
-                        "beat_rate_bpm": row["beat_rate_bpm"],
-                        "amplitude_uv": row["amplitude_uv"],
-                        "stv": row["stv"],
-                        "triangulation_proxy": row["triangulation_proxy"],
-                        "fpd_change_pct": fpd_change,
-                        "beat_rate_change_pct": rate_change,
-                        "amplitude_change_pct": amp_change,
-                        "stv_increase": stv_increase,
-                        "triangulation_proxy_change": tri_change,
-                        "max_effect_pct": max_effect_pct,
-                    }
-                )
+                record = {
+                    "compound": compound,
+                    "concentration_uM": row["concentration_uM"],
+                    "well": row["well"],
+                    "vehicle": False,
+                    "fpd_ms": row["fpd_ms"],
+                    "beat_rate_bpm": row["beat_rate_bpm"],
+                    "amplitude_uv": row["amplitude_uv"],
+                    "stv": row["stv"],
+                    "triangulation_proxy": row["triangulation_proxy"],
+                    "fpd_change_pct": fpd_change,
+                    "beat_rate_change_pct": rate_change,
+                    "amplitude_change_pct": amp_change,
+                    "stv_increase": stv_increase,
+                    "triangulation_proxy_change": tri_change,
+                    "max_effect_pct": max_effect_pct,
+                }
+                for column in optional_metadata:
+                    if column in row.index:
+                        record[column] = row[column]
+                records.append(record)
         return pd.DataFrame(records)
+
+    def prepare_scoring_effects(self, effects: pd.DataFrame) -> pd.DataFrame:
+        """Apply the configured experimental-unit policy before inference/scoring."""
+        unit_cfg = self.config.get("experimental_units", {})
+        scoring_unit = unit_cfg.get("scoring_unit", "well")
+        try:
+            prepared = aggregate_to_scoring_units(effects, scoring_unit=scoring_unit)
+        except ValueError as exc:
+            raise ValueError(
+                f"Experimental-unit configuration is invalid: {exc}"
+            ) from exc
+
+        if scoring_unit != "well":
+            technical_wells = int(effects["well"].nunique()) if "well" in effects else len(effects)
+            scoring_units = int(prepared["well"].nunique()) if "well" in prepared else len(prepared)
+            self.qc_log.append(
+                f"Experimental units: scoring at {scoring_unit} level; "
+                f"collapsed {technical_wells} technical wells into {scoring_units} independent units."
+            )
+        return prepared
 
     @staticmethod
     def summarize_concentrations(
@@ -212,6 +241,9 @@ class CardioScorePipeline:
                 "compound": compound,
                 "concentration_uM": concentration,
                 "n_replicates": int(group["well"].nunique()),
+                "n_technical_wells": int(group.get("n_wells", group["well"]).sum())
+                if "n_wells" in group.columns
+                else int(group["well"].nunique()),
             }
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
@@ -259,6 +291,9 @@ class CardioScorePipeline:
                 "compound": compound,
                 "concentration_uM": concentration,
                 "n_replicates": int(group["well"].nunique()),
+                "n_technical_wells": int(group.get("n_wells", group["well"]).sum())
+                if "n_wells" in group.columns
+                else int(group["well"].nunique()),
             }
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
@@ -316,7 +351,8 @@ class CardioScorePipeline:
                     "stv_increase": max_positive("stv_increase_mean"),
                     "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
                     "max_concentration_uM": float(group["concentration_uM"].max()),
-                    "n_wells": int(group["n_replicates"].sum()),
+                    "n_wells": int(group["n_technical_wells"].sum()) if "n_technical_wells" in group else int(group["n_replicates"].sum()),
+                    "n_independent_units": int(group["n_replicates"].sum()),
                     "concentrations_tested": int(group["concentration_uM"].nunique()),
                     "max_effect_pct": float(group["max_effect_pct_mean"].max()),
                 }
@@ -398,6 +434,7 @@ class CardioScorePipeline:
 
         df = self.apply_qc(df)
         effects = self.compute_effects(df)
+        analysis_effects = self.prepare_scoring_effects(effects)
 
         concentration_cfg = self.config.get("concentration_response", {})
         replicate_aggregation = concentration_cfg.get("replicate_aggregation", "mean")
@@ -405,15 +442,15 @@ class CardioScorePipeline:
             "concentration_aggregation", "max_absolute_effect"
         )
         concentration_summary = self.summarize_concentrations(
-            effects,
+            analysis_effects,
             replicate_aggregation=replicate_aggregation,
         )
 
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
-        if inference_cfg.get("enabled", False) and not effects.empty:
+        if inference_cfg.get("enabled", False) and not analysis_effects.empty:
             inference_table = self.bootstrap_concentration_inference(
-                effects,
+                analysis_effects,
                 n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)),
                 confidence=float(inference_cfg.get("confidence", 0.95)),
                 seed=int(inference_cfg.get("seed", 42)),
@@ -491,6 +528,7 @@ class CardioScorePipeline:
                     "risk_class": s.risk_class,
                     "max_concentration_uM": s.max_concentration_uM,
                     "n_wells": s.n_wells,
+                    "n_independent_units": int(agg_row["n_independent_units"]),
                     "concentrations_tested": int(agg_row["concentrations_tested"]),
                     "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                     "effect_detected": bool(agg_row["effect_detected"]),

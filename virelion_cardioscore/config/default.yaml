@@ -37,7 +37,8 @@ features:
   window_s: 60.0
 
 experimental_units:
-  # Optional metadata columns recognized by the hierarchy layer.
+  # Explicit analysis unit. Higher-level choices require the corresponding metadata.
+  scoring_unit: "well"
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
   plate_unit_column: "plate_id"
