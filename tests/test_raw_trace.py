@@ -56,7 +56,10 @@ def test_validate_raw_trace_schema_nan_values():
             "voltage_uv": [1.5],
         }
     )
-    with pytest.raises(RawTraceSchemaError, match="missing value"):
+    # NaN fails the finite-value check (which now runs before the dedicated
+    # missing-value check, since NaN is also non-finite), so that's the
+    # message that actually surfaces here.
+    with pytest.raises(RawTraceSchemaError, match="finite values"):
         validate_raw_trace_schema(df)
 
 
