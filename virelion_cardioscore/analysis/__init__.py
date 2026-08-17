@@ -7,6 +7,13 @@ from virelion_cardioscore.analysis.dose_response import (
     fit_concentration_series,
     four_parameter_logistic,
 )
+from virelion_cardioscore.analysis.hierarchy import (
+    HierarchySpec,
+    count_independent_units,
+    detect_hierarchy,
+    hierarchy_columns,
+    summarize_experimental_units,
+)
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline, PipelineResult
 from virelion_cardioscore.analysis.statistics import (
     BootstrapCI,
@@ -22,6 +29,11 @@ __all__ = [
     "fit_4pl",
     "fit_concentration_series",
     "four_parameter_logistic",
+    "HierarchySpec",
+    "detect_hierarchy",
+    "hierarchy_columns",
+    "summarize_experimental_units",
+    "count_independent_units",
     "BootstrapCI",
     "ProfileDifference",
     "bootstrap_ci",

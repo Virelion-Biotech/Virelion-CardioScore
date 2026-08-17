@@ -9,6 +9,12 @@
 - Replicate-level bootstrap confidence intervals for concentration-specific endpoint effects.
 - Matched concentration-profile bootstrap comparisons for exploratory between-group inference.
 - Opt-in pipeline inference output and JSON serialization; inference does not alter CardioScore.
+- Hierarchy-aware experimental-unit summaries recognizing optional biological replicate, batch, plate, and experiment metadata.
+
+### Methodology
+- Wells remain the default analysis unit when no higher-level metadata are available.
+- When biological-replicate metadata are supplied, technical wells are summarized within biological units before higher-level inference.
+- The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
 ## [0.1.1] – 2026-08-16
 
