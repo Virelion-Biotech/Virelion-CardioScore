@@ -23,6 +23,7 @@
 - The default vehicle scope remains `compound`, preserving historical behavior unless a study explicitly uses shared plate/batch/global controls.
 - Plate/batch variability diagnostics are QC/inference outputs only and do not alter CardioScore.
 - The variability layer does not claim a mixed-effects model; it identifies control instability that should be addressed before confirmatory inference.
+- Variability diagnostics are now exposed through `PipelineResult` and JSON as `variability` and `treatment_separation` tables.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
