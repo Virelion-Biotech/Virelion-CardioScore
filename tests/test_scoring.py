@@ -1,4 +1,4 @@
-"""Regression tests for CardioScore scoring, pipeline, and I/O contracts."""
+"""Regression tests for CardioScore scoring, pipeline, I/O, and dose-response contracts."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine
+from virelion_cardioscore.analysis.dose_response import fit_4pl
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 from virelion_cardioscore.features.endpoints import extract_well_features
 from virelion_cardioscore.io.raw_trace import (
@@ -58,6 +59,7 @@ def test_pipeline_end_to_end():
     assert len(result.scores) == 3
     assert not result.summary_table.empty
     assert not result.concentration_table.empty
+    assert result.dose_response_fits == {}
     assert "cardioscore" in result.summary_table.columns
     assert "risk_class" in result.summary_table.columns
     assert "concentrations_tested" in result.summary_table.columns
@@ -272,3 +274,33 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
     assert row["amplitude_change_pct"] == pytest.approx(-15.0)
     assert row["n_wells"] == 4
     assert row["concentrations_tested"] == 2
+
+
+def test_4pl_fit_recovers_known_curve():
+    concentrations = np.logspace(-1, 2, 7)
+    expected = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
+    result = fit_4pl(concentrations, expected, endpoint="fpd_change_pct")
+
+    assert result.success
+    assert result.ec50 == pytest.approx(10.0, rel=1e-2)
+    assert result.hill_slope == pytest.approx(1.5, rel=1e-2)
+    assert result.r_squared > 0.999
+
+
+def test_4pl_fit_rejects_insufficient_concentrations():
+    result = fit_4pl(np.array([1.0, 2.0, 4.0]), np.array([1.0, 3.0, 8.0]))
+    assert not result.success
+    assert "at least 4" in result.message
+
+
+def test_pipeline_can_optionally_fit_dose_response():
+    dataset = load_synthetic_dataset(n_compounds=2, n_concentrations=6, seed=12)
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["concentration_response"]["fit_curve"] = True
+    pipeline.config["concentration_response"]["fit_min_concentrations"] = 4
+
+    result = pipeline.run(dataset)
+
+    assert set(result.dose_response_fits) == {"Compound_A", "Compound_B"}
+    assert all(len(fits) == 5 for fits in result.dose_response_fits.values())
+    assert "dose_response_fit_endpoints" in result.summary_table.columns
