@@ -55,7 +55,7 @@ def _group_control_stats(
     group_column: str,
     endpoint: str,
 ) -> tuple[pd.Series, float | None]:
-    controls = df[df["vehicle"] == True]
+    controls = df[df["vehicle"]]
     values = pd.to_numeric(controls[endpoint], errors="coerce")
     group_means = values.groupby(controls[group_column], dropna=False).mean()
     overall_mean = float(values.mean()) if values.notna().any() else np.nan
@@ -92,17 +92,16 @@ def validate_control_anchor_correction(
     before_group_means, before_cv = _group_control_stats(df, group_column, endpoint)
     after_group_means, after_cv = _group_control_stats(corrected, group_column, endpoint)
 
-    before_effects = df[df["vehicle"] == False].copy()
-    after_effects = corrected[corrected["vehicle"] == False].copy()
+    before_effects = df[~df["vehicle"]].copy()
+    after_effects = corrected[~corrected["vehicle"]].copy()
 
-    def treatment_effects(frame: pd.DataFrame) -> pd.Series:
-        controls = df[df["vehicle"] == True] if frame is before_effects else corrected[corrected["vehicle"] == True]
+    def treatment_effects(frame: pd.DataFrame, controls: pd.DataFrame) -> pd.Series:
         control_means = controls.groupby(group_column)[endpoint].mean()
         treated_means = frame.groupby(group_column)[endpoint].mean()
         return treated_means.subtract(control_means, fill_value=np.nan).dropna()
 
-    before_effects_by_group = treatment_effects(before_effects)
-    after_effects_by_group = treatment_effects(after_effects)
+    before_effects_by_group = treatment_effects(before_effects, df[df["vehicle"]])
+    after_effects_by_group = treatment_effects(after_effects, corrected[corrected["vehicle"]])
     aligned = pd.concat(
         [before_effects_by_group.rename("before"), after_effects_by_group.rename("after")],
         axis=1,
