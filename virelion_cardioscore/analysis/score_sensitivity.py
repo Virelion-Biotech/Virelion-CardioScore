@@ -100,10 +100,10 @@ def summarize_weight_sensitivity(
     """Summarize score range and risk-class instability by compound.
 
     A compound is ``stable`` when no sensitivity perturbation changes its risk
-    class. It is ``borderline`` when the change rate is positive but below the
-    configured unstable threshold, and ``unstable`` when the change rate meets
-    or exceeds that threshold. The thresholds are analysis labels, not validated
-    scientific cutoffs.
+    class. It is ``borderline`` when the change rate is positive and at or below
+    the configured unstable threshold, and ``unstable`` when the change rate is
+    strictly above that threshold. The thresholds are analysis labels, not
+    validated scientific cutoffs.
     """
     required = {
         "compound",
@@ -137,7 +137,7 @@ def summarize_weight_sensitivity(
     summary["sensitivity_class"] = "borderline"
     summary.loc[summary["risk_class_change_rate"] == 0.0, "sensitivity_class"] = "stable"
     summary.loc[
-        summary["risk_class_change_rate"] >= unstable_change_rate,
+        summary["risk_class_change_rate"] > unstable_change_rate,
         "sensitivity_class",
     ] = "unstable"
     return summary
