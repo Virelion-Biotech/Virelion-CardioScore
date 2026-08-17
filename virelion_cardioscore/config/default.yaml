@@ -36,6 +36,13 @@ features:
   compute_conduction_proxy: false
   window_s: 60.0
 
+experimental_units:
+  # Optional metadata columns recognized by the hierarchy layer.
+  biological_unit_column: "biological_replicate"
+  batch_unit_column: "batch_id"
+  plate_unit_column: "plate_id"
+  fall_back_to_well: true
+
 concentration_response:
   # Replicates are summarized within each concentration before compound-level scoring.
   replicate_aggregation: "mean"
