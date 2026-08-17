@@ -152,26 +152,38 @@ def standardized_treatment_separation(
         raise ValueError(f"Treatment separation grouping column {group_column!r} contains missing or blank identifiers.")
 
     rows: list[dict] = []
-    for keys, group in effects.groupby(["compound", "concentration_uM", group_column], dropna=False, sort=True):
-        compound, concentration, group_value = keys
-        controls = pd.to_numeric(group.loc[group["vehicle"].astype(bool), endpoint], errors="coerce").dropna()
-        treated = pd.to_numeric(group.loc[~group["vehicle"].astype(bool), endpoint], errors="coerce").dropna()
-        if len(controls) < 2 or treated.empty:
-            separation = np.nan
-        else:
-            control_mean = float(controls.mean())
-            treated_mean = float(treated.mean())
-            control_sd = float(controls.std(ddof=1))
-            separation = abs(treated_mean - control_mean) / control_sd if control_sd > 0 else np.nan
-        rows.append(
-            {
-                "compound": compound,
-                "concentration_uM": concentration,
-                group_column: group_value,
-                "endpoint": endpoint,
-                "n_controls": int(len(controls)),
-                "n_treated": int(len(treated)),
-                "standardized_separation": separation,
-            }
-        )
+    # Group by (compound, group_column) only -- NOT concentration_uM.
+    # Vehicle wells sit at concentration_uM == 0 while treated wells sit at
+    # nonzero concentrations, so including concentration in the groupby key
+    # would silo controls and treated wells into disjoint groups and no
+    # comparison could ever be made. Instead: gather each group's controls
+    # once, then compare every distinct treated concentration within that
+    # group against that shared control set.
+    for keys, group in effects.groupby(["compound", group_column], dropna=False, sort=True):
+        compound, group_value = keys
+        controls = pd.to_numeric(
+            group.loc[group["vehicle"].astype(bool), endpoint], errors="coerce"
+        ).dropna()
+        control_mean = float(controls.mean()) if len(controls) else np.nan
+        control_sd = float(controls.std(ddof=1)) if len(controls) > 1 else np.nan
+
+        treated_group = group.loc[~group["vehicle"].astype(bool)]
+        for concentration, conc_group in treated_group.groupby("concentration_uM", dropna=False, sort=True):
+            treated = pd.to_numeric(conc_group[endpoint], errors="coerce").dropna()
+            if len(controls) < 2 or treated.empty:
+                separation = np.nan
+            else:
+                treated_mean = float(treated.mean())
+                separation = abs(treated_mean - control_mean) / control_sd if control_sd > 0 else np.nan
+            rows.append(
+                {
+                    "compound": compound,
+                    "concentration_uM": concentration,
+                    group_column: group_value,
+                    "endpoint": endpoint,
+                    "n_controls": int(len(controls)),
+                    "n_treated": int(len(treated)),
+                    "standardized_separation": separation,
+                }
+            )
     return pd.DataFrame(rows)
