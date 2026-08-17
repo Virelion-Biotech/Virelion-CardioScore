@@ -32,10 +32,15 @@ Default synthetic profiles and example configs emphasize MCM-style series; small
 - Signal quality control (noise, electrodes, beat detection rate) with audit log
 - Field-potential endpoints: FPD, beat rate, amplitude, STV, triangulation proxies
 - Vehicle-normalized effects and concentration-aware aggregation
+- Explicit technical-well vs independent-unit accounting
+- Optional bootstrap uncertainty, hierarchical mixed-effects inference, and dose-response diagnostics
+- Concentration-driver provenance and scoring-weight sensitivity diagnostics
 - Transparent weighted CardioScore → Low / Moderate / High
+- Reproducible reference benchmark runner (`cardioscore benchmark`)
 - CLI (`cardioscore demo` / `cardioscore run`) and Python API
-- Synthetic MEA generator (MCM-oriented profiles)
-- **Browser web app** under [`web/`](web/) — full client-side demo: modality presets, weight editing, CSV feature upload, scoring, export
+- **Browser web app** under [`web/`](web/) for a client-side **well-level** demo
+
+> The browser app intentionally implements the validated Python **well-level concentration aggregation contract** only. Biological-unit hierarchy, mixed-effects inference, and 4PL dose-response evidence remain Python-side features.
 
 ---
 
@@ -44,7 +49,7 @@ Default synthetic profiles and example configs emphasize MCM-style series; small
 ```bash
 git clone https://github.com/Virelion-Biotech/Virelion-CardioScore.git
 cd Virelion-CardioScore
-pip install -e ".[dev]"
+pip install -e ".[dev,mixed]"
 ```
 
 Requires Python 3.10+.
@@ -59,6 +64,22 @@ cardioscore demo
 
 Writes `summary.csv`, `scores.json`, and `report.html` under `./outputs/`.
 
+### Run a real feature table
+
+```bash
+cardioscore run --config path/to/pipeline.yaml --features path/to/features.csv
+```
+
+### Reference benchmark
+
+Create a YAML/JSON manifest containing independently reviewed reference scores and run:
+
+```bash
+cardioscore benchmark --manifest benchmarks/reference_manifest.yaml
+```
+
+The benchmark fails when an observed score exceeds its configured tolerance or its risk class differs from the locked reference. Do not create reference scores from the same implementation being tested.
+
 ### Web app (browser)
 
 Open [`web/index.html`](web/index.html) locally, or host the `web/` folder (GitHub Pages / Netlify).
@@ -71,8 +92,8 @@ No server required: synthetic generation, weight controls, optional CSV upload, 
 | CardioScore | Class    | Typical use |
 |-------------|----------|-------------|
 | < 0.30      | Low      | Minimal EP liability signals at tested concentrations |
-| 0.30–0.60   | Moderate | Clear concentration-dependent changes; recommend follow-up |
-| > 0.60      | High     | Strong multi-endpoint signals; prioritize additional evaluation |
+| 0.30–<0.60  | Moderate | Clear concentration-dependent changes; recommend follow-up |
+| ≥ 0.60      | High     | Strong multi-endpoint signals; prioritize additional evaluation |
 
 ## License
 
