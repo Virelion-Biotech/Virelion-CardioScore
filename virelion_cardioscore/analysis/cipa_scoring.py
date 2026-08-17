@@ -189,9 +189,12 @@ class CardioScoreEngine:
             metadata["dose_response_weight"] = float(dose_response_weight)
 
         score = float(np.clip(weighted_sum / total_weight if total_weight > 0 else 0.0, 0.0, 1.0))
-        cat = self.risk_categories["low"] if score < self.low_threshold else (
-            self.risk_categories["moderate"] if score < self.moderate_threshold else self.risk_categories["high"]
-        )
+        if score <= self.low_threshold:
+            cat = self.risk_categories["low"]
+        elif score <= self.moderate_threshold:
+            cat = self.risk_categories["moderate"]
+        else:
+            cat = self.risk_categories["high"]
         return ScoreResult(
             compound=compound,
             score=score,

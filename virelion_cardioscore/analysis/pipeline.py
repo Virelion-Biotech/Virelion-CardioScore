@@ -111,16 +111,26 @@ class CardioScorePipeline:
         )
         if reject_irregular:
             if irregularity_threshold is None:
-                self.qc_log.append("Warning: arrhythmia-proxy rejection is enabled without a threshold; no STV rejection was applied.")
+                self.qc_log.append(
+                    "Warning: arrhythmia-proxy rejection is enabled, but "
+                    "quality_control.arrhythmia_proxy_max_stv is not configured; "
+                    "no irregularity rejection was applied. STV is treated only "
+                    "as an optional irregularity proxy, not an arrhythmia detector."
+                )
             else:
                 mask &= df["stv"] <= float(irregularity_threshold)
         rejected = df[~mask]
         kept = df[mask].copy()
-        if qc.get("log_rejections", True):
+        if qc.get("log_rejections", True) and len(rejected) > 0:
             for _, row in rejected.iterrows():
+                details = (
+                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, "
+                    f"bdr={row['beat_detection_rate']:.2f}"
+                )
+                if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
+                    details += f", stv={row['stv']:.3f}"
                 self.qc_log.append(
-                    f"Rejected {row['compound']} {row['well']} "
-                    f"(noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, bdr={row['beat_detection_rate']:.2f})"
+                    f"Rejected {row['compound']} {row['well']} ({details})"
                 )
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
@@ -418,13 +428,34 @@ class CardioScorePipeline:
         scoring_effects = self.prepare_scoring_effects(effects)
         concentration_cfg = self.config.get("concentration_response", {})
         concentration_summary = self.summarize_concentrations(scoring_effects, replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"))
+        min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
+        for compound, group in concentration_summary.groupby("compound"):
+            n_concentrations = int(group["concentration_uM"].nunique())
+            if n_concentrations < min_concentrations:
+                self.qc_log.append(
+                    f"Warning: {compound} has {n_concentrations} tested concentration(s); "
+                    f"configured minimum is {min_concentrations}. No concentrations were silently excluded."
+                )
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
         if inference_cfg.get("enabled", False) and not scoring_effects.empty:
             inference_table = self.bootstrap_concentration_inference(scoring_effects, n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)), confidence=float(inference_cfg.get("confidence", 0.95)), seed=int(inference_cfg.get("seed", 42)))
         dose_response_fits = self.fit_dose_response(concentration_summary)
+        scoring_endpoint_directions = {
+            name: str(meta["direction"])
+            for name, meta in self.engine.endpoints.items()
+        }
         dose_response_weight = float(self.config.get("scoring", {}).get("dose_response_weight", 0.0))
-        agg = self.aggregate_compound_effects(concentration_summary)
+        agg = self.aggregate_compound_effects(
+            concentration_summary,
+            endpoint_directions={
+                "fpd_change_pct": scoring_endpoint_directions.get("fpd_change_pct", "absolute"),
+                "beat_rate_change_pct": scoring_endpoint_directions.get("beat_rate_change_pct", "absolute"),
+                "amplitude_change_pct": scoring_endpoint_directions.get("amplitude_change_pct", "decrease"),
+                "stv_increase": scoring_endpoint_directions.get("stv_increase", "increase"),
+                "triangulation_proxy_change": scoring_endpoint_directions.get("triangulation_proxy_change", "increase"),
+            },
+        )
         if not agg.empty and not scoring_effects.empty:
             compound_unit_counts = scoring_effects.groupby("compound", sort=False)["well"].nunique()
             agg["n_independent_units"] = agg["compound"].map(compound_unit_counts).fillna(0).astype(int)

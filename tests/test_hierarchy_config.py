@@ -36,7 +36,7 @@ def test_configured_biological_unit_column_is_used():
 
 
 def test_missing_configured_unit_column_is_rejected():
-    with pytest.raises(ValueError, match="requires column 'bio_id'"):
+    with pytest.raises(ValueError, match="requires column 'not_present'"):
         aggregate_to_scoring_units(
             _effects_with_custom_unit_column(),
             scoring_unit="biological_replicate",
