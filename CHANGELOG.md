@@ -12,6 +12,7 @@
 - Hierarchy-aware experimental-unit summaries recognizing optional biological replicate, batch, plate, and experiment metadata.
 - Explicit scoring-unit policy API supporting `well`, `biological_replicate`, `batch`, and `plate` with validation of required metadata.
 - Explicit vehicle-control normalization scope supporting `compound`, `plate`, `batch`, `biological_replicate`, and `global` controls.
+- Optional plate/batch control-stability diagnostics with control CV, between-group SD, and exploratory treatment-to-control separation.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -20,6 +21,8 @@
 - Raw well-level effects remain preserved in `PipelineResult.feature_table` for auditability.
 - Vehicle normalization is now explicitly scoped; missing matching controls are not silently substituted.
 - The default vehicle scope remains `compound`, preserving historical behavior unless a study explicitly uses shared plate/batch/global controls.
+- Plate/batch variability diagnostics are QC/inference outputs only and do not alter CardioScore.
+- The variability layer does not claim a mixed-effects model; it identifies control instability that should be addressed before confirmatory inference.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
