@@ -1,8 +1,8 @@
 """
 End-to-end CardioScore pipeline.
 
-Orchestrates quality control, vehicle normalization, concentration-response
-summaries, scoring, and report generation.
+Orchestrates quality control, vehicle normalization, replicate-aware
+concentration summaries, scoring, and report generation.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ class PipelineResult:
     scores: list[ScoreResult]
     feature_table: pd.DataFrame
     summary_table: pd.DataFrame
+    concentration_table: pd.DataFrame = field(default_factory=pd.DataFrame)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
 
@@ -36,9 +37,11 @@ class PipelineResult:
 
     def to_json(self, path: str | Path) -> None:
         import json
+
         payload = {
             "scores": [s.to_dict() for s in self.scores],
             "summary": self.summary_table.to_dict(orient="records"),
+            "concentration_summary": self.concentration_table.to_dict(orient="records"),
         }
         with open(path, "w") as f:
             json.dump(payload, f, indent=2)
@@ -111,6 +114,7 @@ class CardioScorePipeline:
         return kept
 
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate vehicle-normalized effects for each treated well."""
         records = []
         for compound, group in df.groupby("compound"):
             vehicle = group[group["vehicle"] == True]  # noqa: E712
@@ -126,19 +130,29 @@ class CardioScorePipeline:
             v_stv = vehicle["stv"].mean()
             v_tri = vehicle["triangulation_proxy"].mean()
 
+            if v_fpd == 0 or v_rate == 0 or v_amp == 0:
+                self.qc_log.append(
+                    f"Warning: zero vehicle baseline encountered for {compound}; "
+                    "affected percentage effects were not calculated."
+                )
+
             for _, row in treated.iterrows():
-                fpd_change = 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd
-                rate_change = 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate
-                amp_change = 100.0 * (row["amplitude_uv"] - v_amp) / v_amp
+                fpd_change = np.nan if v_fpd == 0 else 100.0 * (row["fpd_ms"] - v_fpd) / v_fpd
+                rate_change = np.nan if v_rate == 0 else 100.0 * (row["beat_rate_bpm"] - v_rate) / v_rate
+                amp_change = np.nan if v_amp == 0 else 100.0 * (row["amplitude_uv"] - v_amp) / v_amp
                 stv_increase = (row["stv"] - v_stv) / max(v_stv, 1e-6)
                 tri_change = (row["triangulation_proxy"] - v_tri) / max(v_tri, 1e-6)
-                max_effect_pct = max(
-                    abs(fpd_change),
-                    abs(rate_change),
-                    abs(amp_change),
+
+                finite_effects = [
+                    abs(x)
+                    for x in [fpd_change, rate_change, amp_change]
+                    if pd.notna(x)
+                ]
+                finite_effects.extend([
                     abs(stv_increase) * 100.0,
                     abs(tri_change) * 100.0,
-                )
+                ])
+                max_effect_pct = max(finite_effects) if finite_effects else np.nan
 
                 records.append(
                     {
@@ -161,6 +175,82 @@ class CardioScorePipeline:
                 )
         return pd.DataFrame(records)
 
+    @staticmethod
+    def summarize_concentrations(effects: pd.DataFrame) -> pd.DataFrame:
+        """Average biological/technical replicates within each compound-concentration."""
+        if effects.empty:
+            return pd.DataFrame()
+
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+        ]
+        grouped = effects.groupby(["compound", "concentration_uM"], sort=True)
+        rows = []
+        for (compound, concentration), group in grouped:
+            row = {
+                "compound": compound,
+                "concentration_uM": concentration,
+                "n_replicates": int(group["well"].nunique()),
+            }
+            for endpoint in endpoint_columns:
+                values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
+                row[f"{endpoint}_mean"] = float(values.mean()) if len(values) else np.nan
+                row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else np.nan
+                row[f"{endpoint}_sem"] = (
+                    float(values.std(ddof=1) / np.sqrt(len(values))) if len(values) > 1 else np.nan
+                )
+            row["max_effect_pct_mean"] = max(
+                [
+                    abs(row["fpd_change_pct_mean"]) if pd.notna(row["fpd_change_pct_mean"]) else 0.0,
+                    abs(row["beat_rate_change_pct_mean"]) if pd.notna(row["beat_rate_change_pct_mean"]) else 0.0,
+                    abs(row["amplitude_change_pct_mean"]) if pd.notna(row["amplitude_change_pct_mean"]) else 0.0,
+                    abs(row["stv_increase_mean"]) * 100.0 if pd.notna(row["stv_increase_mean"]) else 0.0,
+                    abs(row["triangulation_proxy_change_mean"]) * 100.0 if pd.notna(row["triangulation_proxy_change_mean"]) else 0.0,
+                ]
+            )
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def aggregate_compound_effects(concentration_summary: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate concentration-level means into compound-level scoring inputs."""
+        if concentration_summary.empty:
+            return pd.DataFrame()
+
+        rows = []
+        for compound, group in concentration_summary.groupby("compound"):
+            def max_abs(column: str) -> float:
+                values = pd.to_numeric(group[column], errors="coerce").dropna()
+                return float(values.abs().max()) if len(values) else 0.0
+
+            def max_positive(column: str) -> float:
+                values = pd.to_numeric(group[column], errors="coerce").dropna()
+                return float(values.max()) if len(values) else 0.0
+
+            def min_value(column: str) -> float:
+                values = pd.to_numeric(group[column], errors="coerce").dropna()
+                return float(values.min()) if len(values) else 0.0
+
+            rows.append(
+                {
+                    "compound": compound,
+                    "fpd_change_pct": max_abs("fpd_change_pct_mean"),
+                    "beat_rate_change_pct": max_abs("beat_rate_change_pct_mean"),
+                    "amplitude_change_pct": min_value("amplitude_change_pct_mean"),
+                    "stv_increase": max_positive("stv_increase_mean"),
+                    "triangulation_proxy": max_positive("triangulation_proxy_change_mean"),
+                    "max_concentration_uM": float(group["concentration_uM"].max()),
+                    "n_wells": int(group["n_replicates"].sum()),
+                    "concentrations_tested": int(group["concentration_uM"].nunique()),
+                    "max_effect_pct": float(group["max_effect_pct_mean"].max()),
+                }
+            )
+        return pd.DataFrame(rows)
+
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         if isinstance(dataset, SyntheticMEADataset):
@@ -170,13 +260,14 @@ class CardioScorePipeline:
 
         df = self.apply_qc(df)
         effects = self.compute_effects(df)
+        concentration_summary = self.summarize_concentrations(effects)
 
         concentration_cfg = self.config.get("concentration_response", {})
         min_concentrations = int(concentration_cfg.get("min_concentrations", 1))
         effect_threshold_pct = float(concentration_cfg.get("effect_threshold_pct", 0.0))
 
-        if not effects.empty:
-            for compound, group in effects.groupby("compound"):
+        if not concentration_summary.empty:
+            for compound, group in concentration_summary.groupby("compound"):
                 n_concentrations = group["concentration_uM"].nunique()
                 if n_concentrations < min_concentrations:
                     self.qc_log.append(
@@ -185,24 +276,9 @@ class CardioScorePipeline:
                         "but concentration-response coverage is limited."
                     )
 
-        agg_rows = []
-        for compound, group in effects.groupby("compound"):
-            agg_rows.append(
-                {
-                    "compound": compound,
-                    "fpd_change_pct": group["fpd_change_pct"].abs().max(),
-                    "beat_rate_change_pct": group["beat_rate_change_pct"].abs().max(),
-                    "amplitude_change_pct": group["amplitude_change_pct"].min(),
-                    "stv_increase": group["stv_increase"].max(),
-                    "triangulation_proxy": group["triangulation_proxy_change"].max(),
-                    "max_concentration_uM": group["concentration_uM"].max(),
-                    "n_wells": group["well"].nunique(),
-                    "concentrations_tested": group["concentration_uM"].nunique(),
-                    "max_effect_pct": group["max_effect_pct"].max(),
-                    "effect_detected": group["max_effect_pct"].max() >= effect_threshold_pct,
-                }
-            )
-        agg = pd.DataFrame(agg_rows)
+        agg = self.aggregate_compound_effects(concentration_summary)
+        if not agg.empty:
+            agg["effect_detected"] = agg["max_effect_pct"] >= effect_threshold_pct
 
         scores = []
         for _, row in agg.iterrows():
@@ -247,6 +323,7 @@ class CardioScorePipeline:
             scores=scores,
             feature_table=effects,
             summary_table=summary,
+            concentration_table=concentration_summary,
             config=self.config,
             qc_log=self.qc_log,
         )
