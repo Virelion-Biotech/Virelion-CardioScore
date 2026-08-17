@@ -64,13 +64,22 @@ def control_variability(
     group_column: Optional[str] = None,
     max_control_cv_pct: float = 20.0,
 ) -> pd.DataFrame:
-    """Quantify control stability across plates/batches."""
+    """Quantify between-group control stability from group-level control means.
+
+    ``control_cv_pct`` is calculated across plate/batch control means rather
+    than across pooled technical wells, so a plate with many wells cannot
+    dominate the stability estimate. ``control_sd`` remains the pooled within-
+    observation dispersion and is reported separately.
+    """
     if df.empty:
         return pd.DataFrame()
     if "vehicle" not in df.columns:
         raise ValueError("Variability diagnostics require a 'vehicle' column.")
 
     group = _resolve_group_column(df, group_column)
+    if df[group].isna().any() or df[group].astype(str).str.strip().eq("").any():
+        raise ValueError(f"Variability grouping column {group!r} contains missing or blank identifiers.")
+
     if endpoint_columns is None:
         endpoint_columns = [
             "fpd_ms",
@@ -80,7 +89,7 @@ def control_variability(
             "triangulation_proxy",
         ]
 
-    controls = df[df["vehicle"] == True].copy()  # noqa: E712
+    controls = df[df["vehicle"].astype(bool)].copy()
     rows: list[dict] = []
     for endpoint in endpoint_columns:
         if endpoint not in controls.columns:
@@ -95,21 +104,21 @@ def control_variability(
         overall_mean = float(group_means.mean())
         n_groups = int(group_means.size)
         n_controls = int(len(control))
-        control_sd = float(control["_value"].std(ddof=1)) if n_controls > 1 else None
-        cv = None
-        if control_sd is not None and not np.isclose(overall_mean, 0.0):
-            cv = float(abs(control_sd / overall_mean) * 100.0)
+        pooled_sd = float(control["_value"].std(ddof=1)) if n_controls > 1 else None
         between_sd = float(group_means.std(ddof=1)) if n_groups > 1 else None
+        cv = None
+        if n_groups > 1 and not np.isclose(overall_mean, 0.0):
+            cv = float(abs(group_means.std(ddof=1) / overall_mean) * 100.0)
 
         if n_groups < 2:
             status = "insufficient_groups"
             message = "At least two plates/batches are required to estimate between-group variability."
         elif cv is not None and cv > max_control_cv_pct:
             status = "high_variability"
-            message = f"Control CV {cv:.2f}% exceeds configured threshold {max_control_cv_pct:.2f}%."
+            message = f"Between-group control CV {cv:.2f}% exceeds configured threshold {max_control_cv_pct:.2f}%."
         else:
             status = "stable"
-            message = "Control variability is within the configured threshold."
+            message = "Between-group control variability is within the configured threshold."
 
         rows.append(
             VariabilityDiagnostic(
@@ -118,7 +127,7 @@ def control_variability(
                 n_groups=n_groups,
                 n_controls=n_controls,
                 control_mean=overall_mean,
-                control_sd=control_sd,
+                control_sd=pooled_sd,
                 control_cv_pct=cv,
                 between_group_sd=between_sd,
                 status=status,
@@ -134,17 +143,19 @@ def standardized_treatment_separation(
     endpoint: str,
     group_column: str,
 ) -> pd.DataFrame:
-    """Return an exploratory treatment-vs-control separation within each group."""
-    required = {endpoint, "vehicle", "compound", group_column}
+    """Return treatment-vs-control separation within each group and concentration."""
+    required = {endpoint, "vehicle", "compound", group_column, "concentration_uM"}
     missing = sorted(required - set(effects.columns))
     if missing:
         raise ValueError(f"Missing columns for treatment separation: {missing}.")
+    if effects[group_column].isna().any() or effects[group_column].astype(str).str.strip().eq("").any():
+        raise ValueError(f"Treatment separation grouping column {group_column!r} contains missing or blank identifiers.")
 
     rows: list[dict] = []
-    for keys, group in effects.groupby(["compound", group_column], dropna=False, sort=True):
-        compound, group_value = keys
-        controls = pd.to_numeric(group.loc[group["vehicle"] == True, endpoint], errors="coerce").dropna()  # noqa: E712
-        treated = pd.to_numeric(group.loc[group["vehicle"] == False, endpoint], errors="coerce").dropna()  # noqa: E712
+    for keys, group in effects.groupby(["compound", "concentration_uM", group_column], dropna=False, sort=True):
+        compound, concentration, group_value = keys
+        controls = pd.to_numeric(group.loc[group["vehicle"].astype(bool), endpoint], errors="coerce").dropna()
+        treated = pd.to_numeric(group.loc[~group["vehicle"].astype(bool), endpoint], errors="coerce").dropna()
         if len(controls) < 2 or treated.empty:
             separation = np.nan
         else:
@@ -155,6 +166,7 @@ def standardized_treatment_separation(
         rows.append(
             {
                 "compound": compound,
+                "concentration_uM": concentration,
                 group_column: group_value,
                 "endpoint": endpoint,
                 "n_controls": int(len(controls)),
