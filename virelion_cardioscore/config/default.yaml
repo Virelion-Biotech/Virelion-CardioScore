@@ -40,7 +40,9 @@ experimental_units:
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
   plate_unit_column: "plate_id"
-  fall_back_to_well: true
+  # Safety default: requesting a higher-level unit without its metadata must fail
+  # rather than silently reverting to technical-well scoring.
+  fall_back_to_well: false
 
 control_normalization:
   scope: "compound"
@@ -77,42 +79,3 @@ mixed_effects:
     - "amplitude_uv"
     - "stv"
     - "triangulation_proxy"
-
-concentration_response:
-  replicate_aggregation: "mean"
-  concentration_aggregation: "max_absolute_effect"
-  min_concentrations: 3
-  effect_threshold_pct: 10.0
-  fit_curve: false
-  fit_min_concentrations: 4
-  fit_min_r_squared: 0.80
-  fit_min_monotonicity: 0.80
-  fit_ec50_boundary_factor: 2.0
-  fit_max_ec50_uncertainty_fold: 100.0
-
-inference:
-  enabled: false
-  n_bootstrap: 2000
-  confidence: 0.95
-  seed: 42
-
-scoring:
-  endpoint_config: "cipa_endpoints.yaml"
-  low_threshold: 0.30
-  moderate_threshold: 0.60
-  normalize_by_vehicle: true
-  dose_response_weight: 0.0
-
-reporting:
-  generate_html: true
-  generate_csv: true
-  generate_json: true
-  include_plots: true
-  plot_style: "seaborn-v0_8-whitegrid"
-
-io:
-  supported_formats:
-    - "synthetic"
-    - "csv_features"
-    - "csv_raw_traces"
-  output_dir: "./outputs"
