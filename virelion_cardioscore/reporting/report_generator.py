@@ -1,6 +1,4 @@
-"""
-Simple, self-contained HTML report generator for CardioScore results.
-"""
+"""Simple, self-contained HTML report generator for CardioScore results."""
 
 from __future__ import annotations
 
@@ -58,6 +56,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <tbody>{summary_rows}</tbody>
     </table>
   </div>
+  {normalization_card}
   {variability_card}
   {detail_cards}
   <div class="card">
@@ -82,6 +81,49 @@ def _format_optional_number(value: object, digits: int = 2) -> str:
         return f"{float(value):.{digits}f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _build_normalization_card(result: "PipelineResult") -> str:
+    diagnostic = result.normalization_diagnostic
+    if not diagnostic:
+        return ""
+
+    before = result.variability_before_correction
+    after = result.variability_table
+    corrected = ", ".join(diagnostic.get("corrected_columns", [])) or "configured endpoints"
+
+    rows = []
+    if not before.empty and not after.empty:
+        for endpoint in sorted(set(before["endpoint"]).intersection(after["endpoint"])):
+            before_row = before.loc[before["endpoint"] == endpoint].iloc[0]
+            after_row = after.loc[after["endpoint"] == endpoint].iloc[0]
+            rows.append(
+                f"""<tr>
+                  <td>{endpoint}</td>
+                  <td>{_format_optional_number(before_row['between_group_sd'])}</td>
+                  <td>{_format_optional_number(after_row['between_group_sd'])}</td>
+                  <td>{_format_optional_number(before_row['control_cv_pct'])}%</td>
+                  <td>{_format_optional_number(after_row['control_cv_pct'])}%</td>
+                </tr>"""
+            )
+
+    comparison = ""
+    if rows:
+        comparison = f"""
+        <table>
+          <thead><tr><th>Endpoint</th><th>Between-group SD before</th><th>After</th>
+          <th>Control CV before</th><th>After</th></tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+        """
+
+    return f"""<div class=\"card\">
+      <h2 style=\"margin-top:0\">Control-Anchored Normalization</h2>
+      <p class=\"meta\">Exploratory additive recentering learned from vehicle controls only. This does not constitute a validated batch-effect model.</p>
+      <p><strong>Grouping:</strong> {diagnostic.get('group_column', '—')} &nbsp; <strong>Groups:</strong> {diagnostic.get('n_groups', '—')} &nbsp; <strong>Controls:</strong> {diagnostic.get('n_controls', '—')}</p>
+      <p><strong>Corrected endpoints:</strong> {corrected}</p>
+      {comparison}
+    </div>"""
 
 
 def _build_variability_card(result: "PipelineResult") -> str:
@@ -182,6 +224,7 @@ def write_html_report(result: "PipelineResult", path: str | Path) -> None:
 
     html = HTML_TEMPLATE.format(
         summary_rows="\n".join(summary_rows),
+        normalization_card=_build_normalization_card(result),
         variability_card=_build_variability_card(result),
         detail_cards="\n".join(detail_cards),
         qc_items=qc_items,

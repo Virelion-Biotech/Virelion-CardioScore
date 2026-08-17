@@ -55,6 +55,18 @@ variability:
   enabled: false
   group_column: null
   max_control_cv_pct: 20.0
+  correction:
+    # Conservative control-anchored recentering; disabled by default.
+    # Requires variability.enabled=true and adequate vehicle controls in every group.
+    enabled: false
+    corrected_columns:
+      - "fpd_ms"
+      - "beat_rate_bpm"
+      - "amplitude_uv"
+      - "stv"
+      - "triangulation_proxy"
+    min_controls_per_group: 2
+    require_all_groups: true
 
 concentration_response:
   # Replicates are summarized within each concentration before compound-level scoring.
