@@ -42,7 +42,9 @@ concentration_response:
   concentration_aggregation: "max_absolute_effect"
   min_concentrations: 3
   effect_threshold_pct: 10.0
+  # Optional 4-parameter logistic fitting; disabled by default.
   fit_curve: false
+  fit_min_concentrations: 4
 
 scoring:
   endpoint_config: "cipa_endpoints.yaml"
