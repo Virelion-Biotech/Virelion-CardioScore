@@ -95,7 +95,7 @@ def make_raw_trace_dataframe(
                     fpd_ms=spec["vehicle_fpd_ms"],
                     polarity=polarity,
                 )
-                for ti, vi in zip(t, trace):
+                for ti, vi in zip(t, trace, strict=True):
                     rows.append((compound, well_id, 0.0, True, f"E{e + 1}", ti, vi))
 
         for conc, fpd_ms, bpm, amp_scale in spec["doses"]:
@@ -114,7 +114,7 @@ def make_raw_trace_dataframe(
                         polarity=polarity,
                         amp_scale=amp_scale,
                     )
-                    for ti, vi in zip(t, trace):
+                    for ti, vi in zip(t, trace, strict=True):
                         rows.append((compound, well_id, conc, False, f"E{e + 1}", ti, vi))
 
     return pd.DataFrame(
