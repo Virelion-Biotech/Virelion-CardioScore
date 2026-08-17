@@ -13,8 +13,10 @@
 - Explicit scoring-unit policy API supporting `well`, `biological_replicate`, `batch`, and `plate` with validation of required metadata.
 
 ### Methodology
+- The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
 - Wells remain the default analysis unit when no higher-level metadata are available.
-- When biological-replicate metadata are supplied, technical wells can be summarized within biological units before higher-level inference.
+- When biological-replicate metadata are supplied, technical wells can be summarized within biological units before higher-level inference and scoring.
+- Raw well-level effects remain preserved in `PipelineResult.feature_table` for auditability.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
