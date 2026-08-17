@@ -2,8 +2,8 @@
 End-to-end CardioScore pipeline.
 
 Orchestrates quality control, vehicle normalization, replicate-aware
-concentration summaries, optional concentration-response fitting, scoring,
-and report generation.
+concentration summaries, optional concentration-response fitting, optional
+bootstrap inference, scoring, and report generation.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import yaml
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreResult
 from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
+from virelion_cardioscore.analysis.statistics import bootstrap_ci
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 
 
@@ -26,6 +27,7 @@ class PipelineResult:
     feature_table: pd.DataFrame
     summary_table: pd.DataFrame
     concentration_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    inference_table: pd.DataFrame = field(default_factory=pd.DataFrame)
     dose_response_fits: dict[str, list[DoseResponseFit]] = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
@@ -44,6 +46,7 @@ class PipelineResult:
             "scores": [s.to_dict() for s in self.scores],
             "summary": self.summary_table.to_dict(orient="records"),
             "concentration_summary": self.concentration_table.to_dict(orient="records"),
+            "inference": self.inference_table.to_dict(orient="records"),
             "dose_response_fits": {
                 compound: [fit.to_dict() for fit in fits]
                 for compound, fits in self.dose_response_fits.items()
@@ -231,6 +234,52 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
+    def bootstrap_concentration_inference(
+        effects: pd.DataFrame,
+        *,
+        n_bootstrap: int = 2000,
+        confidence: float = 0.95,
+        seed: int = 42,
+    ) -> pd.DataFrame:
+        """Return bootstrap mean CIs for each compound/concentration endpoint."""
+        if effects.empty:
+            return pd.DataFrame()
+
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+        ]
+        rows = []
+        group_index = 0
+        for (compound, concentration), group in effects.groupby(["compound", "concentration_uM"], sort=True):
+            row = {
+                "compound": compound,
+                "concentration_uM": concentration,
+                "n_replicates": int(group["well"].nunique()),
+            }
+            for endpoint in endpoint_columns:
+                values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
+                values = values[np.isfinite(values)]
+                if len(values) < 2:
+                    row[f"{endpoint}_ci_low"] = np.nan
+                    row[f"{endpoint}_ci_high"] = np.nan
+                    continue
+                result = bootstrap_ci(
+                    values,
+                    n_bootstrap=n_bootstrap,
+                    confidence=confidence,
+                    seed=seed + group_index,
+                )
+                row[f"{endpoint}_ci_low"] = result.ci_low
+                row[f"{endpoint}_ci_high"] = result.ci_high
+            rows.append(row)
+            group_index += 1
+        return pd.DataFrame(rows)
+
+    @staticmethod
     def aggregate_compound_effects(
         concentration_summary: pd.DataFrame,
         concentration_aggregation: str = "max_absolute_effect",
@@ -318,7 +367,7 @@ class CardioScorePipeline:
         min_concentration_uM: float,
         max_concentration_uM: float,
         endpoint_weights: dict[str, float],
-    ) -> Optional[float]:
+    ) -> float | None:
         """Summarize quality-passing EC50 fits as exposure evidence in [0, 1]."""
         if min_concentration_uM <= 0 or max_concentration_uM <= min_concentration_uM:
             return None
@@ -359,6 +408,16 @@ class CardioScorePipeline:
             effects,
             replicate_aggregation=replicate_aggregation,
         )
+
+        inference_cfg = self.config.get("inference", {})
+        inference_table = pd.DataFrame()
+        if inference_cfg.get("enabled", False) and not effects.empty:
+            inference_table = self.bootstrap_concentration_inference(
+                effects,
+                n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)),
+                confidence=float(inference_cfg.get("confidence", 0.95)),
+                seed=int(inference_cfg.get("seed", 42)),
+            )
 
         min_concentrations = int(concentration_cfg.get("min_concentrations", 1))
         effect_threshold_pct = float(concentration_cfg.get("effect_threshold_pct", 0.0))
@@ -452,6 +511,7 @@ class CardioScorePipeline:
             feature_table=effects,
             summary_table=summary,
             concentration_table=concentration_summary,
+            inference_table=inference_table,
             dose_response_fits=dose_response_fits,
             config=self.config,
             qc_log=self.qc_log,

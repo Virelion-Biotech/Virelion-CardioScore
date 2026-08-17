@@ -6,6 +6,9 @@
 - Optional exposure-response evidence contribution to CardioScore using only quality-passing 4PL fits.
 - Dose-response evidence is calculated from the tested log-concentration range above fitted EC50.
 - Default dose-response scoring weight remains `0.0`, preserving the endpoint-only CardioScore unless explicitly enabled.
+- Replicate-level bootstrap confidence intervals for concentration-specific endpoint effects.
+- Matched concentration-profile bootstrap comparisons for exploratory between-group inference.
+- Opt-in pipeline inference output and JSON serialization; inference does not alter CardioScore.
 
 ## [0.1.1] – 2026-08-16
 
