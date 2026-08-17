@@ -35,20 +35,38 @@ class HierarchySpec:
     plate_unit: Optional[str] = None
 
 
-def detect_hierarchy(df: pd.DataFrame) -> HierarchySpec:
-    """Detect optional hierarchy columns without inventing metadata."""
+def detect_hierarchy(
+    df: pd.DataFrame,
+    *,
+    biological_unit_column: Optional[str] = None,
+    batch_unit_column: Optional[str] = None,
+    plate_unit_column: Optional[str] = None,
+) -> HierarchySpec:
+    """Detect hierarchy columns, honoring explicit configured aliases when supplied."""
+    biological = biological_unit_column or "biological_replicate"
+    batch = batch_unit_column or ("batch_id" if "batch_id" in df.columns else "experiment_id")
+    plate = plate_unit_column or "plate_id"
     return HierarchySpec(
-        biological_unit="biological_replicate" if "biological_replicate" in df.columns else None,
-        batch_unit="batch_id" if "batch_id" in df.columns else (
-            "experiment_id" if "experiment_id" in df.columns else None
-        ),
-        plate_unit="plate_id" if "plate_id" in df.columns else None,
+        biological_unit=biological if biological in df.columns else None,
+        batch_unit=batch if batch in df.columns else None,
+        plate_unit=plate if plate in df.columns else None,
     )
 
 
-def hierarchy_columns(df: pd.DataFrame) -> list[str]:
+def hierarchy_columns(
+    df: pd.DataFrame,
+    *,
+    biological_unit_column: Optional[str] = None,
+    batch_unit_column: Optional[str] = None,
+    plate_unit_column: Optional[str] = None,
+) -> list[str]:
     """Return detected hierarchy columns in biological-to-technical order."""
-    spec = detect_hierarchy(df)
+    spec = detect_hierarchy(
+        df,
+        biological_unit_column=biological_unit_column,
+        batch_unit_column=batch_unit_column,
+        plate_unit_column=plate_unit_column,
+    )
     return [
         column
         for column in [spec.biological_unit, spec.batch_unit, spec.plate_unit]
@@ -69,7 +87,14 @@ def _require_complete_identifier(df: pd.DataFrame, column: str) -> None:
         )
 
 
-def _resolve_scoring_column(df: pd.DataFrame, scoring_unit: str) -> str:
+def _resolve_scoring_column(
+    df: pd.DataFrame,
+    scoring_unit: str,
+    *,
+    biological_unit_column: Optional[str] = None,
+    batch_unit_column: Optional[str] = None,
+    plate_unit_column: Optional[str] = None,
+) -> str:
     if scoring_unit not in SUPPORTED_SCORING_UNITS:
         raise ValueError(
             f"Unsupported scoring_unit: {scoring_unit!r}. "
@@ -79,11 +104,11 @@ def _resolve_scoring_column(df: pd.DataFrame, scoring_unit: str) -> str:
     if scoring_unit == "well":
         column = "well"
     elif scoring_unit == "biological_replicate":
-        column = "biological_replicate"
+        column = biological_unit_column or "biological_replicate"
     elif scoring_unit == "batch":
-        column = "batch_id" if "batch_id" in df.columns else "experiment_id"
+        column = batch_unit_column or ("batch_id" if "batch_id" in df.columns else "experiment_id")
     else:
-        column = "plate_id"
+        column = plate_unit_column or "plate_id"
 
     if column not in df.columns:
         raise ValueError(
@@ -99,13 +124,11 @@ def aggregate_to_scoring_units(
     *,
     scoring_unit: str = "well",
     endpoint_columns: Optional[list[str]] = None,
+    biological_unit_column: Optional[str] = None,
+    batch_unit_column: Optional[str] = None,
+    plate_unit_column: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Aggregate technical wells to the configured independent scoring unit.
-
-    ``well`` preserves historical behavior. Higher-level choices average all
-    retained technical wells belonging to the same independent unit at a given
-    compound/concentration before concentration-level summaries are calculated.
-    """
+    """Aggregate technical wells to the configured independent scoring unit."""
     if effects.empty or scoring_unit == "well":
         return effects.copy()
 
@@ -119,7 +142,13 @@ def aggregate_to_scoring_units(
             "max_effect_pct",
         ]
 
-    unit_column = _resolve_scoring_column(effects, scoring_unit)
+    unit_column = _resolve_scoring_column(
+        effects,
+        scoring_unit,
+        biological_unit_column=biological_unit_column,
+        batch_unit_column=batch_unit_column,
+        plate_unit_column=plate_unit_column,
+    )
     group_columns = ["compound", "concentration_uM", unit_column]
     rows: list[dict] = []
     for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
@@ -141,13 +170,11 @@ def summarize_experimental_units(
     effects: pd.DataFrame,
     *,
     endpoint_columns: Optional[list[str]] = None,
+    biological_unit_column: Optional[str] = None,
+    batch_unit_column: Optional[str] = None,
+    plate_unit_column: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Summarize wells at the highest available experimental-unit level.
-
-    The returned table has one row per compound/concentration and, when
-    metadata exist, per biological replicate. Without hierarchy metadata it
-    falls back to well-level summaries, preserving historical behavior.
-    """
+    """Summarize wells at the highest available configured experimental-unit level."""
     if effects.empty:
         return pd.DataFrame()
 
@@ -160,16 +187,25 @@ def summarize_experimental_units(
             "triangulation_proxy",
         ]
 
-    metadata = hierarchy_columns(effects)
-    if "biological_replicate" in metadata:
-        unit_columns = ["compound", "concentration_uM", "biological_replicate"]
-    elif "batch_id" in metadata or "experiment_id" in metadata:
-        batch = "batch_id" if "batch_id" in metadata else "experiment_id"
-        unit_columns = ["compound", "concentration_uM", batch]
-    elif "plate_id" in metadata:
-        unit_columns = ["compound", "concentration_uM", "plate_id"]
+    metadata = hierarchy_columns(
+        effects,
+        biological_unit_column=biological_unit_column,
+        batch_unit_column=batch_unit_column,
+        plate_unit_column=plate_unit_column,
+    )
+    biological = biological_unit_column or "biological_replicate"
+    if biological in metadata:
+        unit_columns = ["compound", "concentration_uM", biological]
     else:
-        unit_columns = ["compound", "concentration_uM", "well"]
+        batch = batch_unit_column or ("batch_id" if "batch_id" in metadata else "experiment_id")
+        if batch in metadata:
+            unit_columns = ["compound", "concentration_uM", batch]
+        else:
+            plate = plate_unit_column or "plate_id"
+            if plate in metadata:
+                unit_columns = ["compound", "concentration_uM", plate]
+            else:
+                unit_columns = ["compound", "concentration_uM", "well"]
 
     for column in unit_columns[2:]:
         _require_complete_identifier(effects, column)
@@ -209,9 +245,8 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
         unit = "well"
 
     _require_complete_identifier(summary, unit)
-    result = (
+    return (
         summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[unit]
         .nunique()
         .reset_index(name="n_independent_units")
     )
-    return result
