@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     h2 {{ font-size: 1.25rem; margin-top: 2rem; color: var(--accent); }}
     .subtitle {{ color: var(--muted); margin-bottom: 2rem; }}
     .card {{ background: var(--card); border-radius: 12px; padding: 1.25rem 1.5rem;
-             margin-bottom: 1.25rem; border: 1px solid #2a3548; }}
+             margin-bottom: 1.25rem; border: 1px solid #2a3548; overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 0.95rem; }}
     th, td {{ text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #2a3548; }}
     th {{ color: var(--muted); font-weight: 600; }}
@@ -52,7 +53,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <h2 style="margin-top:0">Summary</h2>
     <table>
       <thead><tr><th>Compound</th><th>CardioScore</th><th>Risk Class</th>
-      <th>Max Conc (µM)</th><th>Wells</th></tr></thead>
+      <th>Max Conc (µM)</th><th>Technical Wells</th><th>Independent Units</th></tr></thead>
       <tbody>{summary_rows}</tbody>
     </table>
   </div>
@@ -72,6 +73,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+def _text(value: object) -> str:
+    """HTML-escape user/data-provided text before interpolation into markup."""
+    return escape(str(value), quote=True)
+
+
 def _format_optional_number(value: object, digits: int = 2) -> str:
     if value is None:
         return "—"
@@ -80,7 +86,7 @@ def _format_optional_number(value: object, digits: int = 2) -> str:
             return "—"
         return f"{float(value):.{digits}f}"
     except (TypeError, ValueError):
-        return str(value)
+        return _text(value)
 
 
 def _build_normalization_card(result: "PipelineResult") -> str:
@@ -90,7 +96,7 @@ def _build_normalization_card(result: "PipelineResult") -> str:
 
     before = result.variability_before_correction
     after = result.variability_table
-    corrected = ", ".join(diagnostic.get("corrected_columns", [])) or "configured endpoints"
+    corrected = ", ".join(_text(column) for column in diagnostic.get("corrected_columns", [])) or "configured endpoints"
 
     rows = []
     if not before.empty and not after.empty:
@@ -99,7 +105,7 @@ def _build_normalization_card(result: "PipelineResult") -> str:
             after_row = after.loc[after["endpoint"] == endpoint].iloc[0]
             rows.append(
                 f"""<tr>
-                  <td>{endpoint}</td>
+                  <td>{_text(endpoint)}</td>
                   <td>{_format_optional_number(before_row['between_group_sd'])}</td>
                   <td>{_format_optional_number(after_row['between_group_sd'])}</td>
                   <td>{_format_optional_number(before_row['control_cv_pct'])}%</td>
@@ -120,7 +126,7 @@ def _build_normalization_card(result: "PipelineResult") -> str:
     return f"""<div class=\"card\">
       <h2 style=\"margin-top:0\">Control-Anchored Normalization</h2>
       <p class=\"meta\">Exploratory additive recentering learned from vehicle controls only. This does not constitute a validated batch-effect model.</p>
-      <p><strong>Grouping:</strong> {diagnostic.get('group_column', '—')} &nbsp; <strong>Groups:</strong> {diagnostic.get('n_groups', '—')} &nbsp; <strong>Controls:</strong> {diagnostic.get('n_controls', '—')}</p>
+      <p><strong>Grouping:</strong> {_text(diagnostic.get('group_column', '—'))} &nbsp; <strong>Groups:</strong> {_format_optional_number(diagnostic.get('n_groups', '—'), 0)} &nbsp; <strong>Controls:</strong> {_format_optional_number(diagnostic.get('n_controls', '—'), 0)}</p>
       <p><strong>Corrected endpoints:</strong> {corrected}</p>
       {comparison}
     </div>"""
@@ -132,11 +138,11 @@ def _build_variability_card(result: "PipelineResult") -> str:
 
     rows = []
     for _, row in result.variability_table.iterrows():
-        status = str(row["status"])
+        status = _text(row["status"])
         rows.append(
             f"""<tr>
-              <td>{row['endpoint']}</td>
-              <td>{row['group_column']}</td>
+              <td>{_text(row['endpoint'])}</td>
+              <td>{_text(row['group_column'])}</td>
               <td>{int(row['n_groups'])}</td>
               <td>{int(row['n_controls'])}</td>
               <td>{_format_optional_number(row['control_cv_pct'])}%</td>
@@ -153,9 +159,9 @@ def _build_variability_card(result: "PipelineResult") -> str:
         for _, row in separation.iterrows():
             separation_rows.append(
                 f"""<tr>
-                  <td>{row['compound']}</td>
-                  <td>{row[group_column]}</td>
-                  <td>{row['endpoint']}</td>
+                  <td>{_text(row['compound'])}</td>
+                  <td>{_text(row[group_column])}</td>
+                  <td>{_text(row['endpoint'])}</td>
                   <td>{int(row['n_controls'])}</td>
                   <td>{int(row['n_treated'])}</td>
                   <td>{_format_optional_number(row['standardized_separation'], 3)}</td>
@@ -186,41 +192,45 @@ def write_html_report(result: "PipelineResult", path: str | Path) -> None:
     path = Path(path)
     summary_rows = []
     for _, row in result.summary_table.iterrows():
+        risk_class = _text(row['risk_class'])
         summary_rows.append(
             f"""<tr>
-              <td><strong>{row['compound']}</strong></td>
-              <td>{row['cardioscore']:.3f}</td>
-              <td><span class=\"badge badge-{row['risk_class']}\">{row['risk_class']}</span></td>
-              <td>{row['max_concentration_uM']:.2f}</td>
-              <td>{row['n_wells']}</td>
+              <td><strong>{_text(row['compound'])}</strong></td>
+              <td>{_format_optional_number(row['cardioscore'], 3)}</td>
+              <td><span class=\"badge badge-{risk_class}\">{risk_class}</span></td>
+              <td>{_format_optional_number(row['max_concentration_uM'])}</td>
+              <td>{int(row.get('n_technical_wells', row['n_wells']))}</td>
+              <td>{int(row.get('n_independent_units', 0))}</td>
             </tr>"""
         )
 
     detail_cards = []
     for score in result.scores:
+        risk_class = _text(score.risk_class)
         contrib_html = []
-        for c in score.contributions:
-            width = max(2, int(c.contribution * 120))
+        for contribution in score.contributions:
+            width = max(2, int(contribution.contribution * 120))
             contrib_html.append(
                 f"""<div class=\"contrib\">
-                  <div style=\"width:180px;font-size:0.85rem\">{c.name}</div>
+                  <div style=\"width:180px;font-size:0.85rem\">{_text(contribution.name)}</div>
                   <div class=\"bar\" style=\"width:{width}px\"></div>
-                  <span class=\"meta\">{c.contribution:.3f} (w={c.weight})</span>
+                  <span class=\"meta\">{contribution.contribution:.3f} (w={contribution.weight})</span>
                 </div>"""
             )
         detail_cards.append(
             f"""<div class=\"card\">
-              <h2 style=\"margin-top:0\">{score.compound}
-                <span class=\"badge badge-{score.risk_class}\">{score.risk_class}</span>
+              <h2 style=\"margin-top:0\">{_text(score.compound)}
+                <span class=\"badge badge-{risk_class}\">{risk_class}</span>
               </h2>
               <p><strong>CardioScore:</strong> {score.score:.3f}</p>
-              <p class=\"meta\">{score.interpretation}</p>
+              <p class=\"meta\">{_text(score.interpretation)}</p>
+              <p class=\"meta\">Technical wells: {score.n_wells} · Independent units: {score.n_independent_units}</p>
               <h3 style=\"font-size:1rem;margin-top:1rem\">Endpoint contributions</h3>
               {''.join(contrib_html)}
             </div>"""
         )
 
-    qc_items = "".join(f"<li>{line}</li>" for line in result.qc_log) or "<li>No QC events recorded.</li>"
+    qc_items = "".join(f"<li>{_text(line)}</li>" for line in result.qc_log) or "<li>No QC events recorded.</li>"
 
     html = HTML_TEMPLATE.format(
         summary_rows="\n".join(summary_rows),
