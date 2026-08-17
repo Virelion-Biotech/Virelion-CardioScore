@@ -59,6 +59,9 @@ def test_pipeline_end_to_end():
     assert not result.summary_table.empty
     assert "cardioscore" in result.summary_table.columns
     assert "risk_class" in result.summary_table.columns
+    assert "concentrations_tested" in result.summary_table.columns
+    assert "max_effect_pct" in result.summary_table.columns
+    assert "effect_detected" in result.summary_table.columns
     assert len(result.qc_log) > 0
 
 
@@ -139,3 +142,49 @@ def test_raw_trace_required_columns_are_explicit():
         "time_s",
         "voltage_uv",
     }
+
+
+def _qc_frame(stv_values: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "compound": ["TestComp"] * len(stv_values),
+            "well": [f"A{i:02d}" for i in range(len(stv_values))],
+            "n_electrodes": [4] * len(stv_values),
+            "noise_sd_uv": [5.0] * len(stv_values),
+            "beat_detection_rate": [0.95] * len(stv_values),
+            "stv": stv_values,
+        }
+    )
+
+
+def test_optional_stv_irregularity_proxy_can_reject_wells():
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["quality_control"]["reject_wells_with_arrhythmia_proxy"] = True
+    pipeline.config["quality_control"]["arrhythmia_proxy_max_stv"] = 0.5
+
+    kept = pipeline.apply_qc(_qc_frame([0.1, 0.8]))
+
+    assert len(kept) == 1
+    assert kept.iloc[0]["well"] == "A00"
+    assert "stv=0.800" in " ".join(pipeline.qc_log)
+
+
+def test_irregularity_proxy_requires_explicit_threshold():
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["quality_control"]["reject_wells_with_arrhythmia_proxy"] = True
+    pipeline.config["quality_control"]["arrhythmia_proxy_max_stv"] = None
+
+    kept = pipeline.apply_qc(_qc_frame([0.1, 0.8]))
+
+    assert len(kept) == 2
+    assert any("max_stv is not configured" in msg for msg in pipeline.qc_log)
+
+
+def test_concentration_coverage_warning_is_reported_without_silent_exclusion():
+    dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
+    pipeline = CardioScorePipeline.from_defaults()
+    result = pipeline.run(dataset)
+
+    assert len(result.scores) == 1
+    assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
+    assert any("configured minimum is 3" in msg for msg in result.qc_log)
