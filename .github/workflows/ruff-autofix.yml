@@ -1,0 +1,29 @@
+name: Temporary Ruff Autofix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore: ruff autofix') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check --fix .
+      - name: Commit safe autofixes
+        run: |
+          if git diff --quiet; then
+            echo "No Ruff safe fixes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "chore: ruff autofix"
+          git push
