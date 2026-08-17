@@ -19,6 +19,7 @@
 - Fail-closed normalization assumption checks for treatment allocation and additive-vs-scale drift warnings.
 - Optional random-intercept mixed-effects inference for endpoint-level treatment effects with plate/batch clustering; `statsmodels` is an optional dependency.
 - Concentration-specific mixed-effects pipeline helper that models each compound × concentration × endpoint separately rather than pooling doses.
+- Opt-in hierarchical CardioScore pipeline wrapper that augments standard pipeline results with mixed-effects inference and JSON/HTML reporting.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -39,6 +40,7 @@
 - The random-intercept mixed-effects model is inference-only: it quantifies treatment effects while accounting for group-level clustering and reports ICC, but it does not automatically alter CardioScore.
 - Mixed-effects inference is concentration-specific so distinct exposure levels are not pooled into a single treatment effect.
 - The mixed-effects model requires at least two groups and both treatment levels and should use a genuine experimental grouping variable such as plate, batch, or experiment.
+- The hierarchical wrapper augments standard CardioScore output without altering the core scoring path or default results.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
 
