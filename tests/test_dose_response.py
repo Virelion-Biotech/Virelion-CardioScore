@@ -19,6 +19,8 @@ def test_4pl_good_fit_passes_monotonicity_and_ec50_range_gates():
     assert result.effect_size_pass is True
     assert result.effect_threshold == 10.0
     assert not result.ec50_boundary_flag
+    assert result.ec50_coverage is not None
+    assert result.coverage_pass is True
     assert result.ec50_uncertainty_fold is not None
 
 
@@ -41,6 +43,27 @@ def test_effect_threshold_boundary_is_inclusive():
     assert result.harmful_effect_magnitude is not None
     assert result.harmful_effect_magnitude >= 10.0
     assert result.effect_size_pass is True
+
+
+def test_ec50_coverage_gate_flags_edge_fitted_response_even_without_boundary_flag():
+    concentrations = np.logspace(0, 2, 7)
+    responses = 80.0 / (1.0 + (60.0 / concentrations) ** 1.5)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        min_r_squared=0.99,
+        min_monotonicity=0.80,
+        ec50_boundary_factor=1.0,
+        min_ec50_coverage=0.20,
+    )
+    assert result.success
+    assert result.ec50_boundary_flag is False
+    assert result.ec50_coverage is not None
+    assert result.ec50_coverage < 0.20
+    assert result.coverage_pass is False
+    assert not result.quality_pass
+    assert "coverage" in result.message
 
 
 def test_non_monotonic_series_is_flagged():
@@ -79,5 +102,18 @@ def test_dose_response_result_serialization_includes_diagnostics():
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
     result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct")
     payload = result.to_dict()
-    for key in ["quality_pass", "monotonicity", "monotonic_direction", "harm_direction_compatible", "harmful_effect_magnitude", "effect_threshold", "effect_size_pass", "ec50_boundary_flag", "ec50_uncertainty_fold"]:
+    for key in [
+        "quality_pass",
+        "monotonicity",
+        "monotonic_direction",
+        "harm_direction_compatible",
+        "harmful_effect_magnitude",
+        "effect_threshold",
+        "effect_size_pass",
+        "ec50_coverage",
+        "min_ec50_coverage",
+        "coverage_pass",
+        "ec50_boundary_flag",
+        "ec50_uncertainty_fold",
+    ]:
         assert key in payload
