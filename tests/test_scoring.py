@@ -279,17 +279,43 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
 def test_4pl_fit_recovers_known_curve():
     concentrations = np.logspace(-1, 2, 7)
     expected = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, expected, endpoint="fpd_change_pct")
+    result = fit_4pl(concentrations, expected, endpoint="fpd_change_pct", min_r_squared=0.999)
 
     assert result.success
+    assert result.quality_pass
     assert result.ec50 == pytest.approx(10.0, rel=1e-2)
     assert result.hill_slope == pytest.approx(1.5, rel=1e-2)
     assert result.r_squared > 0.999
+    assert result.ec50_ci_low < result.ec50 < result.ec50_ci_high
+    assert result.hill_ci_low < result.hill_slope < result.hill_ci_high
+
+
+def test_4pl_fit_can_use_replicate_sem_weights():
+    concentrations = np.logspace(-1, 2, 6)
+    responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
+    sem = np.full(6, 1.0)
+    result = fit_4pl(concentrations, responses, response_sem=sem)
+
+    assert result.success
+    assert result.weighted
+    assert result.ec50_ci_low is not None
+    assert result.ec50_ci_high is not None
+
+
+def test_4pl_fit_marks_poor_fit_without_calling_it_a_failure():
+    concentrations = np.logspace(-1, 2, 7)
+    responses = np.array([0.0, 20.0, 19.0, 20.0, 21.0, 20.0, 20.0])
+    result = fit_4pl(concentrations, responses, min_r_squared=0.99)
+
+    assert result.success
+    assert not result.quality_pass
+    assert "failed quality criteria" in result.message
 
 
 def test_4pl_fit_rejects_insufficient_concentrations():
     result = fit_4pl(np.array([1.0, 2.0, 4.0]), np.array([1.0, 3.0, 8.0]))
     assert not result.success
+    assert not result.quality_pass
     assert "at least 4" in result.message
 
 
@@ -298,6 +324,7 @@ def test_pipeline_can_optionally_fit_dose_response():
     pipeline = CardioScorePipeline.from_defaults()
     pipeline.config["concentration_response"]["fit_curve"] = True
     pipeline.config["concentration_response"]["fit_min_concentrations"] = 4
+    pipeline.config["concentration_response"]["fit_min_r_squared"] = 0.0
 
     result = pipeline.run(dataset)
 
