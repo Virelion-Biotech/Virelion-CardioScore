@@ -282,12 +282,20 @@ class CardioScorePipeline:
 
         min_points = int(concentration_cfg.get("fit_min_concentrations", 4))
         min_r_squared = float(concentration_cfg.get("fit_min_r_squared", 0.80))
+        min_monotonicity = float(concentration_cfg.get("fit_min_monotonicity", 0.80))
+        ec50_boundary_factor = float(concentration_cfg.get("fit_ec50_boundary_factor", 2.0))
+        max_ec50_uncertainty_fold = float(
+            concentration_cfg.get("fit_max_ec50_uncertainty_fold", 100.0)
+        )
         results: dict[str, list[DoseResponseFit]] = {}
         for compound, group in concentration_summary.groupby("compound"):
             fits = fit_concentration_series(
                 group,
                 min_points=min_points,
                 min_r_squared=min_r_squared,
+                min_monotonicity=min_monotonicity,
+                ec50_boundary_factor=ec50_boundary_factor,
+                max_ec50_uncertainty_fold=max_ec50_uncertainty_fold,
             )
             results[str(compound)] = fits
             failed = [fit for fit in fits if not fit.success]
@@ -300,9 +308,37 @@ class CardioScorePipeline:
             if poor_quality:
                 self.qc_log.append(
                     f"Dose-response fitting: {compound} has {len(poor_quality)} endpoint fit(s) "
-                    f"below the configured R-squared quality threshold ({min_r_squared:.2f})."
+                    "that failed one or more configured quality gates."
                 )
         return results
+
+    @staticmethod
+    def dose_response_exposure_evidence(
+        fits: list[DoseResponseFit],
+        min_concentration_uM: float,
+        max_concentration_uM: float,
+        endpoint_weights: dict[str, float],
+    ) -> Optional[float]:
+        """Summarize quality-passing EC50 fits as exposure evidence in [0, 1]."""
+        if min_concentration_uM <= 0 or max_concentration_uM <= min_concentration_uM:
+            return None
+        usable = []
+        log_span = np.log10(max_concentration_uM / min_concentration_uM)
+        for fit in fits:
+            if not fit.quality_pass or fit.ec50 is None or fit.ec50 <= 0:
+                continue
+            coverage = np.clip(
+                np.log10(max_concentration_uM / fit.ec50) / log_span,
+                0.0,
+                1.0,
+            )
+            weight = float(endpoint_weights.get(fit.endpoint, 0.0))
+            if weight > 0:
+                usable.append((weight, float(coverage)))
+        if not usable:
+            return None
+        total_weight = sum(weight for weight, _ in usable)
+        return float(sum(weight * coverage for weight, coverage in usable) / total_weight)
 
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
@@ -338,6 +374,8 @@ class CardioScorePipeline:
                     )
 
         dose_response_fits = self.fit_dose_response(concentration_summary)
+        dose_response_cfg = self.config.get("scoring", {})
+        dose_response_weight = float(dose_response_cfg.get("dose_response_weight", 0.0))
 
         agg = self.aggregate_compound_effects(
             concentration_summary,
@@ -347,7 +385,22 @@ class CardioScorePipeline:
             agg["effect_detected"] = agg["max_effect_pct"] >= effect_threshold_pct
 
         scores = []
+        endpoint_weights = {name: float(meta["weight"]) for name, meta in self.engine.endpoints.items()}
         for _, row in agg.iterrows():
+            compound = str(row["compound"])
+            fits = dose_response_fits.get(compound, [])
+            treated_concentrations = concentration_summary.loc[
+                concentration_summary["compound"] == compound, "concentration_uM"
+            ]
+            min_concentration = float(treated_concentrations.min()) if not treated_concentrations.empty else np.nan
+            max_concentration = float(treated_concentrations.max()) if not treated_concentrations.empty else np.nan
+            exposure_evidence = self.dose_response_exposure_evidence(
+                fits,
+                min_concentration,
+                max_concentration,
+                endpoint_weights,
+            )
+
             endpoint_values = {
                 "fpd_change_pct": row["fpd_change_pct"],
                 "beat_rate_change_pct": row["beat_rate_change_pct"],
@@ -357,10 +410,12 @@ class CardioScorePipeline:
             }
             scores.append(
                 self.engine.score_compound(
-                    compound=row["compound"],
+                    compound=compound,
                     endpoint_values=endpoint_values,
                     max_concentration_uM=row["max_concentration_uM"],
                     n_wells=int(row["n_wells"]),
+                    dose_response_evidence=exposure_evidence,
+                    dose_response_weight=dose_response_weight,
                 )
             )
 
@@ -369,6 +424,7 @@ class CardioScorePipeline:
             agg_row = agg.loc[agg["compound"] == s.compound].iloc[0]
             fits = dose_response_fits.get(s.compound, [])
             successful_quality_fits = sum(fit.quality_pass for fit in fits)
+            exposure_evidence = s.metadata.get("dose_response_evidence")
             summary_rows.append(
                 {
                     "compound": s.compound,
@@ -380,6 +436,9 @@ class CardioScorePipeline:
                     "max_effect_pct": round(float(agg_row["max_effect_pct"]), 2),
                     "effect_detected": bool(agg_row["effect_detected"]),
                     "dose_response_fit_endpoints": successful_quality_fits,
+                    "dose_response_exposure_evidence": (
+                        round(float(exposure_evidence), 4) if exposure_evidence is not None else np.nan
+                    ),
                     "interpretation": s.interpretation,
                 }
             )
