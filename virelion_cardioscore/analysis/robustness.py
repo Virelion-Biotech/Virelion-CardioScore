@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import product
 
-import numpy as np
 import pandas as pd
 
 from virelion_cardioscore.analysis.stress_tests import (
@@ -56,20 +55,18 @@ def run_robustness_matrix(grid: RobustnessGrid | None = None) -> pd.DataFrame:
         raise ValueError("bias_tolerance must be non-negative.")
 
     rows: list[dict] = []
-    scenario_id = 0
-    for magnitude, treated_groups_count, replicates, noise_sd, repeat in product(
+    scenarios = product(
         grid.offset_magnitudes,
         grid.treatment_group_counts,
         grid.replicate_counts,
         grid.noise_sds,
         range(grid.n_repeats),
-    ):
+    )
+    for scenario_id, (magnitude, treated_groups_count, replicates, noise_sd, repeat) in enumerate(scenarios):
         if not 1 <= treated_groups_count <= grid.n_groups:
             raise ValueError("treatment_group_counts must fall between 1 and n_groups.")
 
         offsets = _offsets(float(magnitude), grid.n_groups)
-        # Assign treatment to the highest-offset groups deliberately: this makes
-        # imbalance stress-testable without changing the generating effect.
         treatment_groups = tuple(range(grid.n_groups - treated_groups_count, grid.n_groups))
         seed = int(grid.seed + repeat + scenario_id * 1000)
         spec = StressTestSpec(
@@ -101,7 +98,6 @@ def run_robustness_matrix(grid: RobustnessGrid | None = None) -> pd.DataFrame:
                 "within_tolerance": bool(abs(bias) <= grid.bias_tolerance),
             }
         )
-        scenario_id += 1
 
     return pd.DataFrame(rows)
 
