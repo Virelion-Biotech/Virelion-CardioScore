@@ -1,0 +1,63 @@
+# Intake record for the user-supplied processed Blinova 2018 workbook.
+# This file intentionally does NOT store the workbook or claim raw-archive provenance.
+source_id: cipa_blinova_2018_myocyte_validation
+asset_type: processed_workbook_candidate
+status: audit_complete_pending_official_archive
+source_filename: Blinova_etal_2018_data.xlsx
+sha256: 5fd91c2fa1c9b7fbb2f12cf836a061853e0c6a7af22b62965973198d9066459b
+rows: 8859
+columns:
+  - Drug_Name
+  - Cell_type
+  - risk
+  - Platform
+  - Type_of_EADs
+  - conc
+  - EAD
+  - ddFPDc
+  - site
+coverage:
+  raw_unique_drug_strings: 29
+  unique_drugs_after_known_sotalol_alias: 28
+  sites: 10
+  cell_types:
+    - CDI
+    - AXG
+  concentrations: 4
+  platforms_observed:
+    - ACA
+    - AMD
+    - AXN
+    - CLY
+    - ECR
+    - MCS
+  risk_values_observed:
+    - H
+    - L
+    - M
+findings:
+  - code: known_drug_alias
+    raw_value: D,l,Sotalol
+    canonical_candidate: D,l Sotalol
+    action: report_only
+  - code: missing_risk
+    rows: 1
+    record: D,l,Sotalol / CDI / site 6 / concentration 1
+    action: report_only
+  - code: unexpected_platform_code
+    value: ACA
+    published_platforms: [AXN, CLY, ECR, AMD, MCS]
+    action: report_only
+  - code: missing_ddFPDc
+    rows: 2067
+    interpretation: preserve missingness; audit against the paper's arrhythmia-based missing-data rule
+    action: retain_missing_and_audit
+provenance_constraints:
+  - Do not upload the workbook to GitHub as raw validation data.
+  - Do not silently normalize D,l,Sotalol to D,l Sotalol in the source asset.
+  - Do not map ACA to another platform until its source provenance is established.
+  - Do not use this workbook to tune CardioScore parameters.
+  - The official downloaded CiPA archive remains required for raw-archive integrity and parser validation.
+reference:
+  doi: 10.1016/j.celrep.2018.08.079
+  url: https://cipaproject.org/data-resources/
