@@ -4,6 +4,24 @@
 # standardized, and independently checked against the publication.
 
 sources:
+  - id: cipa_blinova_2018_myocyte_validation
+    status: official_download_available
+    evidence_level: raw_mea_dataset
+    title: "International Multisite Study of Human-Induced Pluripotent Stem Cell-Derived Cardiomyocytes for Drug Proarrhythmic Potential Assessment"
+    year: 2018
+    repository: CiPA Project
+    doi: "10.1016/j.celrep.2018.08.079"
+    url: "https://cipaproject.org/data-resources/"
+    benchmark_scope:
+      - multi_drug_risk_classification
+      - concentration_response
+      - FPD_directionality
+      - arrhythmia_quiescence
+      - multisite_reproducibility
+      - compound_ranking
+    target_design: "28 reference drugs; 10 independent sites; 15 site/cell-type combinations; 4 concentrations; acute effects; approximately 5-6 replicate wells per concentration."
+    note: "Primary external validation target. The publication states raw data are publicly available on the CiPA website, and the CiPA data-resources page links the Myocyte Validation Study dataset."
+
   - id: cardio_pymea_dryad_2022
     status: ready_for_download
     evidence_level: raw_mea_dataset
