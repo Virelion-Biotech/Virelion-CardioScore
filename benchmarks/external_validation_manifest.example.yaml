@@ -1,0 +1,12 @@
+# Copy to an external/private workspace and fill in real values after the
+# authoritative validation archive is acquired. Do not commit the archive.
+source_id: cipa_blinova_2018_myocyte_validation
+evidence_level: raw_mea_dataset
+source_url: https://cipaproject.org/data-resources/
+asset_path: ../../data/external/cipa_blinova_2018_original.zip
+asset_sha256: "REPLACE_WITH_64_CHAR_SHA256"
+config_path: ../../virelion_cardioscore/config/default.yaml
+features_path: ../../data/external/standardized/blinova_features.csv
+reference_path: ../../data/external/standardized/blinova_reference.csv
+output_dir: ../../results/external_validation/blinova_2018
+locked: true

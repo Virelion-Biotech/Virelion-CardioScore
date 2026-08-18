@@ -43,7 +43,6 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.py,cover
 .hypothesis/
 .pytest_cache/
 
@@ -81,6 +80,7 @@ Thumbs.db
 # Data (keep only small synthetic examples under version control)
 data/raw/
 data/processed/
+data/external/
 *.h5
 *.hdf5
 *.mat
