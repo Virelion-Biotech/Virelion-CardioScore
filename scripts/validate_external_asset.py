@@ -16,12 +16,18 @@ import pandas as pd
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 from virelion_cardioscore.validation.integrity import verify_sha256
 from virelion_cardioscore.validation.manifest import (
+    ALLOWED_EVIDENCE_LEVELS,
     ValidationManifest,
     resolve_relative,
     validate_feature_schema,
     validate_reference_schema,
 )
 from virelion_cardioscore.validation.metrics import locked_metrics, stratified_failures
+
+
+def _require_file(path: Path, description: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"{description} does not exist: {path}")
 
 
 def main() -> int:
@@ -31,16 +37,20 @@ def main() -> int:
 
     manifest_path = args.manifest.resolve()
     manifest = ValidationManifest.from_yaml(manifest_path)
+    if manifest.evidence_level not in ALLOWED_EVIDENCE_LEVELS:
+        raise ValueError(f"Unsupported evidence level: {manifest.evidence_level}")
+
     base = manifest_path.parent
     asset = resolve_relative(base, manifest.asset_path)
     config = resolve_relative(base, manifest.config_path)
     features_path = resolve_relative(base, manifest.features_path)
     reference_path = resolve_relative(base, manifest.reference_path)
     output_dir = resolve_relative(base, manifest.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not asset.is_file():
-        raise FileNotFoundError(f"Validation asset does not exist: {asset}")
+    _require_file(asset, "Validation asset")
+    _require_file(config, "Pipeline config")
+    _require_file(features_path, "Feature table")
+    _require_file(reference_path, "Reference table")
     if not verify_sha256(asset, manifest.asset_sha256):
         raise ValueError(f"SHA-256 mismatch for validation asset: {asset}")
 
@@ -49,7 +59,13 @@ def main() -> int:
     validate_feature_schema(features)
     validate_reference_schema(reference)
 
-    result = CardioScorePipeline.from_config(config).run(features)
+    pipeline = CardioScorePipeline.from_config(config)
+    result = pipeline.run(features)
+    required_observed = {"compound", "risk_class", "cardioscore"}
+    missing_observed = sorted(required_observed - set(result.summary_table.columns))
+    if missing_observed:
+        raise ValueError(f"CardioScore output missing required validation fields: {missing_observed}")
+
     observed = result.summary_table[["compound", "risk_class", "cardioscore"]].rename(
         columns={"risk_class": "observed_risk"}
     )
@@ -61,19 +77,25 @@ def main() -> int:
     metrics = locked_metrics(joined["reference_risk"], joined["observed_risk"])
     failures = stratified_failures(joined, strata=("compound",))
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "source_id": manifest.source_id,
+        "source_url": manifest.source_url,
         "evidence_level": manifest.evidence_level,
+        "asset_filename": asset.name,
+        "asset_byte_size": asset.stat().st_size,
         "asset_sha256": manifest.asset_sha256,
         "locked": True,
         "metrics": metrics.to_dict(),
         "compound_scores": joined.to_dict(orient="records"),
         "failures": failures.to_dict(orient="records"),
     }
-    (output_dir / "validation.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "validation.json").write_text(
+        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
     failures.to_csv(output_dir / "failures_by_compound.csv", index=False)
     joined.to_csv(output_dir / "compound_validation.csv", index=False)
-    print(json.dumps({"metrics": metrics.to_dict(), "output_dir": str(output_dir)}, indent=2))
+    print(json.dumps({"metrics": metrics.to_dict(), "output_dir": str(output_dir)}, indent=2, allow_nan=False))
     return 0
 
 
