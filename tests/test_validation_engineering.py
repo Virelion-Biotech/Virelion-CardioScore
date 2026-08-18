@@ -6,7 +6,12 @@ import zipfile
 import pandas as pd
 import pytest
 
-from virelion_cardioscore.validation.integrity import build_asset_manifest, inventory_archive, sha256_file, verify_sha256
+from virelion_cardioscore.validation.integrity import (
+    build_asset_manifest,
+    inventory_archive,
+    sha256_file,
+    verify_sha256,
+)
 from virelion_cardioscore.validation.manifest import validate_feature_schema, validate_reference_schema
 from virelion_cardioscore.validation.metrics import locked_metrics, stratified_failures
 
@@ -17,6 +22,13 @@ def test_locked_metrics_are_deterministic() -> None:
     assert result.accuracy == pytest.approx(2 / 3)
     assert result.ordinal_mae == pytest.approx(1 / 3)
     assert result.confusion_matrix == [[1, 0, 0], [0, 0, 1], [0, 0, 1]]
+
+
+def test_locked_metrics_normalizes_published_short_labels() -> None:
+    result = locked_metrics(["L", "M", "H"], ["low", "intermediate", "high"], labels=("L", "M", "H"))
+    assert result.labels == ("l", "m", "h")
+    assert result.accuracy == pytest.approx(1.0)
+    assert result.ordinal_mae == pytest.approx(0.0)
 
 
 def test_stratified_failures() -> None:
@@ -40,7 +52,7 @@ def test_archive_inventory_is_path_safe(tmp_path: Path) -> None:
         zf.writestr("data/example.csv", "a,b\n1,2\n")
     entries = inventory_archive(archive)
     assert entries[0].path == "data/example.csv"
-    assert entries[0].sha256 == sha256_file(tmp_path / "asset.zip") or entries[0].sha256 is not None
+    assert entries[0].sha256 == sha256_file_from_member(entries[0].path, archive)
     manifest = build_asset_manifest(
         archive,
         source_id="test",
@@ -49,6 +61,22 @@ def test_archive_inventory_is_path_safe(tmp_path: Path) -> None:
     )
     assert manifest.byte_size == archive.stat().st_size
     assert verify_sha256(archive, manifest.sha256)
+
+
+def sha256_file_from_member(member_path: str, archive: Path) -> str:
+    digest = __import__("hashlib").sha256()
+    with zipfile.ZipFile(archive) as zf, zf.open(member_path) as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def test_archive_inventory_rejects_traversal(tmp_path: Path) -> None:
+    archive = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("../escape.txt", "unsafe")
+    with pytest.raises(ValueError, match="Unsafe archive member path"):
+        inventory_archive(archive)
 
 
 def test_feature_and_reference_schema_validation() -> None:
@@ -70,6 +98,26 @@ def test_feature_and_reference_schema_validation() -> None:
     reference = pd.DataFrame({"compound": ["A"], "reference_risk": ["high"]})
     validate_feature_schema(features)
     validate_reference_schema(reference)
+
+
+def test_feature_schema_rejects_nonpositive_concentration() -> None:
+    features = pd.DataFrame(
+        {
+            "compound": ["A"],
+            "site": [1],
+            "cell_type": ["CDI"],
+            "concentration_index": [1],
+            "concentration_uM": [0.0],
+            "well": ["A01"],
+            "fpd_ms": [300.0],
+            "beat_rate_bpm": [60.0],
+            "amplitude_uv": [100.0],
+            "stv": [1.0],
+            "triangulation_proxy": [0.2],
+        }
+    )
+    with pytest.raises(ValueError, match="strictly positive"):
+        validate_feature_schema(features)
 
 
 def test_reference_rejects_duplicates() -> None:

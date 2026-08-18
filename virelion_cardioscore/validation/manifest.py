@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
+ALLOWED_EVIDENCE_LEVELS = {"raw_mea_dataset", "processed_mea_summary"}
 NORMALIZED_COLUMNS = {
     "compound",
     "site",
@@ -50,17 +52,51 @@ class ValidationManifest:
             raise ValueError(f"Validation manifest missing required fields: {missing}")
         if not bool(payload.get("locked", True)):
             raise ValueError("Validation manifest must set locked: true")
-        return cls(**{key: payload[key] for key in required}, locked=True)
+        evidence = str(payload["evidence_level"]).strip()
+        if evidence not in ALLOWED_EVIDENCE_LEVELS:
+            raise ValueError(
+                f"Unsupported evidence_level {evidence!r}; expected one of {sorted(ALLOWED_EVIDENCE_LEVELS)}"
+            )
+        sha = str(payload["asset_sha256"]).strip().lower()
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise ValueError("asset_sha256 must be a 64-character hexadecimal SHA-256 digest")
+        source_url = str(payload["source_url"]).strip()
+        if not source_url:
+            raise ValueError("source_url cannot be blank")
+        return cls(
+            source_id=str(payload["source_id"]),
+            evidence_level=evidence,
+            asset_path=str(payload["asset_path"]),
+            asset_sha256=sha,
+            source_url=source_url,
+            config_path=str(payload["config_path"]),
+            features_path=str(payload["features_path"]),
+            reference_path=str(payload["reference_path"]),
+            output_dir=str(payload["output_dir"]),
+            locked=True,
+        )
 
 
 def validate_feature_schema(frame: pd.DataFrame) -> None:
     missing = sorted(NORMALIZED_COLUMNS - set(frame.columns))
     if missing:
         raise ValueError(f"Standardized feature table missing required columns: {missing}")
-    if frame["compound"].isna().any() or frame["well"].isna().any():
-        raise ValueError("Standardized feature table contains missing compound or well identifiers")
-    if (frame["concentration_index"] < 0).any():
-        raise ValueError("concentration_index cannot be negative")
+    for column in ("compound", "site", "cell_type", "well"):
+        if frame[column].isna().any() or frame[column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Standardized feature table contains missing or blank {column!r} identifiers")
+    index_values = pd.to_numeric(frame["concentration_index"], errors="coerce")
+    if index_values.isna().any() or not np.isfinite(index_values.to_numpy()).all():
+        raise ValueError("concentration_index must be numeric and finite")
+    if (index_values < 0).any() or not np.isclose(index_values, np.round(index_values)).all():
+        raise ValueError("concentration_index must contain non-negative integers")
+    concentration_values = pd.to_numeric(frame["concentration_uM"], errors="coerce")
+    if concentration_values.isna().any() or not np.isfinite(concentration_values.to_numpy()).all():
+        raise ValueError("concentration_uM must be numeric and finite")
+    if (concentration_values <= 0).any():
+        raise ValueError("concentration_uM must be strictly positive")
+    site_values = pd.to_numeric(frame["site"], errors="coerce")
+    if site_values.isna().any() or not np.isfinite(site_values.to_numpy()).all():
+        raise ValueError("site must be numeric and finite")
 
 
 def validate_reference_schema(frame: pd.DataFrame) -> None:
@@ -68,10 +104,14 @@ def validate_reference_schema(frame: pd.DataFrame) -> None:
     if missing:
         raise ValueError(f"Reference table missing required columns: {missing}")
     allowed = {"low", "intermediate", "high", "L", "M", "H"}
-    observed = set(frame["reference_risk"].dropna().astype(str))
+    observed = set(frame["reference_risk"].dropna().astype(str).str.strip())
     invalid = sorted(observed - allowed)
     if invalid:
         raise ValueError(f"Unsupported reference risk labels: {invalid}")
+    if frame["reference_risk"].isna().any() or frame["reference_risk"].astype(str).str.strip().eq("").any():
+        raise ValueError("Reference table contains missing or blank risk labels")
+    if frame["compound"].isna().any() or frame["compound"].astype(str).str.strip().eq("").any():
+        raise ValueError("Reference table contains missing or blank compound identifiers")
     if frame["compound"].duplicated().any():
         duplicates = sorted(frame.loc[frame["compound"].duplicated(), "compound"].astype(str).unique())
         raise ValueError(f"Reference table contains duplicate compound labels: {duplicates}")

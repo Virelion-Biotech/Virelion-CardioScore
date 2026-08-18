@@ -1,10 +1,11 @@
-# Copy to an external/private workspace and fill in real values after the
-# authoritative validation archive is acquired. Do not commit the archive.
+# Copy to an external/private workspace and replace the placeholder SHA with the
+# actual immutable archive SHA-256 after the authoritative validation archive is acquired.
+# Do not commit the archive or a real validation manifest containing its local path.
 source_id: cipa_blinova_2018_myocyte_validation
 evidence_level: raw_mea_dataset
 source_url: https://cipaproject.org/data-resources/
 asset_path: ../../data/external/cipa_blinova_2018_original.zip
-asset_sha256: "REPLACE_WITH_64_CHAR_SHA256"
+asset_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
 config_path: ../../virelion_cardioscore/config/default.yaml
 features_path: ../../data/external/standardized/blinova_features.csv
 reference_path: ../../data/external/standardized/blinova_reference.csv
