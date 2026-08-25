@@ -23,9 +23,9 @@ RISK_ORDER = {
     "intermediate": 1,
     "moderate": 1,
     "high": 2,
-    "L": 0,
-    "M": 1,
-    "H": 2,
+    "l": 0,
+    "m": 1,
+    "h": 2,
 }
 
 
