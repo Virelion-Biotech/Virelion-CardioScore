@@ -23,6 +23,8 @@
 - Conventional-vs-hierarchical effect concordance analysis reporting absolute/relative disagreement and direction agreement.
 - Synthetic hierarchical stress-test generator with known treatment effects, additive plate drift, multiplicative scale drift, and treatment-allocation imbalance scenarios.
 - Robustness-matrix runner that sweeps plate drift, treatment allocation, replicate count, and noise level and summarizes conventional-estimator bias and recovery rate.
+- Runtime-aligned external validation schema requiring QC fields, vehicle metadata, finite endpoint values, and valid concentration semantics.
+- Explicit vehicle-structure validation for locked external runs when vehicle normalization is enabled.
 
 ### Fixed
 - Restored the actual `preprocessing.beat_detection` implementation after a module collision had replaced it with endpoint-extraction code.
@@ -36,6 +38,8 @@
 - Tightened raw-trace validation for finite values, non-negative concentrations, duplicate timestamps, and inconsistent electrode sampling rates.
 - Aligned hierarchical mixed-effects inference with the base run's QC/normalization population instead of re-analyzing rejected raw wells.
 - Hardened the browser demo against unsafe HTML injection and silent feature fabrication from missing CSV columns.
+- Fixed the standardized validation contract so vehicle controls may legitimately use `concentration_uM=0`, while treated wells must have strictly positive concentrations.
+- Prevented external validation from proceeding silently with compounds that lack matching vehicle controls under vehicle-normalized scoring.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -62,6 +66,7 @@
 - The robustness matrix is an operating-characteristic tool for synthetic data only; recovery thresholds are configurable and are not claims of real-world performance or regulatory validation.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
+- The locked external validation path now validates the full runtime feature contract before executing the pipeline and fails closed when normalized validation data lack compound-matched vehicle controls.
 
 ## [0.1.1] – 2026-08-16
 
