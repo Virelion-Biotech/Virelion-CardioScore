@@ -16,11 +16,16 @@ NORMALIZED_COLUMNS = {
     "concentration_index",
     "concentration_uM",
     "well",
+    "vehicle",
     "fpd_ms",
     "beat_rate_bpm",
     "amplitude_uv",
     "stv",
     "triangulation_proxy",
+    # Runtime QC fields consumed by CardioScorePipeline.apply_qc().
+    "n_electrodes",
+    "noise_sd_uv",
+    "beat_detection_rate",
 }
 REFERENCE_COLUMNS = {"compound", "reference_risk"}
 
@@ -77,25 +82,66 @@ class ValidationManifest:
 
 
 def validate_feature_schema(frame: pd.DataFrame) -> None:
+    """Validate the full standardized contract required by the runtime pipeline."""
     missing = sorted(NORMALIZED_COLUMNS - set(frame.columns))
     if missing:
         raise ValueError(f"Standardized feature table missing required columns: {missing}")
+
     for column in ("compound", "site", "cell_type", "well"):
         if frame[column].isna().any() or frame[column].astype(str).str.strip().eq("").any():
             raise ValueError(f"Standardized feature table contains missing or blank {column!r} identifiers")
+
+    vehicle = frame["vehicle"]
+    vehicle_values = set(vehicle.astype(str).str.strip().str.lower())
+    allowed_vehicle = {"true", "false", "1", "0", "1.0", "0.0", "yes", "no"}
+    if not vehicle_values.issubset(allowed_vehicle):
+        raise ValueError(f"vehicle contains unsupported values: {sorted(vehicle_values - allowed_vehicle)}")
+    vehicle_bool = vehicle.astype(str).str.strip().str.lower().isin({"true", "1", "1.0", "yes"})
+
     index_values = pd.to_numeric(frame["concentration_index"], errors="coerce")
     if index_values.isna().any() or not np.isfinite(index_values.to_numpy()).all():
         raise ValueError("concentration_index must be numeric and finite")
     if (index_values < 0).any() or not np.isclose(index_values, np.round(index_values)).all():
         raise ValueError("concentration_index must contain non-negative integers")
+
     concentration_values = pd.to_numeric(frame["concentration_uM"], errors="coerce")
     if concentration_values.isna().any() or not np.isfinite(concentration_values.to_numpy()).all():
         raise ValueError("concentration_uM must be numeric and finite")
-    if (concentration_values <= 0).any():
-        raise ValueError("concentration_uM must be strictly positive")
+    if ((~vehicle_bool) & (concentration_values <= 0)).any():
+        raise ValueError("treated wells must have strictly positive concentration_uM")
+    if (vehicle_bool & (concentration_values < 0)).any():
+        raise ValueError("vehicle wells may use concentration_uM=0 but cannot be negative")
+
     site_values = pd.to_numeric(frame["site"], errors="coerce")
     if site_values.isna().any() or not np.isfinite(site_values.to_numpy()).all():
         raise ValueError("site must be numeric and finite")
+
+    numeric_runtime_columns = (
+        "fpd_ms",
+        "beat_rate_bpm",
+        "amplitude_uv",
+        "stv",
+        "triangulation_proxy",
+        "n_electrodes",
+        "noise_sd_uv",
+        "beat_detection_rate",
+    )
+    for column in numeric_runtime_columns:
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if values.isna().any() or not np.isfinite(values.to_numpy()).all():
+            raise ValueError(f"{column} must be numeric and finite")
+
+    electrode_values = pd.to_numeric(frame["n_electrodes"], errors="coerce")
+    if (electrode_values < 0).any() or not np.isclose(electrode_values, np.round(electrode_values)).all():
+        raise ValueError("n_electrodes must contain non-negative integers")
+
+    noise_values = pd.to_numeric(frame["noise_sd_uv"], errors="coerce")
+    if (noise_values < 0).any():
+        raise ValueError("noise_sd_uv cannot be negative")
+
+    detection_values = pd.to_numeric(frame["beat_detection_rate"], errors="coerce")
+    if ((detection_values < 0) | (detection_values > 1)).any():
+        raise ValueError("beat_detection_rate must be between 0 and 1")
 
 
 def validate_reference_schema(frame: pd.DataFrame) -> None:
@@ -114,6 +160,20 @@ def validate_reference_schema(frame: pd.DataFrame) -> None:
     if frame["compound"].duplicated().any():
         duplicates = sorted(frame.loc[frame["compound"].duplicated(), "compound"].astype(str).unique())
         raise ValueError(f"Reference table contains duplicate compound labels: {duplicates}")
+
+
+def validate_vehicle_structure(frame: pd.DataFrame) -> None:
+    """Require a matching vehicle control for every compound under compound-level normalization."""
+    if "compound" not in frame.columns or "vehicle" not in frame.columns:
+        raise ValueError("Vehicle-structure validation requires compound and vehicle columns")
+    vehicle_bool = frame["vehicle"].astype(str).str.strip().str.lower().isin({"true", "1", "1.0", "yes"})
+    treated_compounds = set(frame.loc[~vehicle_bool, "compound"].astype(str))
+    vehicle_compounds = set(frame.loc[vehicle_bool, "compound"].astype(str))
+    missing_controls = sorted(treated_compounds - vehicle_compounds)
+    if missing_controls:
+        raise ValueError(
+            "Missing matching vehicle control wells for compound(s): " + ", ".join(missing_controls)
+        )
 
 
 def resolve_relative(base: str | Path, value: str) -> Path:
