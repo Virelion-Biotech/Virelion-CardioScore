@@ -21,6 +21,7 @@ from virelion_cardioscore.validation.manifest import (
     resolve_relative,
     validate_feature_schema,
     validate_reference_schema,
+    validate_vehicle_structure,
 )
 from virelion_cardioscore.validation.metrics import locked_metrics, stratified_failures
 
@@ -60,6 +61,9 @@ def main() -> int:
     validate_reference_schema(reference)
 
     pipeline = CardioScorePipeline.from_config(config)
+    if bool(pipeline.config.get("scoring", {}).get("normalize_by_vehicle", True)):
+        validate_vehicle_structure(features)
+
     result = pipeline.run(features)
     required_observed = {"compound", "risk_class", "cardioscore"}
     missing_observed = sorted(required_observed - set(result.summary_table.columns))
