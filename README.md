@@ -2,19 +2,17 @@
 
 CardioScore is a Python framework for analyzing human iPSC-cardiomyocyte microelectrode-array (MEA) field-potential data and combining electrophysiology endpoints into a configurable research risk score.
 
-## Scope
+## What it contains
 
-- signal and electrode quality checks;
-- field-potential duration, beat rate, amplitude, short-term variability, and triangulation-related features;
-- vehicle normalization and concentration-aware aggregation;
-- technical-well and independent-unit accounting;
-- bootstrap uncertainty and optional mixed-effects analysis;
-- dose-response diagnostics;
-- transparent weighted scoring with configurable thresholds;
-- benchmark manifests and reproducible reports;
-- CLI, Python API, and a browser demonstration.
-
-The framework can be used for general cardiac safety research, including medical-countermeasure programs. It is not a regulatory assay.
+- Signal and electrode quality checks.
+- Field-potential duration, beat rate, amplitude, short-term variability, and triangulation-related features.
+- Vehicle normalization and concentration-aware aggregation.
+- Technical-well and independent-unit accounting.
+- Bootstrap uncertainty and optional mixed-effects analysis.
+- Dose-response diagnostics.
+- Transparent weighted scoring with configurable thresholds.
+- Benchmark manifests and reproducible reports.
+- CLI, Python API, and browser demonstration.
 
 ## Installation
 
@@ -24,7 +22,9 @@ Python 3.10+ is required.
 pip install -e '.[dev,mixed]'
 ```
 
-## Quick start
+## Usage
+
+Run the demonstration:
 
 ```bash
 cardioscore demo
@@ -42,28 +42,24 @@ Run a reference benchmark:
 cardioscore benchmark --manifest benchmarks/reference_manifest.yaml
 ```
 
-## Risk score
+## Inputs and outputs
 
-The default implementation maps a weighted score to configurable classes. The default thresholds are implementation parameters, not validated clinical or regulatory cutoffs. Reference scores should be independently reviewed and locked before benchmark use.
+**Inputs:** MEA field-potential feature tables or supported analysis inputs, well/sample metadata, vehicle and concentration information, analysis configuration, and optional benchmark manifests.
 
-| Score | Default class |
-|---|---|
-| `< 0.30` | Low |
-| `0.30–<0.60` | Moderate |
-| `≥ 0.60` | High |
+**Outputs:** electrophysiology feature summaries, normalized/aggregated results, uncertainty and statistical analyses, dose-response diagnostics, configurable risk-score classes, benchmark reports, and reproducibility metadata.
 
-## Web demonstration
+The default score classes are implementation parameters, not validated clinical or regulatory cutoffs.
 
-`web/index.html` provides a client-side demonstration using synthetic data and the supported well-level aggregation contract. It does not implement the full Python biological-unit hierarchy or mixed-effects workflow.
+## Validation
 
-## Scientific limitations
+Validation includes signal/electrode QC, independent-unit accounting, bootstrap uncertainty, optional mixed-effects analysis, dose-response diagnostics, and benchmark manifests. The repository's software tests should be run with the development test suite.
 
-CardioScore is research software. A score is a model output and does not establish cardiotoxicity, clinical risk, regulatory acceptance, or causal mechanism. CiPA-oriented terminology describes alignment of analysis concepts; it does not mean that this repository is a CiPA-validated implementation or an ICH S7B substitute.
+Validation of the software or score does not establish cardiotoxicity detection, clinical risk, regulatory acceptance, or causal mechanism.
+
+## Limitations
+
+CardioScore is research software, not a regulatory assay. Results depend on recording quality, feature extraction, experimental-unit definitions, normalization, scoring weights, and threshold choices. CiPA-oriented terminology describes analysis concepts and does not make the repository a CiPA-validated implementation or an ICH S7B substitute.
 
 ## License
 
 GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See `LICENSE`.
-
-## Citation
-
-Cite the repository release, analysis configuration, and source MEA datasets used in a study.
