@@ -68,6 +68,7 @@ Issues = "https://github.com/Virelion-Biotech/Virelion-CardioScore/issues"
 
 [project.scripts]
 cardioscore = "virelion_cardioscore.cli:main"
+cardioscore-hearttwin = "virelion_cardioscore.hearttwin_adapter:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
