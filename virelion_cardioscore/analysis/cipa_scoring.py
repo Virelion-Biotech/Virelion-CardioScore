@@ -221,18 +221,23 @@ class CardioScoreEngine:
         if name not in group.columns:
             raise ValueError(f"Feature table is missing scoring endpoint {name!r}.")
         meta = self.endpoints[name]
-        values = pd.to_numeric(group[name], errors="coerce")
-        values = values[np.isfinite(values)]
-        if values.empty:
+        raw_values = pd.to_numeric(group[name], errors="coerce")
+        if raw_values.isna().any() or (~np.isfinite(raw_values.to_numpy(dtype=float))).any():
+            n_invalid = int(raw_values.isna().sum() + np.sum(~np.isfinite(raw_values.to_numpy(dtype=float))))
             raise ValueError(
-                f"Scoring endpoint {name!r} has no finite observations for the current group."
+                f"Scoring endpoint {name!r} contains {n_invalid} missing or non-finite observation(s) for the current group."
+            )
+        values = raw_values.to_numpy(dtype=float)
+        if len(values) == 0:
+            raise ValueError(
+                f"Scoring endpoint {name!r} has no observations for the current group."
             )
         if meta["direction"] == "absolute":
-            return float(values.abs().max())
+            return float(np.max(np.abs(values)))
         if meta["direction"] == "increase":
-            return float(values.max())
+            return float(np.max(values))
         if meta["direction"] == "decrease":
-            return float(values.min())
+            return float(np.min(values))
         raise ValueError(f"Unknown direction: {meta['direction']}")
 
     def score_feature_table(self, df: pd.DataFrame) -> list[ScoreResult]:
