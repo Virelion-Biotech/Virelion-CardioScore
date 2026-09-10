@@ -52,6 +52,7 @@ from virelion_cardioscore.analysis.statistics import (
     BootstrapCI,
     ProfileDifference,
     bootstrap_ci,
+    bootstrap_cluster_ci,
     bootstrap_profile_difference,
 )
 from virelion_cardioscore.analysis.stress_tests import (
@@ -106,6 +107,7 @@ __all__ = [
     "BootstrapCI",
     "ProfileDifference",
     "bootstrap_ci",
+    "bootstrap_cluster_ci",
     "bootstrap_profile_difference",
     "VariabilityDiagnostic",
     "control_variability",
