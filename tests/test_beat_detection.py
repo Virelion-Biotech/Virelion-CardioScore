@@ -46,6 +46,30 @@ def test_detect_beats_does_not_double_count_repolarization():
     assert result.n_beats > expected_beats * 0.7
 
 
+def test_detect_beats_missed_beats_lower_detection_rate():
+    """A configured prominence that misses weak beats must not report 100% detection."""
+    fs = 1000.0
+    t = np.arange(0, 10, 1 / fs)
+    trace = np.zeros_like(t)
+
+    # Strong beats occur every 2 s and pass the configured 20 uV threshold.
+    # Weak beats occur halfway between them and are visible to the lower-
+    # prominence candidate detector but should fail the configured detector.
+    for beat_time in np.arange(0.5, 10.0, 2.0):
+        trace += 100 * np.exp(-((t - beat_time) ** 2) / (2 * 0.003**2))
+    for beat_time in np.arange(1.5, 10.0, 2.0):
+        trace += 8 * np.exp(-((t - beat_time) ** 2) / (2 * 0.003**2))
+
+    result = detect_beats(
+        trace,
+        fs_hz=fs,
+        config=BeatDetectionConfig(min_prominence_uv=20.0, min_distance_ms=250.0),
+    )
+
+    assert 0 < result.n_beats < len(result.candidate_beat_indices)
+    assert result.beat_detection_rate < 0.75
+
+
 def test_detect_beats_empty_on_flat_trace():
     fs = 1000.0
     flat = np.random.default_rng(0).normal(0, 1, 5000)
@@ -61,6 +85,11 @@ def test_detect_beats_empty_on_flat_trace():
 def test_detect_beats_rejects_2d_input():
     with pytest.raises(ValueError, match="1D"):
         detect_beats(np.zeros((10, 10)), fs_hz=1000.0)
+
+
+def test_detect_beats_rejects_nonfinite_sampling_rate():
+    with pytest.raises(ValueError, match="finite and positive"):
+        detect_beats(np.zeros(1000), fs_hz=np.nan)
 
 
 def test_detect_beats_respects_refractory_period():
