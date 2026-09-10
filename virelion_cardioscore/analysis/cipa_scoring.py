@@ -219,11 +219,14 @@ class CardioScoreEngine:
 
     def _feature_endpoint_value(self, group: pd.DataFrame, name: str) -> float:
         if name not in group.columns:
-            return 0.0
+            raise ValueError(f"Feature table is missing scoring endpoint {name!r}.")
         meta = self.endpoints[name]
-        values = pd.to_numeric(group[name], errors="coerce").dropna()
+        values = pd.to_numeric(group[name], errors="coerce")
+        values = values[np.isfinite(values)]
         if values.empty:
-            return 0.0
+            raise ValueError(
+                f"Scoring endpoint {name!r} has no finite observations for the current group."
+            )
         if meta["direction"] == "absolute":
             return float(values.abs().max())
         if meta["direction"] == "increase":
