@@ -220,11 +220,11 @@ def extract_well_features(
 
     if not reliable:
         return WellFeatures(
-            fpd_ms=0.0,
+            fpd_ms=float("nan"),
             beat_rate_bpm=0.0,
-            amplitude_uv=0.0,
-            stv=0.0,
-            triangulation_proxy=0.0,
+            amplitude_uv=float("nan"),
+            stv=float("nan"),
+            triangulation_proxy=float("nan"),
             noise_sd_uv=float(np.mean([f.noise_sd_uv for f in per_electrode.values()])),
             n_electrodes=len(electrode_traces),
             beat_detection_rate=float(np.mean([f.beat_detection_rate for f in per_electrode.values()])),
@@ -235,11 +235,11 @@ def extract_well_features(
     tri_vals = [f.triangulation_proxy for f in reliable.values() if f.triangulation_proxy is not None]
 
     return WellFeatures(
-        fpd_ms=float(np.mean(fpd_vals)) if fpd_vals else 0.0,
+        fpd_ms=float(np.mean(fpd_vals)) if fpd_vals else float("nan"),
         beat_rate_bpm=float(np.mean([f.beat_rate_bpm for f in reliable.values()])),
         amplitude_uv=float(np.mean([abs(f.amplitude_uv) for f in reliable.values()])),
         stv=float(np.mean([f.stv for f in reliable.values()])),
-        triangulation_proxy=float(np.mean(tri_vals)) if tri_vals else 0.0,
+        triangulation_proxy=float(np.mean(tri_vals)) if tri_vals else float("nan"),
         noise_sd_uv=float(np.mean([f.noise_sd_uv for f in per_electrode.values()])),
         n_electrodes=len(electrode_traces),
         beat_detection_rate=float(np.mean([f.beat_detection_rate for f in reliable.values()])),
