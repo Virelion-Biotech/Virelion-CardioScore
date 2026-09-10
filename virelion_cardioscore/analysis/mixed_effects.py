@@ -87,9 +87,23 @@ def fit_random_intercept(
         )
 
     model_df = df[[endpoint, treatment_column, group_column]].copy()
+    if model_df[group_column].isna().any() or model_df[group_column].astype(str).str.strip().eq("").any():
+        raise ValueError(f"Mixed-effects grouping column {group_column!r} contains missing or blank identifiers.")
+
     model_df[endpoint] = pd.to_numeric(model_df[endpoint], errors="coerce")
     model_df[treatment_column] = pd.to_numeric(model_df[treatment_column], errors="coerce")
-    model_df = model_df.dropna()
+    if model_df[endpoint].isna().any():
+        raise ValueError(f"Endpoint column {endpoint!r} contains missing or non-numeric observations.")
+    if model_df[treatment_column].isna().any():
+        raise ValueError(f"Treatment column {treatment_column!r} contains missing or non-numeric observations.")
+    if not np.isfinite(model_df[endpoint].to_numpy()).all():
+        raise ValueError(f"Endpoint column {endpoint!r} contains non-finite observations.")
+    if not np.isfinite(model_df[treatment_column].to_numpy()).all():
+        raise ValueError(f"Treatment column {treatment_column!r} contains non-finite observations.")
+    model_df = model_df.copy()
+    if not set(model_df[treatment_column].unique()).issubset({0, 1}):
+        raise ValueError(f"Treatment column {treatment_column!r} must contain only 0/1 values.")
+
     if model_df.empty:
         raise ValueError("No complete observations remain for mixed-effects modeling.")
     if model_df[group_column].nunique() < 2:
