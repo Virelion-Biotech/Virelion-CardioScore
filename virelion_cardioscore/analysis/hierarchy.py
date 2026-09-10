@@ -87,6 +87,16 @@ def _require_complete_identifier(df: pd.DataFrame, column: str) -> None:
         )
 
 
+def _unit_group_columns(df: pd.DataFrame, unit_column: str) -> list[str]:
+    """Return a collision-safe experimental-unit grouping key."""
+    if "site" not in df.columns:
+        return [unit_column]
+    _require_complete_identifier(df, "site")
+    if unit_column == "site":
+        return [unit_column]
+    return ["site", unit_column]
+
+
 def _resolve_scoring_column(
     df: pd.DataFrame,
     scoring_unit: str,
@@ -149,13 +159,17 @@ def aggregate_to_scoring_units(
         batch_unit_column=batch_unit_column,
         plate_unit_column=plate_unit_column,
     )
-    group_columns = ["compound", "concentration_uM", unit_column]
+    unit_key_columns = _unit_group_columns(effects, unit_column)
+    group_columns = ["compound", "concentration_uM", *unit_key_columns]
     rows: list[dict] = []
     for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
         row = dict(zip(group_columns, keys, strict=True))
-        row["well"] = f"{scoring_unit}:{keys[-1]}"
+        if len(unit_key_columns) == 1:
+            row["well"] = f"{scoring_unit}:{keys[-1]}"
+        else:
+            row["well"] = f"{scoring_unit}:{keys[-2]}:{keys[-1]}"
         row["n_wells"] = int(group["well"].nunique())
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
@@ -184,7 +198,7 @@ def summarize_experimental_units(
             "beat_rate_change_pct",
             "amplitude_change_pct",
             "stv_increase",
-            "triangulation_proxy",
+            "triangulation_proxy_change",
         ]
 
     metadata = hierarchy_columns(
@@ -195,19 +209,21 @@ def summarize_experimental_units(
     )
     biological = biological_unit_column or "biological_replicate"
     if biological in metadata:
-        unit_columns = ["compound", "concentration_uM", biological]
+        base_unit = biological
     else:
         batch = batch_unit_column or ("batch_id" if "batch_id" in metadata else "experiment_id")
         if batch in metadata:
-            unit_columns = ["compound", "concentration_uM", batch]
+            base_unit = batch
         else:
             plate = plate_unit_column or "plate_id"
             if plate in metadata:
-                unit_columns = ["compound", "concentration_uM", plate]
+                base_unit = plate
             else:
-                unit_columns = ["compound", "concentration_uM", "well"]
+                base_unit = "well"
 
-    for column in unit_columns[2:]:
+    unit_key_columns = _unit_group_columns(effects, base_unit)
+    unit_columns = ["compound", "concentration_uM", *unit_key_columns]
+    for column in unit_key_columns:
         _require_complete_identifier(effects, column)
 
     grouped = effects.groupby(unit_columns, sort=True, dropna=False)
@@ -245,8 +261,18 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
         unit = "well"
 
     _require_complete_identifier(summary, unit)
+    if "site" in summary.columns and unit != "site":
+        _require_complete_identifier(summary, "site")
+        scoped = summary.copy()
+        scoped["_independent_unit_key"] = (
+            scoped["site"].astype(str) + "::" + scoped[unit].astype(str)
+        )
+        count_column = "_independent_unit_key"
+    else:
+        count_column = unit
+
     return (
-        summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[unit]
+        summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[count_column]
         .nunique()
         .reset_index(name="n_independent_units")
     )
