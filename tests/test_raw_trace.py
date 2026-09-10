@@ -56,9 +56,6 @@ def test_validate_raw_trace_schema_nan_values():
             "voltage_uv": [1.5],
         }
     )
-    # NaN fails the finite-value check (which now runs before the dedicated
-    # missing-value check, since NaN is also non-finite), so that's the
-    # message that actually surfaces here.
     with pytest.raises(RawTraceSchemaError, match="finite values"):
         validate_raw_trace_schema(df)
 
@@ -85,7 +82,6 @@ def test_load_raw_traces_csv_missing_file(tmp_path):
 
 
 def test_load_raw_traces_csv_groups_by_well_and_electrode(two_compound_plate):
-    # 2 compounds x (1 vehicle + 2 doses) x 2 replicates = 12 wells
     recordings = load_raw_traces_csv(two_compound_plate)
     assert len(recordings) == 12
     for rec in recordings:
@@ -102,12 +98,13 @@ def test_load_raw_traces_csv_infers_sampling_rate(two_compound_plate):
 def test_load_raw_traces_csv_rejects_irregular_sampling(two_compound_plate, tmp_path):
     """Raw traces with non-uniform timestamp gaps must fail closed."""
     frame = pd.read_csv(two_compound_plate)
-    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "V1") & (frame["electrode_id"] == "E1")
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E1")
     indices = frame.index[mask]
     assert len(indices) > 5
-    # Introduce a 5% interval distortion, large enough that treating this
-    # recording as uniformly sampled would materially alter timing/filtering.
-    frame.loc[indices[3], "time_s"] = float(frame.loc[indices[2], "time_s"] + 1.05 * (frame.loc[indices[2], "time_s"] - frame.loc[indices[1], "time_s"]))
+    frame.loc[indices[3], "time_s"] = float(
+        frame.loc[indices[2], "time_s"]
+        + 1.05 * (frame.loc[indices[2], "time_s"] - frame.loc[indices[1], "time_s"])
+    )
     broken = tmp_path / "irregular.csv"
     frame.to_csv(broken, index=False)
 
@@ -120,18 +117,9 @@ def test_recordings_to_feature_table_schema(two_compound_plate):
     table = recordings_to_feature_table(recordings)
 
     expected_cols = {
-        "compound",
-        "concentration_uM",
-        "well",
-        "vehicle",
-        "fpd_ms",
-        "beat_rate_bpm",
-        "amplitude_uv",
-        "stv",
-        "triangulation_proxy",
-        "noise_sd_uv",
-        "n_electrodes",
-        "beat_detection_rate",
+        "compound", "concentration_uM", "well", "vehicle", "fpd_ms",
+        "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy",
+        "noise_sd_uv", "n_electrodes", "beat_detection_rate",
     }
     assert expected_cols.issubset(set(table.columns))
     assert len(table) == 12
@@ -139,7 +127,6 @@ def test_recordings_to_feature_table_schema(two_compound_plate):
 
 def test_load_raw_traces_to_feature_table_end_to_end(two_compound_plate):
     table = load_raw_traces_to_feature_table(two_compound_plate)
-
     toxic_vehicle = table[(table["compound"] == "Compound_Toxic") & (table["vehicle"])]
     toxic_high_dose = table[
         (table["compound"] == "Compound_Toxic") & (table["concentration_uM"] == 10.0)
@@ -148,10 +135,6 @@ def test_load_raw_traces_to_feature_table_end_to_end(two_compound_plate):
 
 
 def test_feature_table_from_raw_traces_runs_through_real_pipeline(two_compound_plate):
-    """
-    Full integration: raw voltage CSV -> feature extraction -> the actual
-    CardioScorePipeline, with no schema changes needed on the pipeline side.
-    """
     from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
     table = load_raw_traces_to_feature_table(two_compound_plate)
