@@ -269,10 +269,11 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
         )
         count_column = "_independent_unit_key"
     else:
+        scoped = summary
         count_column = unit
 
     return (
-        summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[count_column]
+        scoped.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[count_column]
         .nunique()
         .reset_index(name="n_independent_units")
     )
