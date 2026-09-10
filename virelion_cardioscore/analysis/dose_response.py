@@ -151,7 +151,13 @@ def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, e
     if direction is None:
         return None
     if direction == "absolute":
-        return float(max(abs(bottom), abs(top)))
+        # Absolute-direction endpoints treat either prolongation or shortening
+        # as adverse. For a concentration-response curve, the relevant
+        # quantity is the excursion between the fitted baseline and maximal
+        # response, not the absolute value of either asymptote. Counting
+        # |bottom| would incorrectly treat a non-zero baseline as dose-induced
+        # harm.
+        return float(abs(top - bottom))
     if direction == "increase":
         return float(max(0.0, top - bottom))
     if direction == "decrease":
