@@ -99,13 +99,16 @@ def test_extract_well_features_empty_dict_raises():
 
 
 def test_extract_well_features_handles_all_noise_electrode():
-    """A well with no real beats should degrade to zeros, not crash."""
+    """A well with no reliable beats must expose undefined endpoints as missing."""
     noisy = {"E1": np.random.default_rng(0).normal(0, 5, 10000)}
     features = extract_well_features(noisy, fs_hz=1000.0)
 
     assert features.n_electrodes == 1
-    assert features.fpd_ms == 0.0
+    assert np.isnan(features.fpd_ms)
     assert features.beat_rate_bpm == 0.0
+    assert np.isnan(features.amplitude_uv)
+    assert np.isnan(features.stv)
+    assert np.isnan(features.triangulation_proxy)
 
 
 def test_extract_well_features_excludes_unreliable_electrodes():
