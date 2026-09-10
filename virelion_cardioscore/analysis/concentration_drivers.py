@@ -20,6 +20,14 @@ ENDPOINT_DIRECTIONS = {
     "triangulation_proxy_change": "increase",
 }
 
+DEFAULT_ENDPOINT_THRESHOLDS = {
+    "fpd_change_pct": 10.0,
+    "beat_rate_change_pct": 15.0,
+    "amplitude_change_pct": 20.0,
+    "stv_increase": 0.15,
+    "triangulation_proxy_change": 0.20,
+}
+
 
 @dataclass(frozen=True)
 class ConcentrationDriver:
@@ -60,29 +68,23 @@ def _select_driver(values: pd.Series, direction: str) -> int:
     raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
 
 
-def _support_threshold(endpoint: str, effect_threshold_pct: float) -> float:
-    """Return the endpoint-native threshold corresponding to a percent cutoff."""
-    if endpoint in {"stv_increase", "triangulation_proxy_change"}:
-        return effect_threshold_pct / 100.0
-    return effect_threshold_pct
-
-
 def concentration_drivers(
     concentration_summary: pd.DataFrame,
     *,
     endpoint_directions: dict[str, str] | None = None,
-    effect_threshold_pct: float = 10.0,
+    endpoint_thresholds: dict[str, float] | None = None,
+    effect_threshold_pct: float | None = None,
 ) -> pd.DataFrame:
     """Identify worst-case concentrations and signal support for each endpoint.
 
-    ``support_fraction`` is the fraction of tested concentrations whose endpoint
-    response reaches ``effect_threshold_pct`` in the configured harmful direction.
-    FPD, rate, and amplitude use percentage-point units; STV and triangulation use
-    fractional units internally and are converted from the same percent cutoff.
+    ``endpoint_thresholds`` should use the same native units as the endpoint
+    values. The legacy ``effect_threshold_pct`` argument is retained for API
+    compatibility, but when supplied it is only used for endpoints not present
+    in ``endpoint_thresholds`` or the defaults.
     """
     if concentration_summary.empty:
         return pd.DataFrame()
-    if effect_threshold_pct < 0:
+    if effect_threshold_pct is not None and effect_threshold_pct < 0:
         raise ValueError("effect_threshold_pct must be non-negative.")
     required = {"compound", "concentration_uM"}
     missing = sorted(required - set(concentration_summary.columns))
@@ -90,6 +92,11 @@ def concentration_drivers(
         raise ValueError(f"Concentration summary is missing columns: {missing}.")
 
     directions = {**ENDPOINT_DIRECTIONS, **(endpoint_directions or {})}
+    thresholds = {**DEFAULT_ENDPOINT_THRESHOLDS, **(endpoint_thresholds or {})}
+    if effect_threshold_pct is not None:
+        for endpoint in directions:
+            thresholds.setdefault(endpoint, effect_threshold_pct / 100.0 if endpoint in {"stv_increase", "triangulation_proxy_change"} else effect_threshold_pct)
+
     rows: list[dict[str, object]] = []
     for compound, group in concentration_summary.groupby("compound", sort=True):
         group = group.sort_values("concentration_uM")
@@ -105,7 +112,11 @@ def concentration_drivers(
 
             driver_index = _select_driver(finite_values, direction)
             driver_row = finite_group.loc[driver_index]
-            threshold = _support_threshold(endpoint, effect_threshold_pct)
+            if endpoint not in thresholds:
+                raise ValueError(f"No effect threshold is configured for endpoint {endpoint!r}.")
+            threshold = float(thresholds[endpoint])
+            if threshold < 0:
+                raise ValueError(f"Effect threshold for endpoint {endpoint!r} cannot be negative.")
             if direction == "decrease":
                 harmful = finite_values <= -threshold
             elif direction == "increase":
