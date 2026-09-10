@@ -137,17 +137,28 @@ class CardioScorePipeline:
         return kept
 
     def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
-        scope = self.config.get("control_normalization", {}).get("scope", "compound")
+        control_cfg = self.config.get("control_normalization", {})
+        scope = control_cfg.get("scope", "auto")
+        if scope == "auto":
+            if "plate_id" in df.columns:
+                scope = "plate"
+            elif "batch_id" in df.columns:
+                scope = "batch"
+            elif "experiment_id" in df.columns:
+                scope = "batch"
+            else:
+                scope = "compound"
+            self.qc_log.append(f"Control normalization: auto-selected {scope!r} scope.")
         aliases = {
             "compound": ["compound"],
-            "plate": ["plate_id"],
-            "batch": ["batch_id" if "batch_id" in df.columns else "experiment_id"],
-            "biological_replicate": ["biological_replicate"],
+            "plate": ["compound", "plate_id"],
+            "batch": ["compound", "batch_id" if "batch_id" in df.columns else "experiment_id"],
+            "biological_replicate": ["compound", "biological_replicate"],
             "global": [],
         }
         if scope not in aliases:
             raise ValueError(
-                f"Unsupported control_normalization.scope: {scope!r}. Expected 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
+                f"Unsupported control_normalization.scope: {scope!r}. Expected 'auto', 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
             )
         columns = aliases[scope]
         missing = [column for column in columns if column not in df.columns]
@@ -406,8 +417,10 @@ class CardioScorePipeline:
         if not cfg.get("fit_curve", False) or concentration_summary.empty:
             return {}
         results: dict[str, list[DoseResponseFit]] = {}
+        endpoint_directions = {name: str(meta["direction"]) for name, meta in self.engine.endpoints.items()}
+        endpoint_thresholds = {name: float(meta["effect_threshold"]) for name, meta in self.engine.endpoints.items()}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(group, min_points=int(cfg.get("fit_min_concentrations", 4)), min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)), min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)), ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)), max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)))
+            fits = fit_concentration_series(group, min_points=int(cfg.get("fit_min_concentrations", 4)), min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)), min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)), ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)), max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)), endpoint_directions=endpoint_directions, endpoint_thresholds=endpoint_thresholds)
             results[str(compound)] = fits
         return results
 
