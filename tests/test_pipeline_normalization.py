@@ -12,7 +12,7 @@ def _effects_frame() -> pd.DataFrame:
             "compound": ["A", "A", "A", "A"],
             "concentration_uM": [0.0, 0.0, 1.0, 1.0],
             "well": ["V1", "V2", "T1", "T2"],
-            "vehicle": ["True", "False", "False", "false"],
+            "vehicle": ["True", "true", "False", "false"],
             "fpd_ms": [100.0, 101.0, 120.0, 121.0],
             "beat_rate_bpm": [60.0, 60.0, 55.0, 55.0],
             "amplitude_uv": [100.0, 100.0, 90.0, 90.0],
