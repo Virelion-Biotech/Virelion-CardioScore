@@ -72,6 +72,23 @@ def test_biological_replicate_scoring_aggregates_technical_wells():
     assert set(aggregated["n_wells"]) == {2}
 
 
+def test_site_scopes_reused_biological_replicate_ids():
+    effects = _effects()
+    effects.loc[:3, "site"] = 1
+    effects.loc[4:, "site"] = 2
+    effects.loc[4:, "biological_replicate"] = ["B1", "B1", "B2", "B2"]
+
+    aggregated = aggregate_to_scoring_units(effects, scoring_unit="biological_replicate")
+    assert len(aggregated) == 4
+    assert set(zip(aggregated["site"], aggregated["biological_replicate"])) == {
+        (1, "B1"), (1, "B2"), (2, "B1"), (2, "B2")
+    }
+
+    summary = summarize_experimental_units(effects)
+    counts = count_independent_units(summary)
+    assert counts.iloc[0]["n_independent_units"] == 4
+
+
 def test_well_scoring_preserves_historical_rows():
     aggregated = aggregate_to_scoring_units(_effects(), scoring_unit="well")
     assert len(aggregated) == 8
@@ -85,12 +102,6 @@ def test_missing_requested_metadata_is_rejected():
 
 
 def test_batch_alias_supports_experiment_id():
-    # plate_id genuinely has two distinct values (P1, P2) in this fixture,
-    # so aliasing it to experiment_id and grouping by "batch" correctly
-    # produces two groups -- one per distinct experiment_id, each averaging
-    # its own 4 technical wells. (A single-group expectation here would only
-    # make sense if batch_id, which actually is constant at "Batch1", had
-    # been the column renamed instead.)
     effects = _effects().drop(columns=["batch_id"]).rename(columns={"plate_id": "experiment_id"})
     aggregated = aggregate_to_scoring_units(effects, scoring_unit="batch")
 
