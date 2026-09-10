@@ -16,6 +16,7 @@ from virelion_cardioscore.analysis.normalization import apply_control_anchor_cor
 from virelion_cardioscore.analysis.statistics import bootstrap_ci
 from virelion_cardioscore.analysis.variability import control_variability, standardized_treatment_separation
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
+from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
 @dataclass
@@ -160,12 +161,17 @@ class CardioScorePipeline:
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
         control_cfg = self.config.get("control_normalization", {})
         normalize = bool(self.config.get("scoring", {}).get("normalize_by_vehicle", True))
+        working_df = df.copy()
+        if "vehicle" in working_df.columns:
+            working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
+        else:
+            raise ValueError("Effect calculation requires a 'vehicle' column.")
         if not normalize:
             required = {"compound", "concentration_uM", "well", "fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"}
-            missing = sorted(required - set(df.columns))
+            missing = sorted(required - set(working_df.columns))
             if missing:
                 raise ValueError(f"normalize_by_vehicle=false requires precomputed effect columns: {missing}")
-            effects = df.copy()
+            effects = working_df.copy()
             effects["vehicle"] = False
             effects["max_effect_pct"] = effects[["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct"]].abs().max(axis=1)
             if "stv_increase" in effects.columns:
@@ -176,14 +182,14 @@ class CardioScorePipeline:
         records = []
         optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id"]
         scope = control_cfg.get("scope", "compound")
-        control_columns = self._control_group_columns(df)
+        control_columns = self._control_group_columns(working_df)
         require_match = bool(control_cfg.get("require_matching_control", True))
-        grouped = df.groupby(control_columns, dropna=False, sort=True) if control_columns else [((), df)]
+        grouped = working_df.groupby(control_columns, dropna=False, sort=True) if control_columns else [((), working_df)]
         for group_key, group in grouped:
             if not isinstance(group_key, tuple):
                 group_key = (group_key,)
-            vehicle = group[group["vehicle"].astype(bool)]
-            treated = group[~group["vehicle"].astype(bool)]
+            vehicle = group[group["vehicle"]]
+            treated = group[~group["vehicle"]]
             if vehicle.empty:
                 message = f"No matching vehicle control for normalization scope={scope!r} group={group_key!r}."
                 if require_match:
@@ -263,14 +269,16 @@ class CardioScorePipeline:
         if not cfg.get("enabled", False):
             return pd.DataFrame(), pd.DataFrame()
         group_column = cfg.get("group_column")
-        variability_table = control_variability(df, group_column=group_column, max_control_cv_pct=float(cfg.get("max_control_cv_pct", 20.0)))
+        working_df = df.copy()
+        working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
+        variability_table = control_variability(working_df, group_column=group_column, max_control_cv_pct=float(cfg.get("max_control_cv_pct", 20.0)))
         if variability_table.empty:
             return variability_table, pd.DataFrame()
         resolved_group = str(variability_table.iloc[0]["group_column"])
         separation_frames = []
         for endpoint in ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]:
-            if endpoint in df.columns:
-                separation_frames.append(standardized_treatment_separation(df.assign(vehicle=df["vehicle"].astype(bool)), endpoint=endpoint, group_column=resolved_group))
+            if endpoint in working_df.columns:
+                separation_frames.append(standardized_treatment_separation(working_df, endpoint=endpoint, group_column=resolved_group))
         separation_table = pd.concat(separation_frames, ignore_index=True) if separation_frames else pd.DataFrame()
         for _, row in variability_table.iterrows():
             if row["status"] in {"high_variability", "insufficient_groups"}:
@@ -421,6 +429,9 @@ class CardioScorePipeline:
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
+        if "vehicle" not in df.columns:
+            raise ValueError("CardioScorePipeline requires a 'vehicle' column.")
+        df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
         df = self.apply_qc(df)
         variability_cfg = self.config.get("variability", {})
         variability_before, _ = self.run_variability_diagnostics(df)
