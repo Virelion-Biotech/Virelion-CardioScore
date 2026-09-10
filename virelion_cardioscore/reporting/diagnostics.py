@@ -7,6 +7,8 @@ from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import yaml
+
 from virelion_cardioscore.analysis.concentration_drivers import (
     ENDPOINT_DIRECTIONS,
     concentration_drivers,
@@ -16,14 +18,33 @@ if TYPE_CHECKING:
     from virelion_cardioscore.analysis.pipeline import PipelineResult
 
 
+def _endpoint_metadata(result: "PipelineResult") -> tuple[dict[str, str], dict[str, float]]:
+    """Load the same endpoint directions/thresholds used by the scoring engine."""
+    scoring_cfg = result.config.get("scoring", {})
+    endpoint_config = Path(scoring_cfg.get("endpoint_config", "cipa_endpoints.yaml"))
+    if not endpoint_config.is_absolute():
+        base_dir = Path(result.config.get("_config_dir", Path.cwd()))
+        endpoint_config = base_dir / endpoint_config
+        if not endpoint_config.exists():
+            endpoint_config = Path(__file__).resolve().parents[1] / "config" / scoring_cfg.get("endpoint_config", "cipa_endpoints.yaml")
+    if not endpoint_config.is_file():
+        raise ValueError(f"Configured endpoint configuration does not exist: {endpoint_config}")
+    payload = yaml.safe_load(endpoint_config.read_text(encoding="utf-8")) or {}
+    endpoints = payload.get("endpoints", {})
+    if not isinstance(endpoints, dict) or not endpoints:
+        raise ValueError("Endpoint configuration must define a non-empty 'endpoints' mapping.")
+    directions = {name: str(meta["direction"]) for name, meta in endpoints.items()}
+    thresholds = {name: float(meta["effect_threshold"]) for name, meta in endpoints.items()}
+    return directions, thresholds
+
+
 def concentration_driver_table(result: "PipelineResult"):
     """Build concentration provenance diagnostics for the current result."""
+    directions, thresholds = _endpoint_metadata(result)
     return concentration_drivers(
         result.concentration_table,
-        endpoint_directions=ENDPOINT_DIRECTIONS,
-        effect_threshold_pct=float(
-            result.config.get("concentration_response", {}).get("effect_threshold_pct", 10.0)
-        ),
+        endpoint_directions=directions or ENDPOINT_DIRECTIONS,
+        endpoint_thresholds=thresholds,
     )
 
 
