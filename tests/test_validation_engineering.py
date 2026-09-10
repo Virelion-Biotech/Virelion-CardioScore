@@ -50,8 +50,8 @@ def test_locked_metrics_are_deterministic() -> None:
 
 
 def test_locked_metrics_rejects_unknown_default_label() -> None:
-    with pytest.raises(ValueError, match="outside the configured metric label set"):
-        locked_metrics(["low", "intermediate", "high"], ["low", "moderate", "high"])
+    with pytest.raises(ValueError, match="not representable|Unsupported risk label"):
+        locked_metrics(["low", "moderate", "high"], ["low", "amber", "high"])
 
 
 def test_locked_metrics_normalizes_published_short_labels() -> None:
