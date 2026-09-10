@@ -51,6 +51,24 @@ def test_engine_high_risk():
     assert result.score > 0.60
 
 
+def test_score_feature_table_fails_on_missing_endpoint_values():
+    engine = CardioScoreEngine()
+    frame = pd.DataFrame(
+        {
+            "compound": ["A", "A"],
+            "fpd_change_pct": [20.0, 22.0],
+            "beat_rate_change_pct": [5.0, 6.0],
+            "amplitude_change_pct": [-10.0, -11.0],
+            "stv_increase": [0.10, 0.11],
+            "triangulation_proxy": [0.10, 0.11],
+        }
+    )
+    frame.loc[1, "stv_increase"] = np.nan
+
+    with pytest.raises(ValueError, match="no finite observations"):
+        engine.score_feature_table(frame)
+
+
 def test_pipeline_end_to_end():
     dataset = load_synthetic_dataset(n_compounds=3, n_concentrations=4, seed=123)
     pipeline = CardioScorePipeline.from_defaults()
