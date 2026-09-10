@@ -6,9 +6,9 @@ preprocessing.filtering + features.endpoints to produce the same
 well-level feature table consumed by CardioScorePipeline.
 
 Required input columns are defined by ``REQUIRED_COLUMNS``. Optional
-experimental-design metadata (plate, batch, biological replicate, and
-experiment ID) are preserved through feature extraction so downstream
-hierarchical analysis does not lose the experimental unit.
+experimental-design and study metadata are preserved through feature extraction
+so downstream hierarchical analysis and validation do not lose the experimental
+context.
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ OPTIONAL_METADATA_COLUMNS = (
     "batch_id",
     "experiment_id",
     "biological_replicate",
+    "site",
+    "cell_type",
 )
 MAX_RELATIVE_TIMESTAMP_JITTER = 0.01
 
