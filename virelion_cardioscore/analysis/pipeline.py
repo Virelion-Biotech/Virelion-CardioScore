@@ -162,17 +162,20 @@ class CardioScorePipeline:
         control_cfg = self.config.get("control_normalization", {})
         normalize = bool(self.config.get("scoring", {}).get("normalize_by_vehicle", True))
         working_df = df.copy()
-        if "vehicle" in working_df.columns:
+        if normalize:
+            if "vehicle" not in working_df.columns:
+                raise ValueError("Effect calculation with vehicle normalization requires a 'vehicle' column.")
             working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
-        else:
-            raise ValueError("Effect calculation requires a 'vehicle' column.")
+        elif "vehicle" in working_df.columns:
+            working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
         if not normalize:
             required = {"compound", "concentration_uM", "well", "fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"}
             missing = sorted(required - set(working_df.columns))
             if missing:
                 raise ValueError(f"normalize_by_vehicle=false requires precomputed effect columns: {missing}")
             effects = working_df.copy()
-            effects["vehicle"] = False
+            if "vehicle" in effects.columns:
+                effects["vehicle"] = False
             effects["max_effect_pct"] = effects[["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct"]].abs().max(axis=1)
             if "stv_increase" in effects.columns:
                 effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["stv_increase"].abs() * 100.0)
