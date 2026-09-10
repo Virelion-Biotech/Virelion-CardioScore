@@ -46,6 +46,7 @@ class BeatDetectionResult:
     fs_hz: float
     duration_s: float
     candidate_beat_indices: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))
+    expected_beat_count: float | None = None
     n_beats: int = field(init=False)
     inter_beat_intervals_s: np.ndarray = field(init=False)
     beat_detection_rate: float = field(init=False)
@@ -61,25 +62,17 @@ class BeatDetectionResult:
     def _estimate_detection_rate(self) -> float:
         """Estimate detector coverage against an independent rhythm estimate.
 
-        The previous implementation compared configured detections with a
-        lower-prominence candidate peak pass. That candidate pass is not an
-        independent reference: lowering the prominence admits noise and can
-        create many more peaks than the true cardiac rhythm.
-
-        Here the expected beat count is estimated from the dominant
-        autocorrelation period of the same filtered trace, constrained to a
-        physiologic 0.5-2.0 s beat period. This still is not a ground-truth
-        sensitivity measurement, but it is independent of the configured peak
-        threshold and therefore catches systematic missed-beat patterns without
-        penalizing a clean detector simply because the low-threshold pass sees
-        noise. The metric remains a QC heuristic, not validated sensitivity.
+        The expected count is estimated from periodicity in the filtered
+        waveform before thresholded peak detection. This avoids defining the
+        denominator from the same peaks used by the detector, which would make
+        systematic under-detection self-validating. The estimate is a QC
+        heuristic, not validated sensitivity against ground-truth annotations.
         """
         if self.n_beats == 0:
             return 0.0
-        expected_beats = _estimate_expected_beat_count(self.beat_times_s, self.fs_hz, self.duration_s)
-        if expected_beats is None or expected_beats <= 0:
+        if self.expected_beat_count is None or self.expected_beat_count <= 0:
             return 0.0
-        return float(np.clip(self.n_beats / expected_beats, 0.0, 1.0))
+        return float(np.clip(self.n_beats / self.expected_beat_count, 0.0, 1.0))
 
     @property
     def beat_rate_bpm(self) -> float:
@@ -109,47 +102,61 @@ class BeatDetectionResult:
 
 
 def _estimate_expected_beat_count(
-    beat_times_s: np.ndarray,
+    trace: np.ndarray,
     fs_hz: float,
     duration_s: float,
 ) -> float | None:
-    """Estimate expected beat count from periodicity in the detected timing.
+    """Estimate expected beat count from waveform autocorrelation.
 
-    This helper uses the detected beat train itself rather than the raw voltage
-    waveform. A periodicity estimate from the detected timings is useful for
-    identifying regular under-counting (for example, detecting every other
-    beat), while avoiding noise peaks introduced by a low-prominence waveform
-    pass. It is deliberately conservative for very short recordings.
+    The search is restricted to a broad cardiac rhythm band of 0.5-2.0 s per
+    beat (30-120 bpm). The dominant non-zero autocorrelation peak is used as
+    the rhythm period, then converted to an expected number of beats over the
+    recording duration. This estimate is independent of the detector's
+    prominence threshold and can therefore reveal regular under-counting such
+    as detecting every other beat.
     """
-    del fs_hz  # retained in the signature for future waveform-based extensions
-    if len(beat_times_s) < 2 or duration_s <= 0:
-        return 1.0 if len(beat_times_s) == 1 else None
+    if duration_s <= 0 or len(trace) < max(32, int(fs_hz * 1.0)):
+        return 1.0 if len(trace) > 0 else None
 
-    ibis = np.diff(beat_times_s)
-    finite = ibis[np.isfinite(ibis) & (ibis > 0.0)]
-    if len(finite) == 0:
-        return None
-
-    # The true rhythm should be represented by the modal/median IBI of the
-    # detected sequence. Detecting every other beat doubles the inferred IBI;
-    # this is exactly the failure mode this QC metric is meant to expose when
-    # compared with the shortest plausible repeating interval in the beat train.
-    median_ibi = float(np.median(finite))
-    if median_ibi <= 0:
+    x = np.asarray(trace, dtype=float)
+    x = x - np.mean(x)
+    variance = float(np.dot(x, x))
+    if not np.isfinite(variance) or variance <= 0:
         return None
 
-    # A second, shorter IBI cluster indicates that the detector may contain
-    # extra events, while a stable longer IBI is consistent with missed beats.
-    # For the expected count we use the minimum physiologically plausible
-    # interval represented by the timing sequence, capped to avoid treating
-    # isolated noise as a full cardiac rhythm.
-    plausible = finite[(finite >= 0.5) & (finite <= 2.0)]
-    if len(plausible) == 0:
+    autocorr = signal.fftconvolve(x, x[::-1], mode="full")[len(x) - 1 :]
+    autocorr = autocorr / variance
+
+    min_lag = max(1, int(round(0.5 * fs_hz)))
+    max_lag = min(len(autocorr) - 1, int(round(2.0 * fs_hz)))
+    if max_lag <= min_lag:
         return None
-    period = float(np.percentile(plausible, 25))
-    if period <= 0:
+
+    region = autocorr[min_lag : max_lag + 1]
+    if not np.any(np.isfinite(region)):
         return None
-    return duration_s / period
+    peak_indices, properties = signal.find_peaks(
+        region,
+        prominence=0.02,
+    )
+    if len(peak_indices) == 0:
+        # A broad autocorrelation maximum can occur without a sharp local
+        # peak. In that case use the largest positive value only when it is
+        # meaningfully correlated with itself at a non-zero lag.
+        best_offset = int(np.nanargmax(region))
+        best_value = float(region[best_offset])
+        if not np.isfinite(best_value) or best_value < 0.10:
+            return None
+        lag_samples = min_lag + best_offset
+    else:
+        peak_values = region[peak_indices]
+        best = int(peak_indices[int(np.nanargmax(peak_values))])
+        lag_samples = min_lag + best
+
+    period_s = lag_samples / float(fs_hz)
+    if not 0.5 <= period_s <= 2.0:
+        return None
+    return float(duration_s / period_s)
 
 
 def _detect_polarity_peaks(
@@ -228,7 +235,7 @@ def detect_beats(
     polarity = _choose_polarity(trace, pos_indices, neg_indices)
     peak_indices = pos_indices if polarity > 0 else neg_indices
 
-    # Preserve the low-prominence candidate set as diagnostic metadata, but do
+    # Preserve a low-prominence candidate set as diagnostic metadata, but do
     # not use it as a sensitivity denominator because it is not a ground-truth
     # reference and is vulnerable to noise-induced overcounting.
     candidate_prominence = config.min_prominence_uv * 0.25
@@ -244,6 +251,7 @@ def detect_beats(
     candidate_indices = np.asarray(candidate_indices, dtype=int)
     beat_times_s = beat_indices / fs_hz
     amplitudes_uv = trace[beat_indices] if len(beat_indices) else np.array([], dtype=float)
+    expected_beat_count = _estimate_expected_beat_count(trace, fs_hz, duration_s)
 
     return BeatDetectionResult(
         beat_indices=beat_indices,
@@ -252,4 +260,5 @@ def detect_beats(
         fs_hz=float(fs_hz),
         duration_s=float(duration_s),
         candidate_beat_indices=candidate_indices,
+        expected_beat_count=expected_beat_count,
     )
