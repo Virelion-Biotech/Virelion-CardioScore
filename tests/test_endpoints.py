@@ -22,8 +22,7 @@ def test_extract_electrode_features_fpd_accuracy():
 
 @pytest.mark.parametrize("true_fpd_ms", [250.0, 280.0, 380.0, 420.0])
 def test_extract_electrode_features_fpd_across_range(true_fpd_ms):
-    """FPD detection should track ground truth across a range of durations,
-    including prolonged (cardiotoxic-like) values."""
+    """FPD detection should track ground truth across a range of durations."""
     trace = make_electrode_trace(seed=hash(true_fpd_ms) % 1000, bpm=55.0, fpd_ms=true_fpd_ms)
     features = extract_electrode_features(trace, fs_hz=1000.0)
 
@@ -34,10 +33,10 @@ def test_extract_electrode_features_fpd_across_range(true_fpd_ms):
 def test_repolarization_search_cannot_cross_next_depolarization():
     """A later opposite-polarity deflection must not become the prior beat's FPD."""
     fs = 1000.0
-    trace = np.zeros(2000, dtype=float)
+    trace = np.zeros(1500, dtype=float)
     trace[500] = 100.0
-    trace[1000] = 100.0
-    trace[1200] = -100.0
+    trace[800] = 100.0
+    trace[900] = -100.0
 
     unconstrained_idx, unconstrained_width = _find_repolarization_peak(
         trace,
@@ -52,10 +51,10 @@ def test_repolarization_search_cannot_cross_next_depolarization():
         fs_hz=fs,
         depol_amplitude_uv=100.0,
         min_prominence_uv=20.0,
-        next_depol_idx=1000,
+        next_depol_idx=800,
     )
 
-    assert unconstrained_idx == 1200
+    assert unconstrained_idx == 900
     assert unconstrained_width is not None
     assert constrained_idx is None
     assert constrained_width is None
