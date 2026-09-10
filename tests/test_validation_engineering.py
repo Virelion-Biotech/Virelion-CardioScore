@@ -43,15 +43,20 @@ def _valid_features(**overrides: object) -> pd.DataFrame:
 
 
 def test_locked_metrics_are_deterministic() -> None:
-    result = locked_metrics(["low", "intermediate", "high"], ["low", "high", "high"])
+    result = locked_metrics(["low", "moderate", "high"], ["low", "high", "high"])
     assert result.n == 3
     assert result.accuracy == pytest.approx(2 / 3)
     assert result.ordinal_mae == pytest.approx(1 / 3)
     assert result.confusion_matrix == [[1, 0, 0], [0, 0, 1], [0, 0, 1]]
 
 
+def test_locked_metrics_rejects_unknown_default_label() -> None:
+    with pytest.raises(ValueError, match="outside the configured metric label set"):
+        locked_metrics(["low", "intermediate", "high"], ["low", "moderate", "high"])
+
+
 def test_locked_metrics_normalizes_published_short_labels() -> None:
-    result = locked_metrics(["L", "M", "H"], ["low", "intermediate", "high"], labels=("L", "M", "H"))
+    result = locked_metrics(["L", "M", "H"], ["low", "moderate", "high"], labels=("L", "M", "H"))
     assert result.labels == ("l", "m", "h")
     assert result.accuracy == pytest.approx(1.0)
     assert result.ordinal_mae == pytest.approx(0.0)
