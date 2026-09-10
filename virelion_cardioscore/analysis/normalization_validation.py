@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from virelion_cardioscore.analysis.normalization import apply_control_anchor_correction
+from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,9 @@ def _group_control_stats(
     group_column: str,
     endpoint: str,
 ) -> tuple[pd.Series, float | None]:
-    controls = df[df["vehicle"]]
+    working = df.copy()
+    working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
+    controls = working[working["vehicle"]]
     values = pd.to_numeric(controls[endpoint], errors="coerce")
     group_means = values.groupby(controls[group_column], dropna=False).mean()
     overall_mean = float(values.mean()) if values.notna().any() else np.nan
@@ -82,17 +85,19 @@ def validate_control_anchor_correction(
     if missing:
         raise ValueError(f"Missing columns for normalization validation: {missing}.")
 
+    working = df.copy()
+    working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
     corrected, _ = apply_control_anchor_correction(
-        df,
+        working,
         group_column=group_column,
         corrected_columns=[endpoint],
         min_controls_per_group=min_controls_per_group,
     )
 
-    before_group_means, before_cv = _group_control_stats(df, group_column, endpoint)
+    before_group_means, before_cv = _group_control_stats(working, group_column, endpoint)
     after_group_means, after_cv = _group_control_stats(corrected, group_column, endpoint)
 
-    before_effects = df[~df["vehicle"]].copy()
+    before_effects = working[~working["vehicle"]].copy()
     after_effects = corrected[~corrected["vehicle"]].copy()
 
     def treatment_effects(frame: pd.DataFrame, controls: pd.DataFrame) -> pd.Series:
@@ -100,7 +105,7 @@ def validate_control_anchor_correction(
         treated_means = frame.groupby(group_column)[endpoint].mean()
         return treated_means.subtract(control_means, fill_value=np.nan).dropna()
 
-    before_effects_by_group = treatment_effects(before_effects, df[df["vehicle"]])
+    before_effects_by_group = treatment_effects(before_effects, working[working["vehicle"]])
     after_effects_by_group = treatment_effects(after_effects, corrected[corrected["vehicle"]])
     aligned = pd.concat(
         [before_effects_by_group.rename("before"), after_effects_by_group.rename("after")],
@@ -118,8 +123,8 @@ def validate_control_anchor_correction(
         control_cv_after_pct=after_cv,
         treatment_effect_rmse=rmse,
         n_groups=len(before_group_means),
-        n_controls=int(df["vehicle"].sum()),
-        n_treated=int((~df["vehicle"].astype(bool)).sum()),
+        n_controls=int(working["vehicle"].sum()),
+        n_treated=int((~working["vehicle"]).sum()),
         passed_drift_reduction=(
             float(after_group_means.std(ddof=1)) < float(before_group_means.std(ddof=1))
             if len(before_group_means) > 1
