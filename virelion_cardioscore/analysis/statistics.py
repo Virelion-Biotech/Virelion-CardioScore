@@ -22,6 +22,7 @@ class BootstrapCI:
     n_observations: int
     n_bootstrap: int
     seed: Optional[int] = None
+    n_clusters: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +33,7 @@ class BootstrapCI:
             "n_observations": self.n_observations,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
+            "n_clusters": self.n_clusters,
         }
 
 
@@ -70,7 +72,7 @@ def bootstrap_ci(
     confidence: float = 0.95,
     seed: Optional[int] = 42,
 ) -> BootstrapCI:
-    """Bootstrap a one-sample statistic using replicate-level resampling."""
+    """Bootstrap a one-sample statistic using observation-level resampling."""
     _validate_bootstrap_args(n_bootstrap, confidence)
     x = np.asarray(values, dtype=float)
     x = x[np.isfinite(x)]
@@ -92,7 +94,72 @@ def bootstrap_ci(
         n_observations=int(x.size),
         n_bootstrap=n_bootstrap,
         seed=seed,
+        n_clusters=None,
     )
+
+
+def bootstrap_cluster_ci(
+    values: np.ndarray,
+    clusters: np.ndarray,
+    *,
+    statistic: Callable[[np.ndarray], float] = np.mean,
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    seed: Optional[int] = 42,
+) -> BootstrapCI:
+    """Bootstrap a statistic by resampling independent clusters as units.
+
+    All observations belonging to a sampled cluster are retained together.
+    This avoids pretending that technical wells within the same biological unit
+    are independent observations. The statistic is evaluated on the pooled
+    observations from the sampled clusters, preserving within-cluster structure.
+    This is an inferential helper, not a substitute for a prespecified
+    hierarchical model.
+    """
+    _validate_bootstrap_args(n_bootstrap, confidence)
+    x = np.asarray(values, dtype=float)
+    g = np.asarray(clusters)
+    if x.ndim != 1 or g.ndim != 1 or x.size != g.size:
+        raise ValueError("values and clusters must be one-dimensional arrays of equal length.")
+    finite = np.isfinite(x)
+    x = x[finite]
+    g = g[finite]
+    if x.size < 2:
+        raise ValueError("At least two finite observations are required for bootstrap inference.")
+    if pdna := np.any(pd_isna(g)):
+        raise ValueError("clusters cannot contain missing identifiers.")
+    unique_clusters = np.unique(g)
+    if unique_clusters.size < 2:
+        raise ValueError("At least two independent clusters are required for cluster bootstrap.")
+
+    cluster_indices = [np.flatnonzero(g == cluster) for cluster in unique_clusters]
+    rng = np.random.default_rng(seed)
+    estimate = float(statistic(x))
+    boot_stats = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        sampled = rng.integers(0, unique_clusters.size, size=unique_clusters.size)
+        sampled_indices = np.concatenate([cluster_indices[j] for j in sampled])
+        boot_stats[i] = float(statistic(x[sampled_indices]))
+    alpha = 1.0 - confidence
+    low, high = np.quantile(boot_stats, [alpha / 2.0, 1.0 - alpha / 2.0])
+    return BootstrapCI(
+        estimate=estimate,
+        ci_low=float(low),
+        ci_high=float(high),
+        confidence=confidence,
+        n_observations=int(x.size),
+        n_bootstrap=n_bootstrap,
+        seed=seed,
+        n_clusters=int(unique_clusters.size),
+    )
+
+
+def pd_isna(values: np.ndarray) -> np.ndarray:
+    """Return a boolean missing-value mask without requiring pandas."""
+    try:
+        return np.asarray([value is None or (isinstance(value, float) and np.isnan(value)) for value in values])
+    except TypeError:
+        return np.zeros(values.shape, dtype=bool)
 
 
 def bootstrap_profile_difference(
