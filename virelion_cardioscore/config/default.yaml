@@ -36,12 +36,12 @@ features:
   window_s: 60.0
 
 experimental_units:
-  scoring_unit: "well"
+  # Prefer biological replicate, then batch, then plate; use wells only when
+  # no higher-level experimental-unit metadata are available.
+  scoring_unit: "auto"
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
   plate_unit_column: "plate_id"
-  # Safety default: requesting a higher-level unit without its metadata must fail
-  # rather than silently reverting to technical-well scoring.
   fall_back_to_well: false
 
 control_normalization:
@@ -65,8 +65,6 @@ variability:
       - "stv"
       - "triangulation_proxy"
     min_controls_per_group: 2
-    # When true, every correction group must have sufficient vehicle controls
-    # and the configured minimum treated observations before correction is allowed.
     require_all_groups: true
     assumptions:
       min_treated_per_group: 1
