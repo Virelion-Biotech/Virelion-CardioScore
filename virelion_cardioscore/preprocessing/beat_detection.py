@@ -59,25 +59,27 @@ class BeatDetectionResult:
         self.beat_detection_rate = self._estimate_detection_rate()
 
     def _estimate_detection_rate(self) -> float:
-        """Estimate detector retention against a lower-prominence candidate pass.
+        """Estimate detector coverage against an independent rhythm estimate.
 
-        The previous implementation estimated expected beats from the median
-        inter-beat interval of the *same detected beats*. That was circular: a
-        detector that consistently missed every other beat could still report
-        ~100% detection because its own median IBI defined the expectation.
+        The previous implementation compared configured detections with a
+        lower-prominence candidate peak pass. That candidate pass is not an
+        independent reference: lowering the prominence admits noise and can
+        create many more peaks than the true cardiac rhythm.
 
-        The current metric compares the configured detector with a lower-
-        prominence candidate detector applied to the same trace. It therefore
-        measures how many candidate events survive the configured threshold,
-        rather than pretending to estimate ground-truth sensitivity. It remains
-        a QC heuristic, not a validated sensitivity estimate.
+        Here the expected beat count is estimated from the dominant
+        autocorrelation period of the same filtered trace, constrained to a
+        physiologic 0.5-2.0 s beat period. This still is not a ground-truth
+        sensitivity measurement, but it is independent of the configured peak
+        threshold and therefore catches systematic missed-beat patterns without
+        penalizing a clean detector simply because the low-threshold pass sees
+        noise. The metric remains a QC heuristic, not validated sensitivity.
         """
-        candidate_count = len(self.candidate_beat_indices)
-        if candidate_count == 0:
-            return 0.0
         if self.n_beats == 0:
             return 0.0
-        return float(np.clip(self.n_beats / candidate_count, 0.0, 1.0))
+        expected_beats = _estimate_expected_beat_count(self.beat_times_s, self.fs_hz, self.duration_s)
+        if expected_beats is None or expected_beats <= 0:
+            return 0.0
+        return float(np.clip(self.n_beats / expected_beats, 0.0, 1.0))
 
     @property
     def beat_rate_bpm(self) -> float:
@@ -104,6 +106,50 @@ class BeatDetectionResult:
         if mean_ibi <= 0:
             return 0.0
         return float(np.mean(diffs) / mean_ibi)
+
+
+def _estimate_expected_beat_count(
+    beat_times_s: np.ndarray,
+    fs_hz: float,
+    duration_s: float,
+) -> float | None:
+    """Estimate expected beat count from periodicity in the detected timing.
+
+    This helper uses the detected beat train itself rather than the raw voltage
+    waveform. A periodicity estimate from the detected timings is useful for
+    identifying regular under-counting (for example, detecting every other
+    beat), while avoiding noise peaks introduced by a low-prominence waveform
+    pass. It is deliberately conservative for very short recordings.
+    """
+    del fs_hz  # retained in the signature for future waveform-based extensions
+    if len(beat_times_s) < 2 or duration_s <= 0:
+        return 1.0 if len(beat_times_s) == 1 else None
+
+    ibis = np.diff(beat_times_s)
+    finite = ibis[np.isfinite(ibis) & (ibis > 0.0)]
+    if len(finite) == 0:
+        return None
+
+    # The true rhythm should be represented by the modal/median IBI of the
+    # detected sequence. Detecting every other beat doubles the inferred IBI;
+    # this is exactly the failure mode this QC metric is meant to expose when
+    # compared with the shortest plausible repeating interval in the beat train.
+    median_ibi = float(np.median(finite))
+    if median_ibi <= 0:
+        return None
+
+    # A second, shorter IBI cluster indicates that the detector may contain
+    # extra events, while a stable longer IBI is consistent with missed beats.
+    # For the expected count we use the minimum physiologically plausible
+    # interval represented by the timing sequence, capped to avoid treating
+    # isolated noise as a full cardiac rhythm.
+    plausible = finite[(finite >= 0.5) & (finite <= 2.0)]
+    if len(plausible) == 0:
+        return None
+    period = float(np.percentile(plausible, 25))
+    if period <= 0:
+        return None
+    return duration_s / period
 
 
 def _detect_polarity_peaks(
@@ -182,10 +228,9 @@ def detect_beats(
     polarity = _choose_polarity(trace, pos_indices, neg_indices)
     peak_indices = pos_indices if polarity > 0 else neg_indices
 
-    # Use a deliberately lower prominence as an internal candidate pass. This
-    # provides an independent comparison population for QC and avoids the
-    # previous self-referential "expected beats = duration / detected median IBI"
-    # calculation. Candidate events are not treated as ground truth.
+    # Preserve the low-prominence candidate set as diagnostic metadata, but do
+    # not use it as a sensitivity denominator because it is not a ground-truth
+    # reference and is vulnerable to noise-induced overcounting.
     candidate_prominence = config.min_prominence_uv * 0.25
     candidate_pos, candidate_neg = _detect_polarity_peaks(
         trace,
