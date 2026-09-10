@@ -5,7 +5,7 @@ import pytest
 
 from virelion_cardioscore.analysis.concentration_drivers import (
     DEFAULT_ENDPOINT_THRESHOLDS,
-    summarize_concentration_drivers,
+    concentration_drivers,
 )
 
 
@@ -14,12 +14,11 @@ def _frame() -> pd.DataFrame:
         {
             "compound": ["A"] * 4,
             "concentration_uM": [0.1, 1.0, 10.0, 100.0],
-            "vehicle": [False] * 4,
-            "fpd_change_pct": [2.0, 5.0, 8.0, 9.0],
-            "beat_rate_change_pct": [1.0, 2.0, 4.0, 5.0],
-            "amplitude_change_pct": [-5.0, -10.0, -21.0, -30.0],
-            "stv_increase": [0.01, 0.05, 0.10, 0.16],
-            "triangulation_proxy_change": [0.01, 0.10, 0.19, 0.21],
+            "fpd_change_pct_mean": [2.0, 5.0, 8.0, 9.0],
+            "beat_rate_change_pct_mean": [1.0, 2.0, 4.0, 5.0],
+            "amplitude_change_pct_mean": [-5.0, -10.0, -21.0, -30.0],
+            "stv_increase_mean": [0.01, 0.05, 0.10, 0.16],
+            "triangulation_proxy_change_mean": [0.01, 0.10, 0.19, 0.21],
         }
     )
 
@@ -31,12 +30,14 @@ def test_default_endpoint_thresholds_are_endpoint_specific():
 
 
 def test_amplitude_driver_uses_harmful_decrease_direction():
-    result = summarize_concentration_drivers(_frame(), endpoint="amplitude_change_pct")
-    assert result["n_supporting_concentrations"] == 2
-    assert result["direction"] == "decrease"
-    assert result["worst_value"] == pytest.approx(-30.0)
+    result = concentration_drivers(_frame(), endpoint_directions={"amplitude_change_pct": "decrease"})
+    row = result[result["endpoint"] == "amplitude_change_pct"].iloc[0]
+    assert int(row["concentrations_supporting_signal"]) == 2
+    assert row["direction"] == "decrease"
+    assert row["driver_value"] == pytest.approx(-30.0)
 
 
 def test_driver_requires_endpoint_column():
-    with pytest.raises(ValueError, match="missing"):
-        summarize_concentration_drivers(_frame().drop(columns=["stv_increase"]), endpoint="stv_increase")
+    broken = _frame().drop(columns=["stv_increase_mean"])
+    result = concentration_drivers(broken, endpoint_directions={"stv_increase": "increase"})
+    assert result.empty
