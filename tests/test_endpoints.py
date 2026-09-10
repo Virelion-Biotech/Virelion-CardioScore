@@ -6,11 +6,8 @@ import numpy as np
 import pytest
 
 from tests.conftest import make_electrode_trace, make_well_traces
-from virelion_cardioscore.features.endpoints import (
-    _find_repolarization_peak,
-    extract_electrode_features,
-    extract_well_features,
-)
+from virelion_cardioscore.features.endpoints import extract_electrode_features, extract_well_features
+from virelion_cardioscore.preprocessing.endpoints import _find_repolarization_peak
 
 
 def test_extract_electrode_features_fpd_accuracy():
@@ -40,9 +37,6 @@ def test_repolarization_search_cannot_cross_next_depolarization():
     trace = np.zeros(2000, dtype=float)
     trace[500] = 100.0
     trace[1000] = 100.0
-    # No repolarization exists after the first depolarization. This negative
-    # deflection occurs after the *next* depolarization and is therefore not
-    # eligible for the first beat's FPD.
     trace[1200] = -100.0
 
     unconstrained_idx, unconstrained_width = _find_repolarization_peak(
@@ -122,7 +116,7 @@ def test_extract_well_features_excludes_unreliable_electrodes():
 
     features = extract_well_features(traces, fs_hz=1000.0)
     assert features.n_electrodes == 3
-    assert abs(features.fpd_ms - 280.0) < 10.0  # still accurate, driven by good electrodes
+    assert abs(features.fpd_ms - 280.0) < 10.0
 
 
 def test_well_features_to_row_has_expected_columns(baseline_well):
