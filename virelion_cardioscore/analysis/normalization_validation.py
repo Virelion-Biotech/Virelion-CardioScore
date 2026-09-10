@@ -56,13 +56,19 @@ def _group_control_stats(
     group_column: str,
     endpoint: str,
 ) -> tuple[pd.Series, float | None]:
+    """Return group-level control means and their between-group CV."""
     working = df.copy()
     working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
-    controls = working[working["vehicle"]]
+    controls = working[working["vehicle"]].copy()
     values = pd.to_numeric(controls[endpoint], errors="coerce")
-    group_means = values.groupby(controls[group_column], dropna=False).mean()
-    overall_mean = float(values.mean()) if values.notna().any() else np.nan
-    cv = None if np.isclose(overall_mean, 0.0) else float(abs(values.std(ddof=1) / overall_mean) * 100.0)
+    control_frame = pd.DataFrame({"_value": values, group_column: controls[group_column]})
+    control_frame = control_frame.dropna(subset=["_value"])
+    group_means = control_frame.groupby(group_column, dropna=False)["_value"].mean()
+    overall_mean = float(group_means.mean()) if not group_means.empty else np.nan
+    if len(group_means) > 1 and not np.isclose(overall_mean, 0.0):
+        cv = float(abs(group_means.std(ddof=1) / overall_mean) * 100.0)
+    else:
+        cv = None
     return group_means, cv
 
 
