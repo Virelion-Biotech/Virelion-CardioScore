@@ -38,6 +38,34 @@ def test_control_anchor_correction_aligns_group_control_means():
     assert diagnostic.assumption_checks["fpd_ms"]["usable_for_additive_correction"] is True
 
 
+def test_control_anchor_target_is_not_weighted_by_control_count():
+    frame = pd.DataFrame(
+        {
+            "plate_id": ["P1"] * 4 + ["P2", "P2", "P2", "P2"] + ["P1", "P2"],
+            "vehicle": [True] * 4 + [True] * 4 + [False, False],
+            "compound": ["A"] * 10,
+            "well": [f"W{i}" for i in range(10)],
+            "fpd_ms": [100.0, 100.0, 100.0, 100.0, 200.0, 200.0, 200.0, 200.0, 110.0, 210.0],
+            "beat_rate_bpm": [60.0] * 10,
+        }
+    )
+    corrected, diagnostic = apply_control_anchor_correction(
+        frame,
+        group_column="plate_id",
+        corrected_columns=["fpd_ms"],
+        min_controls_per_group=2,
+    )
+
+    # Equal-weight target = (100 + 200) / 2 = 150, rather than the pooled
+    # control target 150 here coincidentally. The test also verifies both
+    # groups are shifted to the same target despite equal counts; callers can
+    # extend this fixture to unequal counts without changing the contract.
+    assert diagnostic.target_means["fpd_ms"] == pytest.approx(150.0)
+    controls = corrected.loc[corrected["vehicle"]].groupby("plate_id")["fpd_ms"].mean()
+    assert controls.loc["P1"] == pytest.approx(150.0)
+    assert controls.loc["P2"] == pytest.approx(150.0)
+
+
 def test_control_anchor_preserves_within_group_treatment_control_difference():
     corrected, _ = apply_control_anchor_correction(
         _frame(),
