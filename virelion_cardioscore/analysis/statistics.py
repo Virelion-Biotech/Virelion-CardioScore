@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -126,10 +127,10 @@ def bootstrap_cluster_ci(
     g = g[finite]
     if x.size < 2:
         raise ValueError("At least two finite observations are required for bootstrap inference.")
-    if pdna := np.any(pd_isna(g)):
+    if pd.isna(g).any():
         raise ValueError("clusters cannot contain missing identifiers.")
-    unique_clusters = np.unique(g)
-    if unique_clusters.size < 2:
+    unique_clusters = pd.unique(g)
+    if len(unique_clusters) < 2:
         raise ValueError("At least two independent clusters are required for cluster bootstrap.")
 
     cluster_indices = [np.flatnonzero(g == cluster) for cluster in unique_clusters]
@@ -137,7 +138,7 @@ def bootstrap_cluster_ci(
     estimate = float(statistic(x))
     boot_stats = np.empty(n_bootstrap, dtype=float)
     for i in range(n_bootstrap):
-        sampled = rng.integers(0, unique_clusters.size, size=unique_clusters.size)
+        sampled = rng.integers(0, len(unique_clusters), size=len(unique_clusters))
         sampled_indices = np.concatenate([cluster_indices[j] for j in sampled])
         boot_stats[i] = float(statistic(x[sampled_indices]))
     alpha = 1.0 - confidence
@@ -150,16 +151,8 @@ def bootstrap_cluster_ci(
         n_observations=int(x.size),
         n_bootstrap=n_bootstrap,
         seed=seed,
-        n_clusters=int(unique_clusters.size),
+        n_clusters=int(len(unique_clusters)),
     )
-
-
-def pd_isna(values: np.ndarray) -> np.ndarray:
-    """Return a boolean missing-value mask without requiring pandas."""
-    try:
-        return np.asarray([value is None or (isinstance(value, float) and np.isnan(value)) for value in values])
-    except TypeError:
-        return np.zeros(values.shape, dtype=bool)
 
 
 def bootstrap_profile_difference(
