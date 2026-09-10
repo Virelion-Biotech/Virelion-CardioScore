@@ -39,6 +39,7 @@ OPTIONAL_METADATA_COLUMNS = (
     "experiment_id",
     "biological_replicate",
 )
+MAX_RELATIVE_TIMESTAMP_JITTER = 0.01
 
 
 class RawTraceSchemaError(ValueError):
@@ -110,7 +111,7 @@ def _coerce_vehicle(series: pd.Series) -> pd.Series:
 
 
 def _infer_sampling_rate(time_s: np.ndarray) -> float:
-    """Infer fs_hz from the median gap between consecutive timestamps."""
+    """Infer fs_hz only when timestamps are sufficiently close to uniform sampling."""
     ordered = np.sort(np.asarray(time_s, dtype=float))
     diffs = np.diff(ordered)
     diffs = diffs[diffs > 0]
@@ -119,6 +120,17 @@ def _infer_sampling_rate(time_s: np.ndarray) -> float:
             "Could not infer sampling rate: time_s has no positive gaps between samples."
         )
     median_dt = float(np.median(diffs))
+    if median_dt <= 0 or not np.isfinite(median_dt):
+        raise RawTraceSchemaError("Could not infer sampling rate from time_s.")
+
+    relative_deviation = float(np.max(np.abs(diffs - median_dt)) / median_dt)
+    if relative_deviation > MAX_RELATIVE_TIMESTAMP_JITTER:
+        raise RawTraceSchemaError(
+            "Irregular sampling detected: maximum timestamp interval deviation "
+            f"is {relative_deviation * 100.0:.2f}%, exceeding the allowed "
+            f"{MAX_RELATIVE_TIMESTAMP_JITTER * 100.0:.2f}%. Resample the raw trace "
+            "to a uniform sampling grid before CardioScore processing."
+        )
     return 1.0 / median_dt
 
 
