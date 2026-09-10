@@ -1,0 +1,118 @@
+# Virelion CardioScore – default pipeline configuration
+
+pipeline:
+  name: "default_cardioscore"
+  version: "0.1.1"
+  random_seed: 42
+
+quality_control:
+  min_electrodes_per_well: 4
+  max_noise_sd_uv: 25.0
+  min_beat_detection_rate: 0.7
+  reject_wells_with_arrhythmia_proxy: false
+  arrhythmia_proxy_max_stv: null
+  log_rejections: true
+
+preprocessing:
+  highpass_hz: 0.5
+  lowpass_hz: 40.0
+  notch_hz: 50.0
+  notch_q: 30.0
+  detrend: true
+
+beat_detection:
+  method: "peak"
+  min_prominence_uv: 20.0
+  min_distance_ms: 250.0
+  refractory_ms: 200.0
+
+features:
+  compute_fpd: true
+  compute_beat_rate: true
+  compute_amplitude: true
+  compute_stv: true
+  compute_triangulation_proxy: true
+  compute_conduction_proxy: false
+  window_s: 60.0
+
+experimental_units:
+  scoring_unit: "well"
+  biological_unit_column: "biological_replicate"
+  batch_unit_column: "batch_id"
+  plate_unit_column: "plate_id"
+  # Safety default: requesting a higher-level unit without its metadata must fail
+  # rather than silently reverting to technical-well scoring.
+  fall_back_to_well: false
+
+control_normalization:
+  # Prefer plate/batch-scoped controls when those design fields are present;
+  # otherwise require compound-matched controls. This prevents a vehicle well
+  # from one plate/site or compound from becoming a normalization anchor for a
+  # different experimental block.
+  scope: "auto"
+  require_matching_control: true
+
+variability:
+  enabled: false
+  group_column: null
+  max_control_cv_pct: 20.0
+  correction:
+    enabled: false
+    corrected_columns:
+      - "fpd_ms"
+      - "beat_rate_bpm"
+      - "amplitude_uv"
+      - "stv"
+      - "triangulation_proxy"
+    min_controls_per_group: 2
+    # When true, every correction group must have sufficient vehicle controls
+    # and the configured minimum treated observations before correction is allowed.
+    require_all_groups: true
+    assumptions:
+      min_treated_per_group: 1
+      max_shift_cv_pct: 50.0
+      fail_closed: true
+
+concentration_response:
+  replicate_aggregation: "mean"
+  concentration_aggregation: "max_absolute_effect"
+  effect_threshold_pct: 10.0
+  min_concentrations: 3
+  fit_curve: false
+  fit_min_concentrations: 4
+  fit_min_r_squared: 0.80
+  fit_min_monotonicity: 0.80
+  fit_ec50_boundary_factor: 2.0
+  fit_max_ec50_uncertainty_fold: 100.0
+
+inference:
+  enabled: false
+  n_bootstrap: 2000
+  confidence: 0.95
+  seed: 42
+
+mixed_effects:
+  enabled: false
+  group_column: null
+  treatment_column: "_treatment"
+  endpoints:
+    - "fpd_ms"
+    - "beat_rate_bpm"
+    - "amplitude_uv"
+    - "stv"
+    - "triangulation_proxy"
+
+scoring:
+  endpoint_config: "cipa_endpoints.yaml"
+  low_threshold: 0.30
+  moderate_threshold: 0.60
+  normalize_by_vehicle: true
+  dose_response_weight: 0.0
+
+reporting:
+  generate_html: true
+  generate_csv: true
+  generate_json: true
+
+io:
+  output_dir: "./outputs"
