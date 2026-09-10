@@ -23,7 +23,7 @@ OPTIONAL_HIERARCHY_COLUMNS = (
     "experiment_id",
 )
 
-SUPPORTED_SCORING_UNITS = ("well", "biological_replicate", "batch", "plate")
+SUPPORTED_SCORING_UNITS = ("auto", "well", "biological_replicate", "batch", "plate")
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,19 @@ def _resolve_scoring_column(
     batch_unit_column: Optional[str] = None,
     plate_unit_column: Optional[str] = None,
 ) -> str:
+    if scoring_unit == "auto":
+        candidates = [
+            ("biological_replicate", biological_unit_column or "biological_replicate"),
+            ("batch", batch_unit_column or ("batch_id" if "batch_id" in df.columns else "experiment_id")),
+            ("plate", plate_unit_column or "plate_id"),
+            ("well", "well"),
+        ]
+        for _, candidate in candidates:
+            if candidate in df.columns:
+                _require_complete_identifier(df, candidate)
+                return candidate
+        raise ValueError("scoring_unit='auto' requires at least a biological, batch, plate, or well identifier.")
+
     if scoring_unit not in SUPPORTED_SCORING_UNITS:
         raise ValueError(
             f"Unsupported scoring_unit: {scoring_unit!r}. "
@@ -139,7 +152,7 @@ def aggregate_to_scoring_units(
     plate_unit_column: Optional[str] = None,
 ) -> pd.DataFrame:
     """Aggregate technical wells to the configured independent scoring unit."""
-    if effects.empty or scoring_unit == "well":
+    if effects.empty:
         return effects.copy()
 
     if endpoint_columns is None:
@@ -159,6 +172,17 @@ def aggregate_to_scoring_units(
         batch_unit_column=batch_unit_column,
         plate_unit_column=plate_unit_column,
     )
+    if unit_column == "well":
+        return effects.copy()
+
+    # Preserve the resolved unit type for generated unit IDs, even when
+    # scoring_unit='auto' selected it dynamically.
+    resolved_unit = (
+        "biological_replicate" if unit_column == (biological_unit_column or "biological_replicate")
+        else "batch" if unit_column in {batch_unit_column or "batch_id", "experiment_id"}
+        else "plate" if unit_column == (plate_unit_column or "plate_id")
+        else "well"
+    )
     unit_key_columns = _unit_group_columns(effects, unit_column)
     group_columns = ["compound", "concentration_uM", *unit_key_columns]
     rows: list[dict] = []
@@ -167,9 +191,9 @@ def aggregate_to_scoring_units(
             keys = (keys,)
         row = dict(zip(group_columns, keys, strict=True))
         if len(unit_key_columns) == 1:
-            row["well"] = f"{scoring_unit}:{keys[-1]}"
+            row["well"] = f"{resolved_unit}:{keys[-1]}"
         else:
-            row["well"] = f"{scoring_unit}:{keys[-2]}:{keys[-1]}"
+            row["well"] = f"{resolved_unit}:{keys[-2]}:{keys[-1]}"
         row["n_wells"] = int(group["well"].nunique())
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
