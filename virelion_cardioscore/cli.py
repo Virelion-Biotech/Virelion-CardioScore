@@ -18,6 +18,7 @@ from virelion_cardioscore.io.synthetic import load_synthetic_dataset
 from virelion_cardioscore.preprocessing.beat_detection import BeatDetectionConfig
 from virelion_cardioscore.preprocessing.filtering import FilterConfig
 from virelion_cardioscore.reporting.diagnostics import enrich_html_report, enrich_json_report
+from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
 @click.group()
@@ -59,6 +60,8 @@ def run(config: str, output_dir: str, features: str | None, raw_traces: str | No
     """Run CardioScore on a configured experiment."""
     if features and raw_traces:
         raise click.UsageError("Pass only one of --features or --raw-traces, not both.")
+    if not features and not raw_traces:
+        raise click.UsageError("Provide exactly one of --features or --raw-traces. Use 'cardioscore demo' for synthetic data.")
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -67,10 +70,11 @@ def run(config: str, output_dir: str, features: str | None, raw_traces: str | No
     if raw_traces:
         preprocessing_cfg = pipeline.config.get("preprocessing", {})
         beat_cfg = pipeline.config.get("beat_detection", {})
+        notch_value = preprocessing_cfg.get("notch_hz", 50.0)
         filter_config = FilterConfig(
             highpass_hz=float(preprocessing_cfg.get("highpass_hz", 0.5)),
             lowpass_hz=float(preprocessing_cfg.get("lowpass_hz", 40.0)),
-            notch_hz=float(preprocessing_cfg.get("notch_hz", 50.0)),
+            notch_hz=None if notch_value is None else float(notch_value),
             notch_q=float(preprocessing_cfg.get("notch_q", 30.0)),
             detrend=bool(preprocessing_cfg.get("detrend", True)),
         )
@@ -80,10 +84,12 @@ def run(config: str, output_dir: str, features: str | None, raw_traces: str | No
         except RawTraceSchemaError as exc:
             raise click.ClickException(str(exc)) from exc
         result = pipeline.run(df)
-    elif features:
-        result = pipeline.run(pd.read_csv(features))
     else:
-        result = pipeline.run(load_synthetic_dataset())
+        df = pd.read_csv(features)
+        if "vehicle" in df.columns:
+            df = df.copy()
+            df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
+        result = pipeline.run(df)
 
     reporting = pipeline.config.get("reporting", {})
     generated = []
