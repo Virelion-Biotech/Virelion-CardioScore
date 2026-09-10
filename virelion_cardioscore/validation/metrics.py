@@ -68,7 +68,7 @@ def locked_metrics(
     reference: Iterable[str],
     observed: Iterable[str],
     *,
-    labels: tuple[str, ...] = ("low", "intermediate", "high"),
+    labels: tuple[str, ...] = ("low", "moderate", "high"),
 ) -> LockedMetrics:
     """Compute fixed metrics; this function never fits or changes a model."""
     y_true = np.asarray([_normalise_label(x) for x in reference])
@@ -82,6 +82,14 @@ def locked_metrics(
     unknown_labels = sorted(set(label_values) - set(RISK_ORDER))
     if unknown_labels:
         raise ValueError(f"Unsupported metric labels: {unknown_labels}")
+
+    unknown_observed = sorted(set(y_pred) - set(label_values))
+    unknown_reference = sorted(set(y_true) - set(label_values))
+    if unknown_observed or unknown_reference:
+        raise ValueError(
+            "Observed/reference risk labels fall outside the configured metric label set: "
+            f"observed={unknown_observed}, reference={unknown_reference}"
+        )
 
     cm = confusion_matrix(y_true, y_pred, labels=label_values)
     true_ord = _ordinal(y_true)
