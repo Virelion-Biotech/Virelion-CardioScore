@@ -9,7 +9,6 @@ import pytest
 from virelion_cardioscore.validation.integrity import (
     build_asset_manifest,
     inventory_archive,
-    sha256_file,
     verify_sha256,
 )
 from virelion_cardioscore.validation.manifest import (
