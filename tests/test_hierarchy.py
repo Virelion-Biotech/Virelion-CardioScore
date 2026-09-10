@@ -80,7 +80,7 @@ def test_site_scopes_reused_biological_replicate_ids():
 
     aggregated = aggregate_to_scoring_units(effects, scoring_unit="biological_replicate")
     assert len(aggregated) == 4
-    assert set(zip(aggregated["site"], aggregated["biological_replicate"])) == {
+    assert set(zip(aggregated["site"], aggregated["biological_replicate"], strict=True)) == {
         (1, "B1"), (1, "B2"), (2, "B1"), (2, "B2")
     }
 
