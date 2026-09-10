@@ -15,6 +15,7 @@ def test_compare_effect_estimates_aligns_and_reports_disagreement():
             "compound": ["A", "A"],
             "concentration_uM": [1.0, 10.0],
             "fpd_change_pct_mean": [20.0, -5.0],
+            "effect_unit": ["percent", "percent"],
         }
     )
     mixed = pd.DataFrame(
@@ -24,6 +25,7 @@ def test_compare_effect_estimates_aligns_and_reports_disagreement():
             "endpoint": ["fpd_change_pct_mean", "fpd_change_pct_mean"],
             "treatment_effect": [18.0, -4.0],
             "status": ["ok", "ok"],
+            "effect_unit": ["percent", "percent"],
         }
     )
 
@@ -32,10 +34,35 @@ def test_compare_effect_estimates_aligns_and_reports_disagreement():
     assert len(comparison) == 2
     assert comparison["direction_agreement"].all()
     assert comparison.loc[0, "absolute_difference"] == pytest.approx(2.0)
+    assert set(comparison["effect_unit"]) == {"percent"}
 
     summary = summarize_effect_concordance(comparison)
     assert summary["n_comparisons"] == 2
     assert summary["direction_agreement_rate"] == pytest.approx(1.0)
+
+
+def test_compare_effect_estimates_rejects_mismatched_units():
+    conventional = pd.DataFrame(
+        {
+            "compound": ["A"],
+            "concentration_uM": [1.0],
+            "fpd_change_pct_mean": [20.0],
+            "effect_unit": ["percent"],
+        }
+    )
+    mixed = pd.DataFrame(
+        {
+            "compound": ["A"],
+            "concentration_uM": [1.0],
+            "endpoint": ["fpd_change_pct_mean"],
+            "treatment_effect": [18.0],
+            "status": ["ok"],
+            "effect_unit": ["ms"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="different units"):
+        compare_effect_estimates(conventional, mixed)
 
 
 def test_compare_effect_estimates_ignores_non_estimable_models():
@@ -44,6 +71,7 @@ def test_compare_effect_estimates_ignores_non_estimable_models():
             "compound": ["A"],
             "concentration_uM": [1.0],
             "fpd_change_pct_mean": [20.0],
+            "effect_unit": ["percent"],
         }
     )
     mixed = pd.DataFrame(
@@ -53,6 +81,7 @@ def test_compare_effect_estimates_ignores_non_estimable_models():
             "endpoint": ["fpd_change_pct_mean"],
             "treatment_effect": [None],
             "status": ["not_estimable"],
+            "effect_unit": ["percent"],
         }
     )
 
@@ -71,6 +100,7 @@ def test_compare_effect_estimates_requires_expected_schema():
                     "endpoint": ["fpd_change_pct_mean"],
                     "treatment_effect": [2.0],
                     "status": ["ok"],
+                    "effect_unit": ["percent"],
                 }
             ),
         )
