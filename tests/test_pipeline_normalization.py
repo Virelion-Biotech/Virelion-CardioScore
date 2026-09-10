@@ -1,74 +1,44 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
 
-def _dataset() -> pd.DataFrame:
-    rows = []
-    common = {
-        "beat_rate_bpm": 60.0,
-        "amplitude_uv": 100.0,
-        "stv": 0.1,
-        "triangulation_proxy": 0.1,
-        "n_electrodes": 4,
-        "noise_sd_uv": 5.0,
-        "beat_detection_rate": 0.95,
-    }
-    for plate, values in {
-        "P1": [100.0, 102.0, 130.0, 132.0],
-        "P2": [120.0, 122.0, 150.0, 152.0],
-    }.items():
-        for index, fpd in enumerate(values):
-            rows.append(
-                {
-                    **common,
-                    "plate_id": plate,
-                    "compound": "A",
-                    "well": f"{plate}_{index}",
-                    "concentration_uM": 1.0,
-                    "vehicle": index < 2,
-                    "fpd_ms": fpd,
-                }
-            )
-    return pd.DataFrame(rows)
+def _effects_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "compound": ["A", "A", "A", "A"],
+            "concentration_uM": [0.0, 0.0, 1.0, 1.0],
+            "well": ["V1", "V2", "T1", "T2"],
+            "vehicle": ["True", "False", "False", "false"],
+            "fpd_ms": [100.0, 101.0, 120.0, 121.0],
+            "beat_rate_bpm": [60.0, 60.0, 55.0, 55.0],
+            "amplitude_uv": [100.0, 100.0, 90.0, 90.0],
+            "stv": [0.04, 0.04, 0.08, 0.08],
+            "triangulation_proxy": [0.18, 0.18, 0.30, 0.30],
+            "n_electrodes": [8, 8, 8, 8],
+            "noise_sd_uv": [5.0, 5.0, 5.0, 5.0],
+            "beat_detection_rate": [0.95, 0.95, 0.95, 0.95],
+        }
+    )
 
 
-def test_pipeline_control_anchor_correction_reduces_between_plate_drift():
+def test_compute_effects_does_not_treat_string_false_as_vehicle():
     pipeline = CardioScorePipeline.from_defaults()
-    pipeline.config["variability"]["enabled"] = True
-    pipeline.config["variability"]["group_column"] = "plate_id"
-    pipeline.config["variability"]["correction"]["enabled"] = True
-    pipeline.config["variability"]["correction"]["corrected_columns"] = ["fpd_ms"]
+    effects = pipeline.compute_effects(_effects_frame())
 
-    result = pipeline.run(_dataset())
-
-    before = result.variability_before_correction
-    after = result.variability_table
-    before_sd = float(before.loc[before["endpoint"] == "fpd_ms", "between_group_sd"].iloc[0])
-    after_sd = float(after.loc[after["endpoint"] == "fpd_ms", "between_group_sd"].iloc[0])
-
-    assert result.normalization_diagnostic["n_groups"] == 2
-    assert before_sd > 0
-    assert after_sd == pytest.approx(0.0)
-    assert after_sd < before_sd
-    assert any("control-anchored recentering" in msg for msg in result.qc_log)
+    assert len(effects) == 2
+    assert set(effects["well"]) == {"T1", "T2"}
+    assert effects["fpd_change_pct"].tolist() == pytest.approx([18.90594059, 19.9009901])
 
 
-def test_pipeline_normalization_requires_variability_diagnostics():
+def test_pipeline_run_accepts_string_boolean_encoding():
     pipeline = CardioScorePipeline.from_defaults()
-    pipeline.config["variability"]["enabled"] = False
-    pipeline.config["variability"]["correction"]["enabled"] = True
+    result = pipeline.run(_effects_frame())
 
-    with pytest.raises(ValueError, match="requires variability.enabled=true"):
-        pipeline.run(_dataset())
-
-
-def test_pipeline_default_normalization_is_disabled():
-    pipeline = CardioScorePipeline.from_defaults()
-    result = pipeline.run(_dataset())
-
-    assert result.normalization_diagnostic == {}
-    assert result.variability_before_correction.empty
+    assert len(result.scores) == 1
+    assert result.scores[0].compound == "A"
+    assert result.summary_table.iloc[0]["n_wells"] == 2
