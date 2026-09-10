@@ -45,7 +45,11 @@ experimental_units:
   fall_back_to_well: false
 
 control_normalization:
-  scope: "compound"
+  # Prefer plate/batch-scoped controls when those design fields are present;
+  # otherwise require compound-matched controls. This prevents a vehicle well
+  # from one plate/site or compound from becoming a normalization anchor for a
+  # different experimental block.
+  scope: "auto"
   require_matching_control: true
 
 variability:
