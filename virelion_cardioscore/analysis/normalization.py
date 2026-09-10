@@ -127,10 +127,14 @@ def apply_control_anchor_correction(
     target_means: dict[str, float] = {}
     group_shifts: dict[str, dict[str, float]] = {}
     for column in corrected_columns:
-        values = pd.to_numeric(controls_usable[column], errors="coerce").dropna()
-        if values.empty:
-            raise ValueError(f"No finite vehicle values are available for correction column {column!r}.")
-        target_means[column] = float(values.mean())
+        # The target is the unweighted mean of eligible group control means.
+        # Pooling all control wells would let groups with more technical wells
+        # dominate the correction target.
+        values = pd.to_numeric(controls_usable[column], errors="coerce")
+        group_means = values.groupby(controls_usable[group], dropna=False).mean().dropna()
+        if group_means.empty:
+            raise ValueError(f"No finite vehicle group means are available for correction column {column!r}.")
+        target_means[column] = float(group_means.mean())
 
     for group_value, indices in working.groupby(group, dropna=False).groups.items():
         if group_value not in usable_groups:
