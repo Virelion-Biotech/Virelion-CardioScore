@@ -54,6 +54,44 @@ def _normalise_label(value: Any) -> str:
     return str(value).strip().lower()
 
 
+def _label_ordinals(values: Iterable[str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for value in values:
+        key = _normalise_label(value)
+        if key not in RISK_ORDER:
+            raise ValueError(f"Unsupported risk label: {value!r}")
+        out[key] = RISK_ORDER[key]
+    return out
+
+
+def _canonicalize_to_labels(values: Iterable[Any], labels: list[str]) -> np.ndarray:
+    """Map compatible short/long risk labels onto configured label tokens."""
+    label_ordinals = _label_ordinals(labels)
+    ordinal_to_label: dict[int, str] = {}
+    for label, ordinal in label_ordinals.items():
+        if ordinal in ordinal_to_label and ordinal_to_label[ordinal] != label:
+            raise ValueError(
+                "Configured metric labels must contain at most one token per ordinal risk class."
+            )
+        ordinal_to_label[ordinal] = label
+
+    canonical: list[str] = []
+    for value in values:
+        key = _normalise_label(value)
+        if key in label_ordinals:
+            canonical.append(key)
+            continue
+        if key not in RISK_ORDER:
+            raise ValueError(f"Unsupported risk label: {value!r}")
+        ordinal = RISK_ORDER[key]
+        if ordinal not in ordinal_to_label:
+            raise ValueError(
+                f"Risk label {value!r} is not representable by configured metric labels {labels!r}."
+            )
+        canonical.append(ordinal_to_label[ordinal])
+    return np.asarray(canonical)
+
+
 def _ordinal(values: Iterable[str]) -> np.ndarray:
     out = []
     for value in values:
@@ -71,25 +109,15 @@ def locked_metrics(
     labels: tuple[str, ...] = ("low", "moderate", "high"),
 ) -> LockedMetrics:
     """Compute fixed metrics; this function never fits or changes a model."""
-    y_true = np.asarray([_normalise_label(x) for x in reference])
-    y_pred = np.asarray([_normalise_label(x) for x in observed])
-    if y_true.shape != y_pred.shape or y_true.size == 0:
-        raise ValueError("reference and observed must have equal, non-zero length")
-
     label_values = [_normalise_label(x) for x in labels]
     if len(set(label_values)) != len(label_values):
         raise ValueError("labels must be unique")
-    unknown_labels = sorted(set(label_values) - set(RISK_ORDER))
-    if unknown_labels:
-        raise ValueError(f"Unsupported metric labels: {unknown_labels}")
+    _label_ordinals(label_values)
 
-    unknown_observed = sorted(set(y_pred) - set(label_values))
-    unknown_reference = sorted(set(y_true) - set(label_values))
-    if unknown_observed or unknown_reference:
-        raise ValueError(
-            "Observed/reference risk labels fall outside the configured metric label set: "
-            f"observed={unknown_observed}, reference={unknown_reference}"
-        )
+    y_true = _canonicalize_to_labels(reference, label_values)
+    y_pred = _canonicalize_to_labels(observed, label_values)
+    if y_true.shape != y_pred.shape or y_true.size == 0:
+        raise ValueError("reference and observed must have equal, non-zero length")
 
     cm = confusion_matrix(y_true, y_pred, labels=label_values)
     true_ord = _ordinal(y_true)
