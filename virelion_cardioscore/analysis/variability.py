@@ -13,6 +13,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from virelion_cardioscore.utils.coercion import coerce_bool_series
+
 
 @dataclass(frozen=True)
 class VariabilityDiagnostic:
@@ -89,7 +91,9 @@ def control_variability(
             "triangulation_proxy",
         ]
 
-    controls = df[df["vehicle"].astype(bool)].copy()
+    working = df.copy()
+    working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
+    controls = working[working["vehicle"]].copy()
     rows: list[dict] = []
     for endpoint in endpoint_columns:
         if endpoint not in controls.columns:
@@ -151,6 +155,8 @@ def standardized_treatment_separation(
     if effects[group_column].isna().any() or effects[group_column].astype(str).str.strip().eq("").any():
         raise ValueError(f"Treatment separation grouping column {group_column!r} contains missing or blank identifiers.")
 
+    working = effects.copy()
+    working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
     rows: list[dict] = []
     # Group by (compound, group_column) only -- NOT concentration_uM.
     # Vehicle wells sit at concentration_uM == 0 while treated wells sit at
@@ -159,15 +165,15 @@ def standardized_treatment_separation(
     # comparison could ever be made. Instead: gather each group's controls
     # once, then compare every distinct treated concentration within that
     # group against that shared control set.
-    for keys, group in effects.groupby(["compound", group_column], dropna=False, sort=True):
+    for keys, group in working.groupby(["compound", group_column], dropna=False, sort=True):
         compound, group_value = keys
         controls = pd.to_numeric(
-            group.loc[group["vehicle"].astype(bool), endpoint], errors="coerce"
+            group.loc[group["vehicle"], endpoint], errors="coerce"
         ).dropna()
         control_mean = float(controls.mean()) if len(controls) else np.nan
         control_sd = float(controls.std(ddof=1)) if len(controls) > 1 else np.nan
 
-        treated_group = group.loc[~group["vehicle"].astype(bool)]
+        treated_group = group.loc[~group["vehicle"]]
         for concentration, conc_group in treated_group.groupby("concentration_uM", dropna=False, sort=True):
             treated = pd.to_numeric(conc_group[endpoint], errors="coerce").dropna()
             if len(controls) < 2 or treated.empty:
