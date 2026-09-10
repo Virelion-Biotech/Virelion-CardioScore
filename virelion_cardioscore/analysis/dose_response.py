@@ -109,6 +109,15 @@ def _ci95(value: float, standard_error: float) -> tuple[float, float]:
     return value - delta, value + delta
 
 
+def _positive_parameter_ci95(value: float, standard_error: float) -> tuple[float, float]:
+    """Approximate a 95% CI on a positive parameter using log-scale delta method."""
+    if value <= 0 or not np.isfinite(value) or not np.isfinite(standard_error):
+        return float("nan"), float("nan")
+    log_se = standard_error / value
+    half_width = 1.96 * log_se
+    return float(value * np.exp(-half_width)), float(value * np.exp(half_width))
+
+
 def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
     if len(x) < 2:
         return 1.0, "flat"
@@ -154,9 +163,7 @@ def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, e
         # Absolute-direction endpoints treat either prolongation or shortening
         # as adverse. For a concentration-response curve, the relevant
         # quantity is the excursion between the fitted baseline and maximal
-        # response, not the absolute value of either asymptote. Counting
-        # |bottom| would incorrectly treat a non-zero baseline as dose-induced
-        # harm.
+        # response, not the absolute value of either asymptote.
         return float(abs(top - bottom))
     if direction == "increase":
         return float(max(0.0, top - bottom))
@@ -192,6 +199,8 @@ def fit_4pl(
     sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
     finite = np.isfinite(x) & np.isfinite(y) & (x > 0)
     if sigma is not None:
+        if sigma.shape != x.shape:
+            raise ValueError("response_sem must have the same shape as concentrations and responses.")
         finite &= np.isfinite(sigma) & (sigma > 0)
     x = x[finite]
     y = y[finite]
@@ -237,7 +246,7 @@ def fit_4pl(
     ec50, hill_slope = float(params[2]), float(params[3])
     bottom, top = float(params[0]), float(params[1])
     ec50_se, hill_se = float(standard_errors[2]), float(standard_errors[3])
-    ec50_ci_low, ec50_ci_high = _ci95(ec50, ec50_se)
+    ec50_ci_low, ec50_ci_high = _positive_parameter_ci95(ec50, ec50_se)
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
     monotonicity, monotonic_direction = _monotonicity_score(x, y)
     harm_direction_compatible = _harm_direction_compatible(endpoint, monotonic_direction, endpoint_directions)
