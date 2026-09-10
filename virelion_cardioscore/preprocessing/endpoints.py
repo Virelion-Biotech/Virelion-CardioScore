@@ -97,11 +97,23 @@ def _find_repolarization_peak(
     depol_amplitude_uv: float,
     min_prominence_uv: float,
     search_window_ms: tuple[float, float] = DEFAULT_REPOL_SEARCH_MS,
+    next_depol_idx: Optional[int] = None,
 ) -> tuple[Optional[int], Optional[float]]:
-    """Search after a depolarization spike for the repolarization deflection."""
+    """Search after a depolarization spike for its repolarization deflection.
+
+    The search is explicitly bounded by the next detected depolarization when
+    one exists. This prevents a missed repolarization from being replaced by a
+    feature belonging to the following beat, which would otherwise create an
+    artificially long FPD and potentially corrupt triangulation.
+    """
     start = depol_idx + int(round(search_window_ms[0] / 1000.0 * fs_hz))
     end = depol_idx + int(round(search_window_ms[1] / 1000.0 * fs_hz))
     end = min(end, len(trace))
+    if next_depol_idx is not None:
+        # Leave a small exclusion margin around the next depolarization so the
+        # peak detector cannot lock onto its rising/falling edge.
+        next_guard = max(1, int(round(0.005 * fs_hz)))
+        end = min(end, next_depol_idx - next_guard)
     if start >= end or end - start < 3:
         return None, None
 
@@ -120,6 +132,8 @@ def _find_repolarization_peak(
     best = int(np.argmax(props["prominences"]))
     repol_idx_local = int(peak_indices[best])
     repol_idx = start + repol_idx_local
+    if repol_idx <= depol_idx:
+        return None, None
     widths, _, _, _ = signal.peak_widths(
         search_signal, [repol_idx_local], rel_height=0.5
     )
@@ -144,7 +158,12 @@ def extract_electrode_features(
 
     fpd_values: list[float] = []
     triangulation_values: list[float] = []
-    for idx, amp in zip(beats.beat_indices, beats.amplitudes_uv, strict=True):
+    for beat_pos, (idx, amp) in enumerate(zip(beats.beat_indices, beats.amplitudes_uv, strict=True)):
+        next_depol_idx = (
+            int(beats.beat_indices[beat_pos + 1])
+            if beat_pos + 1 < len(beats.beat_indices)
+            else None
+        )
         repol_idx, repol_width_ms = _find_repolarization_peak(
             filtered,
             depol_idx=int(idx),
@@ -152,6 +171,7 @@ def extract_electrode_features(
             depol_amplitude_uv=float(amp),
             min_prominence_uv=beat_config.min_prominence_uv,
             search_window_ms=repol_search_ms,
+            next_depol_idx=next_depol_idx,
         )
         if repol_idx is not None:
             fpd_ms = (repol_idx - idx) / fs_hz * 1000.0
