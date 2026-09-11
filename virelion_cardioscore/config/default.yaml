@@ -73,7 +73,10 @@ variability:
 
 concentration_response:
   replicate_aggregation: "mean"
-  concentration_aggregation: "max_absolute_effect"
+  # The default scores the average harmful response across tested
+  # concentrations, avoiding automatic domination by a single extreme dose.
+  # max_absolute_effect remains available as an explicit diagnostic/legacy mode.
+  concentration_aggregation: "mean_harmful_effect"
   effect_threshold_pct: 10.0
   min_concentrations: 3
   # A compound with fewer than the minimum tested concentrations is not
