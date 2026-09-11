@@ -91,6 +91,7 @@ inference:
   n_bootstrap: 2000
   confidence: 0.95
   seed: 42
+  cluster_column: null
 
 mixed_effects:
   enabled: false
