@@ -337,7 +337,14 @@ def test_4pl_fit_recovers_known_curve():
     rng = np.random.default_rng(7)
     responses = expected + rng.normal(0, 0.5, size=expected.shape)
 
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions={"fpd_change_pct": "absolute"},
+        effect_threshold=10.0,
+        min_r_squared=0.99,
+    )
 
     assert result.success
     assert result.quality_pass
@@ -352,7 +359,14 @@ def test_4pl_fit_can_use_replicate_sem_weights():
     concentrations = np.logspace(-1, 2, 6)
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
     sem = np.full(6, 1.0)
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", response_sem=sem)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions={"fpd_change_pct": "absolute"},
+        effect_threshold=10.0,
+        response_sem=sem,
+    )
 
     assert result.success
     assert result.weighted
