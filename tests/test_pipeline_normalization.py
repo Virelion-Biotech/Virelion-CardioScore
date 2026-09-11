@@ -31,7 +31,10 @@ def test_compute_effects_does_not_treat_string_false_as_vehicle():
 
     assert len(effects) == 2
     assert set(effects["well"]) == {"T1", "T2"}
-    assert effects["fpd_change_pct"].tolist() == pytest.approx([20.0, 21.0])
+    # Vehicle anchor is the mean of the two control wells (100.5 ms).
+    assert effects["fpd_change_pct"].tolist() == pytest.approx(
+        [100.0 * (120.0 / 100.5 - 1.0), 100.0 * (121.0 / 100.5 - 1.0)]
+    )
 
 
 def test_pipeline_run_accepts_string_boolean_encoding():
