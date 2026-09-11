@@ -69,6 +69,67 @@ def test_score_feature_table_fails_on_missing_endpoint_values():
         engine.score_feature_table(frame)
 
 
+def _runtime_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "well": ["W1", "W2", "W3"],
+            "concentration_uM": [0.0, 1.0, 2.0],
+            "vehicle": [True, False, False],
+            "fpd_ms": [100.0, 120.0, 130.0],
+            "beat_rate_bpm": [60.0, 60.0, 59.0],
+            "amplitude_uv": [100.0, 95.0, 90.0],
+            "stv": [0.04, 0.05, 0.06],
+            "triangulation_proxy": [0.18, 0.20, 0.22],
+            "noise_sd_uv": [5.0, 5.0, 5.0],
+            "n_electrodes": [8, 8, 8],
+            "beat_detection_rate": [0.95, 0.95, 0.95],
+        }
+    )
+
+
+def test_runtime_schema_rejects_missing_required_column():
+    frame = _runtime_frame().drop(columns=["triangulation_proxy"])
+    with pytest.raises(ValueError, match="missing required columns"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_rejects_invalid_qc_range():
+    frame = _runtime_frame()
+    frame.loc[0, "beat_detection_rate"] = 1.5
+    with pytest.raises(ValueError, match="beat_detection_rate must be between"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_rejects_treated_zero_concentration():
+    frame = _runtime_frame()
+    frame.loc[1, "concentration_uM"] = 0.0
+    with pytest.raises(ValueError, match="treated wells must have strictly positive"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_allows_missing_endpoint_for_qc_rejection():
+    frame = _runtime_frame()
+    frame.loc[1, "fpd_ms"] = np.nan
+
+    CardioScorePipeline.validate_runtime_feature_schema(frame)
+    pipeline = CardioScorePipeline.from_defaults()
+    kept = pipeline.apply_qc(frame)
+
+    assert len(kept) == 2
+    assert "W2" not in set(kept["well"])
+    assert any("missing_endpoint=fpd_ms" in msg for msg in pipeline.qc_log)
+
+
+def test_pipeline_run_rejects_non_numeric_feature_values():
+    frame = _runtime_frame()
+    frame.loc[0, "amplitude_uv"] = "bad"
+    pipeline = CardioScorePipeline.from_defaults()
+
+    with pytest.raises(ValueError, match="amplitude_uv contains non-numeric"):
+        pipeline.run(frame)
+
+
 def test_pipeline_end_to_end():
     dataset = load_synthetic_dataset(n_compounds=3, n_concentrations=4, seed=123)
     pipeline = CardioScorePipeline.from_defaults()
