@@ -81,6 +81,10 @@ def concentration_drivers(
     values. The legacy ``effect_threshold_pct`` argument is retained for API
     compatibility, but when supplied it is only used for endpoints not present
     in ``endpoint_thresholds`` or the defaults.
+
+    When callers explicitly request an endpoint direction, that endpoint must
+    be present in the concentration summary. Missing explicitly requested
+    endpoints fail closed rather than silently producing incomplete diagnostics.
     """
     if concentration_summary.empty:
         return pd.DataFrame()
@@ -97,17 +101,22 @@ def concentration_drivers(
         for endpoint in directions:
             thresholds.setdefault(endpoint, effect_threshold_pct / 100.0 if endpoint in {"stv_increase", "triangulation_proxy_change"} else effect_threshold_pct)
 
+    explicitly_requested = set(endpoint_directions or {})
     rows: list[dict[str, object]] = []
     for compound, group in concentration_summary.groupby("compound", sort=True):
         group = group.sort_values("concentration_uM")
         for endpoint, direction in directions.items():
             column = f"{endpoint}_mean"
             if column not in group.columns:
+                if endpoint in explicitly_requested:
+                    raise ValueError(f"Concentration summary is missing explicitly requested endpoint column {column!r}.")
                 continue
             finite = pd.to_numeric(group[column], errors="coerce")
             finite_group = group.loc[finite.notna()].copy()
             finite_values = finite.loc[finite.notna()]
             if finite_values.empty:
+                if endpoint in explicitly_requested:
+                    raise ValueError(f"No finite values are available for explicitly requested endpoint {endpoint!r}.")
                 continue
 
             driver_index = _select_driver(finite_values, direction)
