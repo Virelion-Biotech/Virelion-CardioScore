@@ -39,7 +39,7 @@ def test_random_intercept_recovers_treatment_effect_and_group_variance():
 
 def test_random_intercept_requires_multiple_groups():
     frame = _dataset().query("plate_id == 'P1'")
-    with pytest.raises(ValueError, match="at least two groups"):
+    with pytest.raises(ValueError, match="at least two independent groups"):
         fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")
 
 
