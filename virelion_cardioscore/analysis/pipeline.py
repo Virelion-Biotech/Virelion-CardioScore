@@ -460,13 +460,26 @@ class CardioScorePipeline:
         concentration_cfg = self.config.get("concentration_response", {})
         concentration_summary = self.summarize_concentrations(scoring_effects, replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"))
         min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
+        require_min_concentrations = bool(concentration_cfg.get("require_min_concentrations_for_scoring", False))
+        scorable_compounds: set[str] = set()
         for compound, group in concentration_summary.groupby("compound"):
             n_concentrations = int(group["concentration_uM"].nunique())
             if n_concentrations < min_concentrations:
-                self.qc_log.append(
-                    f"Warning: {compound} has {n_concentrations} tested concentration(s); "
-                    f"configured minimum is {min_concentrations}. No concentrations were silently excluded."
-                )
+                if require_min_concentrations:
+                    self.qc_log.append(
+                        f"Insufficient concentration coverage: {compound} has {n_concentrations} tested concentration(s); "
+                        f"configured minimum is {min_concentrations}. Compound excluded from scoring."
+                    )
+                else:
+                    self.qc_log.append(
+                        f"Warning: {compound} has {n_concentrations} tested concentration(s); "
+                        f"configured minimum is {min_concentrations}. Scoring is allowed because "
+                        "require_min_concentrations_for_scoring=false."
+                    )
+            else:
+                scorable_compounds.add(str(compound))
+        if not require_min_concentrations:
+            scorable_compounds = set(str(compound) for compound in concentration_summary["compound"].unique())
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
         if inference_cfg.get("enabled", False) and not scoring_effects.empty:
@@ -477,8 +490,9 @@ class CardioScorePipeline:
             for name, meta in self.engine.endpoints.items()
         }
         dose_response_weight = float(self.config.get("scoring", {}).get("dose_response_weight", 0.0))
+        eligible_concentration_summary = concentration_summary[concentration_summary["compound"].astype(str).isin(scorable_compounds)].copy()
         agg = self.aggregate_compound_effects(
-            concentration_summary,
+            eligible_concentration_summary,
             endpoint_directions={
                 "fpd_change_pct": scoring_endpoint_directions.get("fpd_change_pct", "absolute"),
                 "beat_rate_change_pct": scoring_endpoint_directions.get("beat_rate_change_pct", "absolute"),
