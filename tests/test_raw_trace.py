@@ -112,6 +112,33 @@ def test_load_raw_traces_csv_rejects_irregular_sampling(two_compound_plate, tmp_
         load_raw_traces_csv(broken)
 
 
+def test_load_raw_traces_csv_rejects_cross_electrode_time_shift(two_compound_plate, tmp_path):
+    """Same sampling rate is insufficient when electrode time grids differ."""
+    frame = pd.read_csv(two_compound_plate)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E2")
+    indices = frame.index[mask]
+    assert len(indices) > 5
+    frame.loc[indices, "time_s"] = frame.loc[indices, "time_s"] + 1e-5
+    broken = tmp_path / "misaligned.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
+
+
+def test_load_raw_traces_csv_rejects_cross_electrode_length_mismatch(two_compound_plate, tmp_path):
+    """Electrodes with different sample counts cannot be averaged implicitly."""
+    frame = pd.read_csv(two_compound_plate)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E3")
+    drop_index = frame.index[mask][0]
+    frame = frame.drop(index=drop_index)
+    broken = tmp_path / "length_mismatch.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
+
+
 def test_recordings_to_feature_table_schema(two_compound_plate):
     recordings = load_raw_traces_csv(two_compound_plate)
     table = recordings_to_feature_table(recordings)
