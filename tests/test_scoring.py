@@ -283,8 +283,8 @@ def test_invalid_aggregation_settings_are_rejected():
         CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="bogus")
 
 
-def test_compound_aggregation_uses_concentration_means_not_single_wells():
-    concentration_summary = pd.DataFrame(
+def _concentration_summary_for_aggregation() -> pd.DataFrame:
+    return pd.DataFrame(
         {
             "compound": ["A", "A"],
             "concentration_uM": [1.0, 2.0],
@@ -298,13 +298,37 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
         }
     )
 
-    aggregate = CardioScorePipeline.aggregate_compound_effects(concentration_summary)
+
+def test_compound_aggregation_default_uses_mean_harmful_effect():
+    aggregate = CardioScorePipeline.aggregate_compound_effects(_concentration_summary_for_aggregation())
+    row = aggregate.iloc[0]
+
+    assert row["fpd_change_pct"] == pytest.approx(27.5)
+    assert row["amplitude_change_pct"] == pytest.approx(-7.5)
+    assert row["stv_increase"] == pytest.approx(0.075)
+    assert row["triangulation_proxy"] == pytest.approx(0.03)
+    assert row["max_effect_pct"] == pytest.approx(35.0)
+
+
+def test_compound_aggregation_can_explicitly_use_max_absolute_effect():
+    aggregate = CardioScorePipeline.aggregate_compound_effects(
+        _concentration_summary_for_aggregation(),
+        concentration_aggregation="max_absolute_effect",
+    )
     row = aggregate.iloc[0]
 
     assert row["fpd_change_pct"] == pytest.approx(35.0)
     assert row["amplitude_change_pct"] == pytest.approx(-15.0)
     assert row["n_wells"] == 4
     assert row["concentrations_tested"] == 2
+
+
+def test_invalid_concentration_aggregation_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported concentration_aggregation"):
+        CardioScorePipeline.aggregate_compound_effects(
+            _concentration_summary_for_aggregation(),
+            concentration_aggregation="bogus",
+        )
 
 
 def test_4pl_fit_recovers_known_curve():
@@ -328,7 +352,7 @@ def test_4pl_fit_can_use_replicate_sem_weights():
     concentrations = np.logspace(-1, 2, 6)
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
     sem = np.full(6, 1.0)
-    result = fit_4pl(concentrations, responses, response_sem=sem)
+    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", response_sem=sem)
 
     assert result.success
     assert result.weighted
@@ -339,7 +363,7 @@ def test_4pl_fit_can_use_replicate_sem_weights():
 def test_4pl_fit_marks_poor_fit_without_calling_it_a_failure():
     concentrations = np.logspace(-1, 2, 7)
     responses = np.array([0.0, 20.0, 19.0, 20.0, 21.0, 20.0, 20.0])
-    result = fit_4pl(concentrations, responses, min_r_squared=0.99)
+    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99)
 
     assert result.success
     assert not result.quality_pass
