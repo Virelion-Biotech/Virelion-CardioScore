@@ -130,9 +130,7 @@ class CardioScorePipeline:
                 )
                 if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
                     details += f", stv={row['stv']:.3f}"
-                self.qc_log.append(
-                    f"Rejected {row['compound']} {row['well']} ({details})"
-                )
+                self.qc_log.append(f"Rejected {row['compound']} {row['well']} ({details})")
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
 
@@ -149,24 +147,36 @@ class CardioScorePipeline:
             else:
                 scope = "compound"
             self.qc_log.append(f"Control normalization: auto-selected {scope!r} scope.")
-        aliases = {
-            "compound": ["compound"],
-            "plate": ["compound", "plate_id"],
-            "batch": ["compound", "batch_id" if "batch_id" in df.columns else "experiment_id"],
-            "biological_replicate": ["compound", "biological_replicate"],
-            "global": [],
-        }
-        if scope not in aliases:
+        if scope not in {"compound", "plate", "batch", "biological_replicate", "global"}:
             raise ValueError(
                 f"Unsupported control_normalization.scope: {scope!r}. Expected 'auto', 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
             )
-        columns = aliases[scope]
+        if scope == "global":
+            columns: list[str] = []
+        else:
+            unit_map = {
+                "compound": ["compound"],
+                "plate": ["compound", "plate_id"],
+                "batch": ["compound", "batch_id" if "batch_id" in df.columns else "experiment_id"],
+                "biological_replicate": ["compound", "biological_replicate"],
+            }
+            columns = unit_map[scope]
+            namespace = [
+                column
+                for column in ("site", "experiment_id")
+                if column in df.columns and column not in columns
+            ]
+            columns = [*namespace, *columns]
         missing = [column for column in columns if column not in df.columns]
         if missing:
-            raise ValueError(f"control_normalization.scope={scope!r} requires metadata column(s) {missing!r}, but they are not present in the dataset.")
+            raise ValueError(
+                f"control_normalization.scope={scope!r} requires metadata column(s) {missing!r}, but they are not present in the dataset."
+            )
         for column in columns:
             if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
-                raise ValueError(f"control_normalization.scope={scope!r} cannot use grouping column {column!r} with missing or blank identifiers.")
+                raise ValueError(
+                    f"control_normalization.scope={scope!r} cannot use grouping column {column!r} with missing or blank identifiers."
+                )
         return columns
 
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -194,7 +204,14 @@ class CardioScorePipeline:
                 effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["triangulation_proxy_change"].abs() * 100.0)
             return effects
         records = []
-        optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id"]
+        optional_metadata = [
+            "biological_replicate",
+            "batch_id",
+            "experiment_id",
+            "plate_id",
+            "site",
+            "cell_type",
+        ]
         scope = control_cfg.get("scope", "compound")
         control_columns = self._control_group_columns(working_df)
         require_match = bool(control_cfg.get("require_matching_control", True))
@@ -258,9 +275,7 @@ class CardioScorePipeline:
             }
             requested_column = required_map.get(scoring_unit)
             if requested_column and requested_column not in effects.columns:
-                self.qc_log.append(
-                    f"Experimental-unit column {requested_column!r} is absent; falling back to well-level scoring."
-                )
+                self.qc_log.append(f"Experimental-unit column {requested_column!r} is absent; falling back to well-level scoring.")
                 scoring_unit = "well"
         try:
             prepared = aggregate_to_scoring_units(
@@ -349,13 +364,7 @@ class CardioScorePipeline:
         seed: int = 42,
         cluster_column: str | None = None,
     ) -> pd.DataFrame:
-        """Estimate concentration-level endpoint CIs using independent-unit bootstrap.
-
-        Cluster selection is explicit or follows the CardioScore experimental-unit
-        hierarchy: biological replicate -> batch -> plate. Observation-level
-        bootstrap is intentionally not used because technical wells must not be
-        treated as independent biological observations.
-        """
+        """Estimate concentration-level endpoint CIs using independent-unit bootstrap."""
         if effects.empty:
             return pd.DataFrame()
 
@@ -366,37 +375,17 @@ class CardioScorePipeline:
             "stv_increase",
             "triangulation_proxy_change",
         ]
-
-        candidate_columns = (
-            [cluster_column]
-            if cluster_column is not None
-            else ["biological_replicate", "batch_id", "plate_id"]
-        )
-        resolved_cluster_column = next(
-            (column for column in candidate_columns if column in effects.columns),
-            None,
-        )
-
+        candidate_columns = [cluster_column] if cluster_column is not None else ["biological_replicate", "batch_id", "plate_id"]
+        resolved_cluster_column = next((column for column in candidate_columns if column in effects.columns), None)
         if resolved_cluster_column is None:
             raise ValueError(
-                "Cluster-aware bootstrap requires independent-unit metadata. "
-                "Provide one of 'biological_replicate', 'batch_id', or 'plate_id' "
-                "or configure inference.cluster_column explicitly. "
-                "Observation-level bootstrap is disabled."
+                "Cluster-aware bootstrap requires independent-unit metadata. Provide one of 'biological_replicate', 'batch_id', or 'plate_id' or configure inference.cluster_column explicitly. Observation-level bootstrap is disabled."
             )
-
-        if (
-            effects[resolved_cluster_column].isna().any()
-            or effects[resolved_cluster_column].astype(str).str.strip().eq("").any()
-        ):
-            raise ValueError(
-                f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers."
-            )
+        if effects[resolved_cluster_column].isna().any() or effects[resolved_cluster_column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers.")
 
         rows = []
-        for group_index, ((compound, concentration), group) in enumerate(
-            effects.groupby(["compound", "concentration_uM"], sort=True)
-        ):
+        for group_index, ((compound, concentration), group) in enumerate(effects.groupby(["compound", "concentration_uM"], sort=True)):
             cluster_ids = group[resolved_cluster_column].to_numpy()
             row = {
                 "compound": compound,
@@ -405,33 +394,19 @@ class CardioScorePipeline:
                 "n_replicates": int(group["well"].nunique()),
                 "n_clusters": int(pd.unique(cluster_ids).size),
             }
-
             for endpoint in endpoint_columns:
-                values = pd.to_numeric(
-                    group[endpoint],
-                    errors="coerce",
-                ).to_numpy(dtype=float)
+                values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
                 finite = np.isfinite(values)
                 values = values[finite]
                 endpoint_clusters = cluster_ids[finite]
-
                 if len(values) < 2 or pd.unique(endpoint_clusters).size < 2:
                     row[f"{endpoint}_ci_low"] = np.nan
                     row[f"{endpoint}_ci_high"] = np.nan
                     continue
-
-                result = bootstrap_cluster_ci(
-                    values,
-                    endpoint_clusters,
-                    n_bootstrap=n_bootstrap,
-                    confidence=confidence,
-                    seed=seed + group_index,
-                )
+                result = bootstrap_cluster_ci(values, endpoint_clusters, n_bootstrap=n_bootstrap, confidence=confidence, seed=seed + group_index)
                 row[f"{endpoint}_ci_low"] = result.ci_low
                 row[f"{endpoint}_ci_high"] = result.ci_high
-
             rows.append(row)
-
         return pd.DataFrame(rows)
 
     @staticmethod
@@ -444,8 +419,7 @@ class CardioScorePipeline:
             return pd.DataFrame()
         if concentration_aggregation not in {"mean_harmful_effect", "max_absolute_effect"}:
             raise ValueError(
-                f"Unsupported concentration_aggregation: {concentration_aggregation!r}. "
-                "Expected 'mean_harmful_effect' or 'max_absolute_effect'."
+                f"Unsupported concentration_aggregation: {concentration_aggregation!r}. Expected 'mean_harmful_effect' or 'max_absolute_effect'."
             )
         endpoint_directions = endpoint_directions or {
             "fpd_change_pct": "absolute",
@@ -477,7 +451,6 @@ class CardioScorePipeline:
                     if direction == "absolute":
                         return float(values.abs().mean())
                 raise ValueError(f"Unsupported endpoint direction: {direction!r} for {endpoint!r}.")
-
             technical_wells = int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum())
             independent_units = int(group["n_replicates"].sum())
             rows.append({
@@ -504,7 +477,16 @@ class CardioScorePipeline:
         endpoint_directions = {name: str(meta["direction"]) for name, meta in self.engine.endpoints.items()}
         endpoint_thresholds = {name: float(meta["effect_threshold"]) for name, meta in self.engine.endpoints.items()}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(group, min_points=int(cfg.get("fit_min_concentrations", 4)), min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)), min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)), ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)), max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)), endpoint_directions=endpoint_directions, endpoint_thresholds=endpoint_thresholds)
+            fits = fit_concentration_series(
+                group,
+                min_points=int(cfg.get("fit_min_concentrations", 4)),
+                min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)),
+                min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)),
+                ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)),
+                max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)),
+                endpoint_directions=endpoint_directions,
+                endpoint_thresholds=endpoint_thresholds,
+            )
             results[str(compound)] = fits
         return results
 
@@ -542,7 +524,10 @@ class CardioScorePipeline:
         effects = self.compute_effects(df)
         scoring_effects = self.prepare_scoring_effects(effects)
         concentration_cfg = self.config.get("concentration_response", {})
-        concentration_summary = self.summarize_concentrations(scoring_effects, replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"))
+        concentration_summary = self.summarize_concentrations(
+            scoring_effects,
+            replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"),
+        )
         min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
         require_min_concentrations = bool(concentration_cfg.get("require_min_concentrations_for_scoring", False))
         scorable_compounds: set[str] = set()
@@ -551,14 +536,11 @@ class CardioScorePipeline:
             if n_concentrations < min_concentrations:
                 if require_min_concentrations:
                     self.qc_log.append(
-                        f"Insufficient concentration coverage: {compound} has {n_concentrations} tested concentration(s); "
-                        f"configured minimum is {min_concentrations}. Compound excluded from scoring."
+                        f"Insufficient concentration coverage: {compound} has {n_concentrations} tested concentration(s); configured minimum is {min_concentrations}. Compound excluded from scoring."
                     )
                 else:
                     self.qc_log.append(
-                        f"Warning: {compound} has {n_concentrations} tested concentration(s); "
-                        f"configured minimum is {min_concentrations}. Scoring is allowed because "
-                        "require_min_concentrations_for_scoring=false."
+                        f"Warning: {compound} has {n_concentrations} tested concentration(s); configured minimum is {min_concentrations}. Scoring is allowed because require_min_concentrations_for_scoring=false."
                     )
             else:
                 scorable_compounds.add(str(compound))
@@ -575,17 +557,12 @@ class CardioScorePipeline:
                 cluster_column=inference_cfg.get("cluster_column"),
             )
         dose_response_fits = self.fit_dose_response(concentration_summary)
-        scoring_endpoint_directions = {
-            name: str(meta["direction"])
-            for name, meta in self.engine.endpoints.items()
-        }
+        scoring_endpoint_directions = {name: str(meta["direction"]) for name, meta in self.engine.endpoints.items()}
         dose_response_weight = float(self.config.get("scoring", {}).get("dose_response_weight", 0.0))
         eligible_concentration_summary = concentration_summary[concentration_summary["compound"].astype(str).isin(scorable_compounds)].copy()
         agg = self.aggregate_compound_effects(
             eligible_concentration_summary,
-            concentration_aggregation=str(
-                concentration_cfg.get("concentration_aggregation", "mean_harmful_effect")
-            ),
+            concentration_aggregation=str(concentration_cfg.get("concentration_aggregation", "mean_harmful_effect")),
             endpoint_directions={
                 "fpd_change_pct": scoring_endpoint_directions.get("fpd_change_pct", "absolute"),
                 "beat_rate_change_pct": scoring_endpoint_directions.get("beat_rate_change_pct", "absolute"),
@@ -652,9 +629,7 @@ class CardioScorePipeline:
                     for fit in successful
                     if fit.ec50_uncertainty_fold is not None and fit.ec50_uncertainty_fold > max_ec50_uncertainty_fold
                 )
-                row["dose_response_mean_monotonicity"] = (
-                    round(float(np.mean(monotonicities)), 4) if monotonicities else None
-                )
+                row["dose_response_mean_monotonicity"] = round(float(np.mean(monotonicities)), 4) if monotonicities else None
             summary_rows.append(row)
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
