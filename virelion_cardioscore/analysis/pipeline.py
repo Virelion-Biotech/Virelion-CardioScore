@@ -13,7 +13,7 @@ from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreR
 from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
 from virelion_cardioscore.analysis.hierarchy import aggregate_to_scoring_units
 from virelion_cardioscore.analysis.normalization import apply_control_anchor_correction
-from virelion_cardioscore.analysis.statistics import bootstrap_ci
+from virelion_cardioscore.analysis.statistics import bootstrap_cluster_ci
 from virelion_cardioscore.analysis.variability import control_variability, standardized_treatment_separation
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 from virelion_cardioscore.utils.coercion import coerce_bool_series
@@ -341,24 +341,101 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def bootstrap_concentration_inference(effects: pd.DataFrame, *, n_bootstrap: int = 2000, confidence: float = 0.95, seed: int = 42) -> pd.DataFrame:
+    def bootstrap_concentration_inference(
+        effects: pd.DataFrame,
+        *,
+        n_bootstrap: int = 2000,
+        confidence: float = 0.95,
+        seed: int = 42,
+        cluster_column: str | None = None,
+    ) -> pd.DataFrame:
+        """Estimate concentration-level endpoint CIs using independent-unit bootstrap.
+
+        Cluster selection is explicit or follows the CardioScore experimental-unit
+        hierarchy: biological replicate -> batch -> plate. Observation-level
+        bootstrap is intentionally not used because technical wells must not be
+        treated as independent biological observations.
+        """
         if effects.empty:
             return pd.DataFrame()
-        endpoint_columns = ["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"]
+
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+        ]
+
+        candidate_columns = (
+            [cluster_column]
+            if cluster_column is not None
+            else ["biological_replicate", "batch_id", "plate_id"]
+        )
+        resolved_cluster_column = next(
+            (column for column in candidate_columns if column in effects.columns),
+            None,
+        )
+
+        if resolved_cluster_column is None:
+            raise ValueError(
+                "Cluster-aware bootstrap requires independent-unit metadata. "
+                "Provide one of 'biological_replicate', 'batch_id', or 'plate_id' "
+                "or configure inference.cluster_column explicitly. "
+                "Observation-level bootstrap is disabled."
+            )
+
+        if (
+            effects[resolved_cluster_column].isna().any()
+            or effects[resolved_cluster_column]
+            .astype(str)
+            .str.strip()
+            .eq("")
+            .any()
+        ):
+            raise ValueError(
+                f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers."
+            )
+
         rows = []
-        for group_index, ((compound, concentration), group) in enumerate(effects.groupby(["compound", "concentration_uM"], sort=True)):
-            row = {"compound": compound, "concentration_uM": concentration, "n_replicates": int(group["well"].nunique())}
+        for group_index, ((compound, concentration), group) in enumerate(
+            effects.groupby(["compound", "concentration_uM"], sort=True)
+        ):
+            cluster_ids = group[resolved_cluster_column].to_numpy()
+            row = {
+                "compound": compound,
+                "concentration_uM": concentration,
+                "cluster_column": resolved_cluster_column,
+                "n_replicates": int(group["well"].nunique()),
+                "n_clusters": int(pd.unique(cluster_ids).size),
+            }
+
             for endpoint in endpoint_columns:
-                values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
-                values = values[np.isfinite(values)]
-                if len(values) < 2:
+                values = pd.to_numeric(
+                    group[endpoint],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                finite = np.isfinite(values)
+                values = values[finite]
+                endpoint_clusters = cluster_ids[finite]
+
+                if len(values) < 2 or pd.unique(endpoint_clusters).size < 2:
                     row[f"{endpoint}_ci_low"] = np.nan
                     row[f"{endpoint}_ci_high"] = np.nan
                     continue
-                result = bootstrap_ci(values, n_bootstrap=n_bootstrap, confidence=confidence, seed=seed + group_index)
+
+                result = bootstrap_cluster_ci(
+                    values,
+                    endpoint_clusters,
+                    n_bootstrap=n_bootstrap,
+                    confidence=confidence,
+                    seed=seed + group_index,
+                )
                 row[f"{endpoint}_ci_low"] = result.ci_low
                 row[f"{endpoint}_ci_high"] = result.ci_high
+
             rows.append(row)
+
         return pd.DataFrame(rows)
 
     @staticmethod
@@ -483,7 +560,13 @@ class CardioScorePipeline:
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
         if inference_cfg.get("enabled", False) and not scoring_effects.empty:
-            inference_table = self.bootstrap_concentration_inference(scoring_effects, n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)), confidence=float(inference_cfg.get("confidence", 0.95)), seed=int(inference_cfg.get("seed", 42)))
+            inference_table = self.bootstrap_concentration_inference(
+                scoring_effects,
+                n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)),
+                confidence=float(inference_cfg.get("confidence", 0.95)),
+                seed=int(inference_cfg.get("seed", 42)),
+                cluster_column=inference_cfg.get("cluster_column"),
+            )
         dose_response_fits = self.fit_dose_response(concentration_summary)
         scoring_endpoint_directions = {
             name: str(meta["direction"])
