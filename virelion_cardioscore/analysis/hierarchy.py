@@ -94,7 +94,8 @@ def _require_complete_endpoints(df: pd.DataFrame, endpoint_columns: list[str]) -
         if endpoint not in df.columns:
             continue
         numeric = pd.to_numeric(df[endpoint], errors="coerce")
-        invalid = numeric.isna() | ~np.isfinite(numeric.to_numpy(dtype=float))
+        numeric_values = numeric.to_numpy(dtype=float)
+        invalid = numeric.isna() | ~np.isfinite(numeric_values)
         if invalid.any():
             raise ValueError(
                 f"Scoring endpoint {endpoint!r} contains {int(invalid.sum())} missing or non-finite observation(s); "
@@ -111,6 +112,7 @@ def _unit_group_columns(df: pd.DataFrame, unit_column: str) -> list[str]:
     ]
     for column in namespace:
         _require_complete_identifier(df, column)
+    _require_complete_identifier(df, unit_column)
     return [*namespace, unit_column]
 
 
@@ -194,8 +196,6 @@ def aggregate_to_scoring_units(
     if unit_column == "well" and unit_key_columns == ["well"]:
         return effects.copy()
 
-    # Preserve the resolved unit type for generated unit IDs, even when
-    # scoring_unit='auto' selected it dynamically.
     resolved_unit = (
         "biological_replicate" if unit_column == (biological_unit_column or "biological_replicate")
         else "batch" if unit_column in {batch_unit_column or "batch_id", "experiment_id"}
@@ -208,7 +208,7 @@ def aggregate_to_scoring_units(
         if not isinstance(keys, tuple):
             keys = (keys,)
         row = dict(zip(group_columns, keys, strict=True))
-        namespace_values = keys[2:] if len(unit_key_columns) > 1 else keys[2:]
+        namespace_values = keys[2:]
         if len(unit_key_columns) == 1:
             row["well"] = f"{resolved_unit}:{keys[-1]}"
         else:
@@ -304,17 +304,21 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
     else:
         unit = "well"
 
-    _require_complete_identifier(summary, unit)
-    if "site" in summary.columns and unit != "site":
-        _require_complete_identifier(summary, "site")
-        scoped = summary.copy()
-        scoped["_independent_unit_key"] = (
-            scoped["site"].astype(str) + "::" + scoped[unit].astype(str)
-        )
-        count_column = "_independent_unit_key"
+    namespace = [
+        column
+        for column in ("site", "experiment_id")
+        if column in summary.columns and column != unit
+    ]
+    for column in [*namespace, unit]:
+        _require_complete_identifier(summary, column)
+
+    scoped = summary.copy()
+    key_columns = [*namespace, unit]
+    if len(key_columns) == 1:
+        count_column = key_columns[0]
     else:
-        scoped = summary
-        count_column = unit
+        scoped["_independent_unit_key"] = scoped[key_columns].astype(str).agg("::".join, axis=1)
+        count_column = "_independent_unit_key"
 
     return (
         scoped.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[count_column]
