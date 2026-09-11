@@ -39,12 +39,18 @@ def _endpoint_metadata(result: "PipelineResult") -> tuple[dict[str, str], dict[s
 
 
 def concentration_driver_table(result: "PipelineResult"):
-    """Build concentration provenance diagnostics for the current result."""
+    """Build concentration provenance diagnostics for endpoints present in the result."""
     directions, thresholds = _endpoint_metadata(result)
+    available = {
+        endpoint: direction
+        for endpoint, direction in directions.items()
+        if f"{endpoint}_mean" in result.concentration_table.columns
+    }
+    available_thresholds = {endpoint: thresholds[endpoint] for endpoint in available}
     return concentration_drivers(
         result.concentration_table,
-        endpoint_directions=directions or ENDPOINT_DIRECTIONS,
-        endpoint_thresholds=thresholds,
+        endpoint_directions=available or ENDPOINT_DIRECTIONS,
+        endpoint_thresholds=available_thresholds,
     )
 
 
