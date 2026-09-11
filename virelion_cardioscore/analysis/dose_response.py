@@ -16,22 +16,6 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
-_ENDPOINT_HARM_DIRECTIONS = {
-    "fpd_change_pct": "absolute",
-    "beat_rate_change_pct": "absolute",
-    "amplitude_change_pct": "decrease",
-    "stv_increase": "increase",
-    "triangulation_proxy_change": "increase",
-}
-
-_ENDPOINT_EFFECT_THRESHOLDS = {
-    "fpd_change_pct": 10.0,
-    "beat_rate_change_pct": 15.0,
-    "amplitude_change_pct": 20.0,
-    "stv_increase": 0.15,
-    "triangulation_proxy_change": 0.20,
-}
-
 _DEFAULT_MIN_EC50_COVERAGE = 0.10
 
 
@@ -130,8 +114,20 @@ def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
     return float(matches / len(deltas)), "increasing" if direction > 0 else "decreasing"
 
 
-def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None, endpoint_directions: dict[str, str] | None = None) -> bool | None:
-    expected = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _fitted_monotonic_direction(bottom: float, top: float, hill_slope: float) -> str:
+    """Return the concentration direction implied by the fitted 4PL parameters."""
+    signed_change = (top - bottom) * hill_slope
+    if np.isclose(signed_change, 0.0):
+        return "flat"
+    return "increasing" if signed_change > 0 else "decreasing"
+
+
+def _harm_direction_compatible(
+    endpoint: str,
+    monotonic_direction: str | None,
+    endpoint_directions: dict[str, str] | None = None,
+) -> bool | None:
+    expected = (endpoint_directions or {}).get(endpoint)
     if expected is None or monotonic_direction in {None, "flat"}:
         return None if expected is None else False
     if expected == "absolute":
@@ -142,8 +138,12 @@ def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None, e
     return monotonic_direction == expected_monotonic
 
 
-def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _harmful_effect_magnitude(
+    y: np.ndarray,
+    endpoint: str,
+    endpoint_directions: dict[str, str] | None = None,
+) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint)
     if direction is None:
         return None
     if direction == "absolute":
@@ -155,15 +155,16 @@ def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions:
     raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
 
 
-def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _fitted_harmful_effect_magnitude(
+    bottom: float,
+    top: float,
+    endpoint: str,
+    endpoint_directions: dict[str, str] | None = None,
+) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint)
     if direction is None:
         return None
     if direction == "absolute":
-        # Absolute-direction endpoints treat either prolongation or shortening
-        # as adverse. For a concentration-response curve, the relevant
-        # quantity is the excursion between the fitted baseline and maximal
-        # response, not the absolute value of either asymptote.
         return float(abs(top - bottom))
     if direction == "increase":
         return float(max(0.0, top - bottom))
@@ -187,8 +188,6 @@ def fit_4pl(
     effect_threshold: float | None = None,
     min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> DoseResponseFit:
-    if effect_threshold is None:
-        effect_threshold = _ENDPOINT_EFFECT_THRESHOLDS.get(endpoint)
     if effect_threshold is not None and effect_threshold < 0:
         raise ValueError("effect_threshold must be non-negative.")
     if not 0.0 <= min_ec50_coverage <= 1.0:
@@ -248,8 +247,9 @@ def fit_4pl(
     ec50_se, hill_se = float(standard_errors[2]), float(standard_errors[3])
     ec50_ci_low, ec50_ci_high = _positive_parameter_ci95(ec50, ec50_se)
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
-    monotonicity, monotonic_direction = _monotonicity_score(x, y)
-    harm_direction_compatible = _harm_direction_compatible(endpoint, monotonic_direction, endpoint_directions)
+    monotonicity, _observed_monotonic_direction = _monotonicity_score(x, y)
+    fitted_monotonic_direction = _fitted_monotonic_direction(bottom, top, hill_slope)
+    harm_direction_compatible = _harm_direction_compatible(endpoint, fitted_monotonic_direction, endpoint_directions)
     fitted_harmful_effect = _fitted_harmful_effect_magnitude(bottom, top, endpoint, endpoint_directions)
     effect_size_pass = None if effect_threshold is None or fitted_harmful_effect is None else fitted_harmful_effect >= effect_threshold
     boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
@@ -283,7 +283,7 @@ def fit_4pl(
         reasons.append("parameter confidence intervals are non-finite")
 
     message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria: " + "; ".join(dict.fromkeys(reasons))
-    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=bottom, top=top, r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=fitted_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
+    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=bottom, top=top, r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=fitted_monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=fitted_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
 
 
 def fit_concentration_series(
