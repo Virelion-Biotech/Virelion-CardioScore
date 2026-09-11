@@ -62,7 +62,7 @@ class PipelineResult:
 
 
 class CardioScorePipeline:
-    """High-level orchestrator for the CardioScore workflow."""
+    """High-level orchestrator of the CardioScore workflow."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -387,11 +387,7 @@ class CardioScorePipeline:
 
         if (
             effects[resolved_cluster_column].isna().any()
-            or effects[resolved_cluster_column]
-            .astype(str)
-            .str.strip()
-            .eq("")
-            .any()
+            or effects[resolved_cluster_column].astype(str).str.strip().eq("").any()
         ):
             raise ValueError(
                 f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers."
@@ -441,13 +437,16 @@ class CardioScorePipeline:
     @staticmethod
     def aggregate_compound_effects(
         concentration_summary: pd.DataFrame,
-        concentration_aggregation: str = "max_absolute_effect",
+        concentration_aggregation: str = "mean_harmful_effect",
         endpoint_directions: dict[str, str] | None = None,
     ) -> pd.DataFrame:
         if concentration_summary.empty:
             return pd.DataFrame()
-        if concentration_aggregation != "max_absolute_effect":
-            raise ValueError(f"Unsupported concentration_aggregation: {concentration_aggregation!r}. Expected 'max_absolute_effect'.")
+        if concentration_aggregation not in {"mean_harmful_effect", "max_absolute_effect"}:
+            raise ValueError(
+                f"Unsupported concentration_aggregation: {concentration_aggregation!r}. "
+                "Expected 'mean_harmful_effect' or 'max_absolute_effect'."
+            )
         endpoint_directions = endpoint_directions or {
             "fpd_change_pct": "absolute",
             "beat_rate_change_pct": "absolute",
@@ -463,12 +462,20 @@ class CardioScorePipeline:
                     return 0.0
                 endpoint = column.removesuffix("_mean")
                 direction = endpoint_directions.get(endpoint, "absolute")
-                if direction == "decrease":
-                    return float(values.min())
-                if direction == "increase":
-                    return float(values.max())
-                if direction == "absolute":
-                    return float(values.abs().max())
+                if concentration_aggregation == "max_absolute_effect":
+                    if direction == "decrease":
+                        return float(values.min())
+                    if direction == "increase":
+                        return float(values.max())
+                    if direction == "absolute":
+                        return float(values.abs().max())
+                elif concentration_aggregation == "mean_harmful_effect":
+                    if direction == "decrease":
+                        return float(-np.maximum(-values, 0.0).mean())
+                    if direction == "increase":
+                        return float(np.maximum(values, 0.0).mean())
+                    if direction == "absolute":
+                        return float(values.abs().mean())
                 raise ValueError(f"Unsupported endpoint direction: {direction!r} for {endpoint!r}.")
 
             technical_wells = int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum())
@@ -576,6 +583,9 @@ class CardioScorePipeline:
         eligible_concentration_summary = concentration_summary[concentration_summary["compound"].astype(str).isin(scorable_compounds)].copy()
         agg = self.aggregate_compound_effects(
             eligible_concentration_summary,
+            concentration_aggregation=str(
+                concentration_cfg.get("concentration_aggregation", "mean_harmful_effect")
+            ),
             endpoint_directions={
                 "fpd_change_pct": scoring_endpoint_directions.get("fpd_change_pct", "absolute"),
                 "beat_rate_change_pct": scoring_endpoint_directions.get("beat_rate_change_pct", "absolute"),
