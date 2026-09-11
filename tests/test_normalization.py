@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -51,9 +50,9 @@ def test_control_anchor_target_is_not_weighted_by_control_count():
         max_shift_cv_pct=100.0,
     )
 
-    assert diagnostic.target_values["P1"] == pytest.approx(150.0)
-    assert diagnostic.target_values["P2"] == pytest.approx(150.0)
+    assert diagnostic.target_means["fpd_ms"] == pytest.approx(150.0)
     control_means = corrected.loc[corrected["vehicle"], "fpd_ms"].groupby(corrected.loc[corrected["vehicle"], "plate_id"]).mean()
     assert control_means["P1"] == pytest.approx(150.0)
     assert control_means["P2"] == pytest.approx(150.0)
-    assert np.isfinite(diagnostic.shift_cv_pct)
+    assert diagnostic.group_shifts["P1"]["fpd_ms"] == pytest.approx(50.0)
+    assert diagnostic.group_shifts["P2"]["fpd_ms"] == pytest.approx(-50.0)
