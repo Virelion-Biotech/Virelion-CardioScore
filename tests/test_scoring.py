@@ -204,14 +204,27 @@ def test_irregularity_proxy_requires_explicit_threshold():
     assert any("max_stv is not configured" in msg for msg in pipeline.qc_log)
 
 
-def test_concentration_coverage_warning_is_reported_without_silent_exclusion():
+def test_concentration_coverage_fails_closed_by_default():
     dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
     pipeline = CardioScorePipeline.from_defaults()
     result = pipeline.run(dataset)
 
+    assert result.scores == []
+    assert result.summary_table.empty
+    assert not result.concentration_table.empty
+    assert int(result.concentration_table["concentration_uM"].nunique()) == 2
+    assert any("excluded from scoring" in msg for msg in result.qc_log)
+
+
+def test_concentration_coverage_can_be_explicitly_allowed():
+    dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["concentration_response"]["require_min_concentrations_for_scoring"] = False
+    result = pipeline.run(dataset)
+
     assert len(result.scores) == 1
     assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
-    assert any("configured minimum is 3" in msg for msg in result.qc_log)
+    assert any("scoring is allowed" in msg for msg in result.qc_log)
 
 
 def test_replicates_are_aggregated_within_concentration():
