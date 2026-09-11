@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 OPTIONAL_HIERARCHY_COLUMNS = (
@@ -87,14 +88,30 @@ def _require_complete_identifier(df: pd.DataFrame, column: str) -> None:
         )
 
 
+def _require_complete_endpoints(df: pd.DataFrame, endpoint_columns: list[str]) -> None:
+    """Reject partial endpoint data before aggregation changes the denominator."""
+    for endpoint in endpoint_columns:
+        if endpoint not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[endpoint], errors="coerce")
+        invalid = numeric.isna() | ~np.isfinite(numeric.to_numpy(dtype=float))
+        if invalid.any():
+            raise ValueError(
+                f"Scoring endpoint {endpoint!r} contains {int(invalid.sum())} missing or non-finite observation(s); "
+                "partial endpoint data are not allowed for scoring-unit aggregation."
+            )
+
+
 def _unit_group_columns(df: pd.DataFrame, unit_column: str) -> list[str]:
     """Return a collision-safe experimental-unit grouping key."""
-    if "site" not in df.columns:
-        return [unit_column]
-    _require_complete_identifier(df, "site")
-    if unit_column == "site":
-        return [unit_column]
-    return ["site", unit_column]
+    namespace = [
+        column
+        for column in ("site", "experiment_id")
+        if column in df.columns and column != unit_column
+    ]
+    for column in namespace:
+        _require_complete_identifier(df, column)
+    return [*namespace, unit_column]
 
 
 def _resolve_scoring_column(
@@ -164,6 +181,7 @@ def aggregate_to_scoring_units(
             "triangulation_proxy_change",
             "max_effect_pct",
         ]
+    _require_complete_endpoints(effects, endpoint_columns)
 
     unit_column = _resolve_scoring_column(
         effects,
@@ -172,7 +190,8 @@ def aggregate_to_scoring_units(
         batch_unit_column=batch_unit_column,
         plate_unit_column=plate_unit_column,
     )
-    if unit_column == "well":
+    unit_key_columns = _unit_group_columns(effects, unit_column)
+    if unit_column == "well" and unit_key_columns == ["well"]:
         return effects.copy()
 
     # Preserve the resolved unit type for generated unit IDs, even when
@@ -183,23 +202,23 @@ def aggregate_to_scoring_units(
         else "plate" if unit_column == (plate_unit_column or "plate_id")
         else "well"
     )
-    unit_key_columns = _unit_group_columns(effects, unit_column)
     group_columns = ["compound", "concentration_uM", *unit_key_columns]
     rows: list[dict] = []
     for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
         row = dict(zip(group_columns, keys, strict=True))
+        namespace_values = keys[2:] if len(unit_key_columns) > 1 else keys[2:]
         if len(unit_key_columns) == 1:
             row["well"] = f"{resolved_unit}:{keys[-1]}"
         else:
-            row["well"] = f"{resolved_unit}:{keys[-2]}:{keys[-1]}"
+            row["well"] = f"{resolved_unit}:{':'.join(str(value) for value in namespace_values)}"
         row["n_wells"] = int(group["well"].nunique())
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
                 continue
-            values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
-            row[endpoint] = float(values.mean()) if len(values) else float("nan")
+            values = pd.to_numeric(group[endpoint], errors="coerce")
+            row[endpoint] = float(values.mean())
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -224,6 +243,7 @@ def summarize_experimental_units(
             "stv_increase",
             "triangulation_proxy_change",
         ]
+    _require_complete_endpoints(effects, endpoint_columns)
 
     metadata = hierarchy_columns(
         effects,
@@ -260,8 +280,8 @@ def summarize_experimental_units(
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
                 continue
-            values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
-            row[f"{endpoint}_mean"] = float(values.mean()) if len(values) else float("nan")
+            values = pd.to_numeric(group[endpoint], errors="coerce")
+            row[f"{endpoint}_mean"] = float(values.mean())
             row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else float("nan")
         rows.append(row)
 
