@@ -88,6 +88,7 @@ concentration_response:
   fit_min_monotonicity: 0.80
   fit_ec50_boundary_factor: 2.0
   fit_max_ec50_uncertainty_fold: 100.0
+  min_ec50_coverage: 0.10
 
 inference:
   enabled: false
