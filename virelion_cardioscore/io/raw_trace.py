@@ -42,6 +42,7 @@ OPTIONAL_METADATA_COLUMNS = (
     "cell_type",
 )
 MAX_RELATIVE_TIMESTAMP_JITTER = 0.01
+TIMESTAMP_ALIGNMENT_ATOL_S = 1e-9
 
 
 class RawTraceSchemaError(ValueError):
@@ -159,6 +160,8 @@ def load_raw_traces_csv(path: str | Path) -> list[RawWellRecording]:
         metadata = dict(zip(metadata_columns, keys[base_count:], strict=True))
         electrode_traces: dict[str, np.ndarray] = {}
         fs_values = []
+        reference_times: np.ndarray | None = None
+        reference_electrode: str | None = None
         for electrode_id, edf in well_df.groupby("electrode_id", sort=False):
             edf = edf.sort_values("time_s")
             times = edf["time_s"].to_numpy(dtype=float)
@@ -168,6 +171,23 @@ def load_raw_traces_csv(path: str | Path) -> list[RawWellRecording]:
                 )
             fs_hz = _infer_sampling_rate(times)
             fs_values.append(fs_hz)
+            if reference_times is None:
+                reference_times = times
+                reference_electrode = str(electrode_id)
+            else:
+                aligned = len(times) == len(reference_times) and np.allclose(
+                    times,
+                    reference_times,
+                    rtol=0.0,
+                    atol=TIMESTAMP_ALIGNMENT_ATOL_S,
+                )
+                if not aligned:
+                    raise RawTraceSchemaError(
+                        f"Electrode timestamps are not aligned within compound={compound!r}, "
+                        f"well={well!r}: electrode={electrode_id!r} does not match "
+                        f"reference electrode={reference_electrode!r}. Resample or align all "
+                        "electrode traces to a common time grid before CardioScore processing."
+                    )
             electrode_traces[str(electrode_id)] = edf["voltage_uv"].to_numpy(dtype=float)
 
         if not fs_values:
