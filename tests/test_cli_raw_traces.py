@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from virelion_cardioscore.cli import main
@@ -13,6 +14,14 @@ def _default_config_path() -> Path:
     return Path(__file__).resolve().parent.parent / "virelion_cardioscore" / "config" / "default.yaml"
 
 
+def _test_config_path(tmp_path: Path) -> Path:
+    config = yaml.safe_load(_default_config_path().read_text(encoding="utf-8"))
+    config["concentration_response"]["require_min_concentrations_for_scoring"] = False
+    path = tmp_path / "test_config.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def test_cli_run_with_raw_traces(two_compound_plate, tmp_path):
     runner = CliRunner()
     out_dir = tmp_path / "out"
@@ -20,7 +29,7 @@ def test_cli_run_with_raw_traces(two_compound_plate, tmp_path):
         main,
         [
             "run",
-            "--config", str(_default_config_path()),
+            "--config", str(_test_config_path(tmp_path)),
             "--raw-traces", str(two_compound_plate),
             "--output-dir", str(out_dir),
         ],
@@ -67,5 +76,4 @@ def test_cli_run_with_malformed_raw_traces_shows_clean_error(tmp_path):
     )
     assert result.exit_code != 0
     assert "missing required column" in result.output.lower()
-    # Should be a clean ClickException, not a raw traceback dumped on the user.
     assert "Traceback" not in result.output
