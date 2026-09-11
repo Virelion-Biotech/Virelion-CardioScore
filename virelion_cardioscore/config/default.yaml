@@ -76,6 +76,9 @@ concentration_response:
   concentration_aggregation: "max_absolute_effect"
   effect_threshold_pct: 10.0
   min_concentrations: 3
+  # A compound with fewer than the minimum tested concentrations is not
+  # sufficient for concentration-response scoring evidence by default.
+  require_min_concentrations_for_scoring: true
   fit_curve: false
   fit_min_concentrations: 4
   fit_min_r_squared: 0.80
