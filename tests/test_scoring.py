@@ -304,7 +304,7 @@ def test_compound_aggregation_default_uses_mean_harmful_effect():
     row = aggregate.iloc[0]
 
     assert row["fpd_change_pct"] == pytest.approx(27.5)
-    assert row["amplitude_change_pct"] == pytest.approx(-7.5)
+    assert row["amplitude_change_pct"] == pytest.approx(-10.0)
     assert row["stv_increase"] == pytest.approx(0.075)
     assert row["triangulation_proxy"] == pytest.approx(0.03)
     assert row["max_effect_pct"] == pytest.approx(35.0)
