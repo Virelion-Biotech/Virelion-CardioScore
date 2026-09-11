@@ -37,7 +37,13 @@ def test_amplitude_driver_uses_harmful_decrease_direction():
     assert row["driver_value"] == pytest.approx(-30.0)
 
 
-def test_driver_requires_endpoint_column():
+def test_driver_ignores_unavailable_optional_endpoint_column():
     broken = _frame().drop(columns=["stv_increase_mean"])
-    result = concentration_drivers(broken, endpoint_directions={"stv_increase": "increase"})
-    assert result.empty
+    result = concentration_drivers(broken)
+    assert "stv_increase" not in set(result["endpoint"])
+
+
+def test_driver_requires_explicitly_requested_endpoint_column():
+    broken = _frame().drop(columns=["stv_increase_mean"])
+    with pytest.raises(ValueError, match="stv_increase"):
+        concentration_drivers(broken, endpoint_directions={"stv_increase": "increase"})
