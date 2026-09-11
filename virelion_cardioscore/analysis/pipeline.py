@@ -19,6 +19,37 @@ from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
+RUNTIME_REQUIRED_COLUMNS = {
+    "compound",
+    "concentration_uM",
+    "well",
+    "vehicle",
+    "fpd_ms",
+    "beat_rate_bpm",
+    "amplitude_uv",
+    "stv",
+    "triangulation_proxy",
+    "noise_sd_uv",
+    "n_electrodes",
+    "beat_detection_rate",
+}
+RUNTIME_ENDPOINT_COLUMNS = (
+    "fpd_ms",
+    "beat_rate_bpm",
+    "amplitude_uv",
+    "stv",
+    "triangulation_proxy",
+)
+RUNTIME_HIERARCHY_COLUMNS = (
+    "biological_replicate",
+    "batch_id",
+    "experiment_id",
+    "plate_id",
+    "site",
+    "cell_type",
+)
+
+
 @dataclass
 class PipelineResult:
     scores: list[ScoreResult]
@@ -97,6 +128,57 @@ class CardioScorePipeline:
         default = Path(__file__).resolve().parent.parent / "config" / "default.yaml"
         return cls.from_config(default)
 
+    @staticmethod
+    def validate_runtime_feature_schema(df: pd.DataFrame) -> None:
+        """Validate the feature-table contract before any pipeline processing."""
+        missing = sorted(RUNTIME_REQUIRED_COLUMNS - set(df.columns))
+        if missing:
+            raise ValueError(f"CardioScore feature table is missing required columns: {missing}")
+        if df.empty:
+            raise ValueError("CardioScore feature table is empty.")
+
+        for column in ("compound", "well"):
+            values = df[column]
+            if values.isna().any() or values.astype(str).str.strip().eq("").any():
+                raise ValueError(f"CardioScore feature table contains missing or blank {column!r} identifiers.")
+
+        vehicle = coerce_bool_series(df["vehicle"], name="vehicle")
+        concentrations = pd.to_numeric(df["concentration_uM"], errors="coerce")
+        if concentrations.isna().any() or not np.isfinite(concentrations.to_numpy()).all():
+            raise ValueError("concentration_uM must be numeric and finite.")
+        if (concentrations < 0).any():
+            raise ValueError("concentration_uM cannot be negative.")
+        if ((~vehicle) & (concentrations <= 0)).any():
+            raise ValueError("treated wells must have strictly positive concentration_uM.")
+
+        for column in ("n_electrodes", "noise_sd_uv", "beat_detection_rate"):
+            values = pd.to_numeric(df[column], errors="coerce")
+            if values.isna().any() or not np.isfinite(values.to_numpy()).all():
+                raise ValueError(f"{column} must be numeric and finite.")
+        electrodes = pd.to_numeric(df["n_electrodes"], errors="coerce")
+        if (electrodes < 0).any() or not np.isclose(electrodes, np.round(electrodes)).all():
+            raise ValueError("n_electrodes must contain non-negative integers.")
+        noise = pd.to_numeric(df["noise_sd_uv"], errors="coerce")
+        if (noise < 0).any():
+            raise ValueError("noise_sd_uv cannot be negative.")
+        detection = pd.to_numeric(df["beat_detection_rate"], errors="coerce")
+        if ((detection < 0) | (detection > 1)).any():
+            raise ValueError("beat_detection_rate must be between 0 and 1.")
+
+        for column in RUNTIME_HIERARCHY_COLUMNS:
+            if column in df.columns:
+                values = df[column]
+                if values.isna().any() or values.astype(str).str.strip().eq("").any():
+                    raise ValueError(f"Hierarchy metadata column {column!r} contains missing or blank identifiers.")
+
+        for column in RUNTIME_ENDPOINT_COLUMNS:
+            if column not in df.columns:
+                raise ValueError(f"CardioScore feature table is missing endpoint column {column!r}.")
+            numeric = pd.to_numeric(df[column], errors="coerce")
+            invalid_non_numeric = numeric.isna() & df[column].notna()
+            if invalid_non_numeric.any():
+                raise ValueError(f"{column} contains non-numeric feature values.")
+
     def apply_qc(self, df: pd.DataFrame) -> pd.DataFrame:
         qc = self.config.get("quality_control", {})
         min_elec = qc.get("min_electrodes_per_well", 4)
@@ -105,18 +187,20 @@ class CardioScorePipeline:
         reject_irregular = qc.get("reject_wells_with_arrhythmia_proxy", False)
         irregularity_threshold = qc.get("arrhythmia_proxy_max_stv")
         before = len(df)
+        endpoint_complete = np.ones(len(df), dtype=bool)
+        for endpoint in RUNTIME_ENDPOINT_COLUMNS:
+            numeric = pd.to_numeric(df[endpoint], errors="coerce")
+            endpoint_complete &= np.isfinite(numeric.to_numpy(dtype=float))
         mask = (
             (df["n_electrodes"] >= min_elec)
             & (df["noise_sd_uv"] <= max_noise)
             & (df["beat_detection_rate"] >= min_bdr)
+            & endpoint_complete
         )
         if reject_irregular:
             if irregularity_threshold is None:
                 self.qc_log.append(
-                    "Warning: arrhythmia-proxy rejection is enabled, but "
-                    "quality_control.arrhythmia_proxy_max_stv is not configured; "
-                    "no irregularity rejection was applied. STV is treated only "
-                    "as an optional irregularity proxy, not an arrhythmia detector."
+                    "Warning: arrhythmia-proxy rejection is enabled, but quality_control.arrhythmia_proxy_max_stv is not configured; no irregularity rejection was applied. STV is treated only as an optional irregularity proxy, not an arrhythmia detector."
                 )
             else:
                 mask &= df["stv"] <= float(irregularity_threshold)
@@ -125,9 +209,15 @@ class CardioScorePipeline:
         if qc.get("log_rejections", True) and len(rejected) > 0:
             for _, row in rejected.iterrows():
                 details = (
-                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, "
-                    f"bdr={row['beat_detection_rate']:.2f}"
+                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, bdr={row['beat_detection_rate']:.2f}"
                 )
+                missing_endpoints = [
+                    endpoint
+                    for endpoint in RUNTIME_ENDPOINT_COLUMNS
+                    if not np.isfinite(pd.to_numeric(pd.Series([row[endpoint]]), errors="coerce").iloc[0])
+                ]
+                if missing_endpoints:
+                    details += f", missing_endpoint={','.join(missing_endpoints)}"
                 if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
                     details += f", stv={row['stv']:.3f}"
                 self.qc_log.append(f"Rejected {row['compound']} {row['well']} ({details})")
@@ -161,11 +251,7 @@ class CardioScorePipeline:
                 "biological_replicate": ["compound", "biological_replicate"],
             }
             columns = unit_map[scope]
-            namespace = [
-                column
-                for column in ("site", "experiment_id")
-                if column in df.columns and column not in columns
-            ]
+            namespace = [column for column in ("site", "experiment_id") if column in df.columns and column not in columns]
             columns = [*namespace, *columns]
         missing = [column for column in columns if column not in df.columns]
         if missing:
@@ -204,14 +290,7 @@ class CardioScorePipeline:
                 effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["triangulation_proxy_change"].abs() * 100.0)
             return effects
         records = []
-        optional_metadata = [
-            "biological_replicate",
-            "batch_id",
-            "experiment_id",
-            "plate_id",
-            "site",
-            "cell_type",
-        ]
+        optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id", "site", "cell_type"]
         scope = control_cfg.get("scope", "compound")
         control_columns = self._control_group_columns(working_df)
         require_match = bool(control_cfg.get("require_matching_control", True))
@@ -367,7 +446,6 @@ class CardioScorePipeline:
         """Estimate concentration-level endpoint CIs using independent-unit bootstrap."""
         if effects.empty:
             return pd.DataFrame()
-
         endpoint_columns = [
             "fpd_change_pct",
             "beat_rate_change_pct",
@@ -383,7 +461,6 @@ class CardioScorePipeline:
             )
         if effects[resolved_cluster_column].isna().any() or effects[resolved_cluster_column].astype(str).str.strip().eq("").any():
             raise ValueError(f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers.")
-
         rows = []
         for group_index, ((compound, concentration), group) in enumerate(effects.groupby(["compound", "concentration_uM"], sort=True)):
             cluster_ids = group[resolved_cluster_column].to_numpy()
@@ -486,6 +563,7 @@ class CardioScorePipeline:
                 max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)),
                 endpoint_directions=endpoint_directions,
                 endpoint_thresholds=endpoint_thresholds,
+                min_ec50_coverage=float(cfg.get("min_ec50_coverage", 0.10)),
             )
             results[str(compound)] = fits
         return results
@@ -511,8 +589,7 @@ class CardioScorePipeline:
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
-        if "vehicle" not in df.columns:
-            raise ValueError("CardioScorePipeline requires a 'vehicle' column.")
+        self.validate_runtime_feature_schema(df)
         df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
         df = self.apply_qc(df)
         variability_cfg = self.config.get("variability", {})
