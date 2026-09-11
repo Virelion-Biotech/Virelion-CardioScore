@@ -60,7 +60,7 @@ def test_auto_scope_uses_design_block_when_plate_metadata_exist():
     assert effects.loc[effects["compound"] == "B", "fpd_change_pct"].iloc[0] == pytest.approx(30.0)
 
 
-def test_compound_scope_does_not_cross_normalize_compounds():
+def test_compound_scope_only_scores_compounds_with_matching_controls():
     frame = _shared_vehicle_frame()
     frame.loc[frame["compound"] == "A", "vehicle"] = False
 
@@ -68,7 +68,8 @@ def test_compound_scope_does_not_cross_normalize_compounds():
     pipeline.config["control_normalization"]["scope"] = "compound"
 
     effects = pipeline.compute_effects(frame)
-    assert effects.empty
+    assert set(effects["compound"]) == {"B"}
+    assert effects.loc[effects["compound"] == "B", "fpd_change_pct"].iloc[0] == pytest.approx(30.0)
     assert any("No matching vehicle control" in msg for msg in pipeline.qc_log)
 
 
