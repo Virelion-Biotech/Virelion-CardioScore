@@ -7,10 +7,24 @@ from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 from virelion_cardioscore.io.synthetic import load_synthetic_dataset
 
 
+FPD_METADATA = {"fpd_change_pct": "absolute"}
+FPD_THRESHOLD = 10.0
+
+
 def test_4pl_good_fit_passes_monotonicity_and_ec50_range_gates():
     concentrations = np.logspace(-1, 2, 7)
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99, min_monotonicity=0.80, ec50_boundary_factor=2.0, max_ec50_uncertainty_fold=100.0)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions=FPD_METADATA,
+        effect_threshold=FPD_THRESHOLD,
+        min_r_squared=0.99,
+        min_monotonicity=0.80,
+        ec50_boundary_factor=2.0,
+        max_ec50_uncertainty_fold=100.0,
+    )
     assert result.success
     assert result.quality_pass
     assert result.monotonicity == 1.0
@@ -27,7 +41,15 @@ def test_4pl_good_fit_passes_monotonicity_and_ec50_range_gates():
 def test_tiny_but_perfect_curve_is_not_scoring_quality():
     concentrations = np.logspace(-1, 2, 7)
     responses = 5.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99, min_monotonicity=0.80)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions=FPD_METADATA,
+        effect_threshold=FPD_THRESHOLD,
+        min_r_squared=0.99,
+        min_monotonicity=0.80,
+    )
     assert result.success
     assert result.harmful_effect_magnitude is not None
     assert result.harmful_effect_magnitude < 10.0
@@ -39,7 +61,15 @@ def test_tiny_but_perfect_curve_is_not_scoring_quality():
 def test_effect_threshold_boundary_is_inclusive():
     concentrations = np.logspace(-1, 2, 7)
     responses = 10.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99, min_monotonicity=0.80)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions=FPD_METADATA,
+        effect_threshold=FPD_THRESHOLD,
+        min_r_squared=0.99,
+        min_monotonicity=0.80,
+    )
     assert result.harmful_effect_magnitude is not None
     assert result.harmful_effect_magnitude >= 10.0
     assert result.effect_size_pass is True
@@ -52,6 +82,8 @@ def test_ec50_coverage_gate_flags_edge_fitted_response_even_without_boundary_fla
         concentrations,
         responses,
         endpoint="fpd_change_pct",
+        endpoint_directions=FPD_METADATA,
+        effect_threshold=FPD_THRESHOLD,
         min_r_squared=0.99,
         min_monotonicity=0.80,
         ec50_boundary_factor=1.0,
@@ -69,7 +101,13 @@ def test_ec50_coverage_gate_flags_edge_fitted_response_even_without_boundary_fla
 def test_non_monotonic_series_is_flagged():
     concentrations = np.logspace(0, 2, 6)
     responses = np.array([1.0, 12.0, 4.0, 18.0, 8.0, 22.0])
-    result = fit_4pl(concentrations, responses, endpoint="endpoint", min_r_squared=0.0, min_monotonicity=0.80)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="endpoint",
+        min_r_squared=0.0,
+        min_monotonicity=0.80,
+    )
     assert result.success
     assert result.monotonicity is not None
     assert result.monotonicity < 0.80
@@ -80,7 +118,14 @@ def test_non_monotonic_series_is_flagged():
 def test_ec50_near_unobserved_boundary_is_flagged():
     concentrations = np.logspace(0, np.log10(32), 6)
     responses = 90.0 / (1.0 + (100.0 / concentrations) ** 1.3)
-    result = fit_4pl(concentrations, responses, endpoint="endpoint", min_r_squared=0.0, min_monotonicity=0.80, ec50_boundary_factor=2.0)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="endpoint",
+        min_r_squared=0.0,
+        min_monotonicity=0.80,
+        ec50_boundary_factor=2.0,
+    )
     assert result.success
     assert result.ec50_boundary_flag
     assert not result.quality_pass
@@ -100,7 +145,13 @@ def test_pipeline_reports_quality_diagnostics():
 def test_dose_response_result_serialization_includes_diagnostics():
     concentrations = np.logspace(-1, 2, 7)
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct")
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions=FPD_METADATA,
+        effect_threshold=FPD_THRESHOLD,
+    )
     payload = result.to_dict()
     for key in [
         "quality_pass",
