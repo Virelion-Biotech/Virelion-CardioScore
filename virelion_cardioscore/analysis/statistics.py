@@ -110,12 +110,11 @@ def bootstrap_cluster_ci(
 ) -> BootstrapCI:
     """Bootstrap a statistic by resampling independent clusters as units.
 
-    All observations belonging to a sampled cluster are retained together.
-    This avoids pretending that technical wells within the same biological unit
-    are independent observations. The statistic is evaluated on the pooled
-    observations from the sampled clusters, preserving within-cluster structure.
-    This is an inferential helper, not a substitute for a prespecified
-    hierarchical model.
+    The default mean statistic is evaluated after first averaging observations
+    within each cluster, so clusters contribute equally even when they contain
+    different numbers of technical observations. Custom statistics are applied
+    to the cluster-level values as well. This prevents technical-well imbalance
+    from silently changing the inferential weight of independent units.
     """
     _validate_bootstrap_args(n_bootstrap, confidence)
     x = np.asarray(values, dtype=float)
@@ -133,14 +132,19 @@ def bootstrap_cluster_ci(
     if len(unique_clusters) < 2:
         raise ValueError("At least two independent clusters are required for cluster bootstrap.")
 
-    cluster_indices = [np.flatnonzero(g == cluster) for cluster in unique_clusters]
+    cluster_values = np.asarray(
+        [float(np.mean(x[g == cluster])) for cluster in unique_clusters],
+        dtype=float,
+    )
+    if not np.isfinite(cluster_values).all():
+        raise ValueError("Cluster-level values must be finite for bootstrap inference.")
+
     rng = np.random.default_rng(seed)
-    estimate = float(statistic(x))
+    estimate = float(statistic(cluster_values))
     boot_stats = np.empty(n_bootstrap, dtype=float)
     for i in range(n_bootstrap):
-        sampled = rng.integers(0, len(unique_clusters), size=len(unique_clusters))
-        sampled_indices = np.concatenate([cluster_indices[j] for j in sampled])
-        boot_stats[i] = float(statistic(x[sampled_indices]))
+        sampled = rng.integers(0, len(cluster_values), size=len(cluster_values))
+        boot_stats[i] = float(statistic(cluster_values[sampled]))
     alpha = 1.0 - confidence
     low, high = np.quantile(boot_stats, [alpha / 2.0, 1.0 - alpha / 2.0])
     return BootstrapCI(
