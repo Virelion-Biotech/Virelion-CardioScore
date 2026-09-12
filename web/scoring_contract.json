@@ -1,0 +1,13 @@
+{
+  "version": "0.1.1",
+  "source": "virelion_cardioscore/config/cipa_endpoints.yaml",
+  "endpoints": {
+    "fpd_change_pct": {"direction": "absolute", "weight": 0.30, "effect_threshold": 10.0},
+    "beat_rate_change_pct": {"direction": "absolute", "weight": 0.15, "effect_threshold": 15.0},
+    "amplitude_change_pct": {"direction": "decrease", "weight": 0.15, "effect_threshold": 20.0},
+    "stv_increase": {"direction": "increase", "weight": 0.25, "effect_threshold": 0.15},
+    "triangulation_proxy": {"direction": "increase", "weight": 0.15, "effect_threshold": 0.20}
+  },
+  "risk_thresholds": {"low": 0.30, "moderate": 0.60},
+  "status": "non-authoritative-browser-contract"
+}
