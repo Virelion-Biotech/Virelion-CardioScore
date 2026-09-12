@@ -134,10 +134,16 @@ def fit_random_intercept(
     if model_df.empty:
         raise ValueError("No complete observations remain for mixed-effects modeling.")
     n_groups = int(model_df[model_group_column].nunique())
-    if n_groups < 2:
-        raise ValueError("Mixed-effects modeling requires at least two independent groups.")
+    if n_groups < 3:
+        raise ValueError("Mixed-effects modeling requires at least three independent groups.")
     if model_df[treatment_column].nunique() < 2:
         raise ValueError("Mixed-effects modeling requires both treatment levels.")
+
+    group_counts = model_df.groupby(model_group_column, sort=False).size()
+    if (group_counts < 2).any():
+        raise ValueError(
+            "Mixed-effects modeling requires at least two observations in every independent group."
+        )
 
     formula = f"Q('{endpoint}') ~ Q('{treatment_column}')"
     model = smf.mixedlm(formula, model_df, groups=model_df[model_group_column])
