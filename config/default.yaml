@@ -36,12 +36,12 @@ features:
   window_s: 60.0
 
 experimental_units:
-  scoring_unit: "well"
+  # Prefer biological replicate, then batch, then plate; use wells only when
+  # no higher-level experimental-unit metadata are available.
+  scoring_unit: "auto"
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
   plate_unit_column: "plate_id"
-  # Safety default: requesting a higher-level unit without its metadata must fail
-  # rather than silently reverting to technical-well scoring.
   fall_back_to_well: false
 
 control_normalization:
@@ -65,8 +65,6 @@ variability:
       - "stv"
       - "triangulation_proxy"
     min_controls_per_group: 2
-    # When true, every correction group must have sufficient vehicle controls
-    # and the configured minimum treated observations before correction is allowed.
     require_all_groups: true
     assumptions:
       min_treated_per_group: 1
@@ -75,21 +73,29 @@ variability:
 
 concentration_response:
   replicate_aggregation: "mean"
-  concentration_aggregation: "max_absolute_effect"
+  # The default scores the average harmful response across tested
+  # concentrations, avoiding automatic domination by a single extreme dose.
+  # max_absolute_effect remains available as an explicit diagnostic/legacy mode.
+  concentration_aggregation: "mean_harmful_effect"
   effect_threshold_pct: 10.0
   min_concentrations: 3
+  # A compound with fewer than the minimum tested concentrations is not
+  # sufficient for concentration-response scoring evidence by default.
+  require_min_concentrations_for_scoring: true
   fit_curve: false
   fit_min_concentrations: 4
   fit_min_r_squared: 0.80
   fit_min_monotonicity: 0.80
   fit_ec50_boundary_factor: 2.0
   fit_max_ec50_uncertainty_fold: 100.0
+  min_ec50_coverage: 0.10
 
 inference:
   enabled: false
   n_bootstrap: 2000
   confidence: 0.95
   seed: 42
+  cluster_column: null
 
 mixed_effects:
   enabled: false
