@@ -1,11 +1,4 @@
-"""Concentration-response fitting utilities for CardioScore.
-
-This module provides an explicit four-parameter logistic (4PL) fit for
-concentration-response series. Fitting is optional and should not be
-interpreted as regulatory validation. Series with insufficient concentrations,
-failed optimization, poor fit quality, or biologically trivial responses return
-structured diagnostics instead of silently becoming scoring evidence.
-"""
+"""Concentration-response fitting and quality gates for CardioScore."""
 
 from __future__ import annotations
 
@@ -15,238 +8,155 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import curve_fit
 
-
 _DEFAULT_MIN_EC50_COVERAGE = 0.10
 
 
-@dataclass
+@dataclass(frozen=True)
 class DoseResponseFit:
     endpoint: str
     success: bool
     quality_pass: bool
     n_points: int
-    ec50: Optional[float] = None
-    ec50_ci_low: Optional[float] = None
-    ec50_ci_high: Optional[float] = None
-    hill_slope: Optional[float] = None
-    hill_ci_low: Optional[float] = None
-    hill_ci_high: Optional[float] = None
-    bottom: Optional[float] = None
-    top: Optional[float] = None
-    r_squared: Optional[float] = None
-    rmse: Optional[float] = None
+    ec50: float | None = None
+    ec50_ci_low: float | None = None
+    ec50_ci_high: float | None = None
+    hill_slope: float | None = None
+    hill_ci_low: float | None = None
+    hill_ci_high: float | None = None
+    bottom: float | None = None
+    top: float | None = None
+    r_squared: float | None = None
+    rmse: float | None = None
     weighted: bool = False
-    monotonicity: Optional[float] = None
-    monotonic_direction: Optional[str] = None
-    harm_direction_compatible: Optional[bool] = None
-    harmful_effect_magnitude: Optional[float] = None
-    effect_threshold: Optional[float] = None
-    effect_size_pass: Optional[bool] = None
-    ec50_coverage: Optional[float] = None
-    min_ec50_coverage: Optional[float] = None
-    coverage_pass: Optional[bool] = None
+    monotonicity: float | None = None
+    monotonic_direction: str | None = None
+    harm_direction_compatible: bool | None = None
+    harmful_effect_magnitude: float | None = None
+    effect_threshold: float | None = None
+    effect_size_pass: bool | None = None
+    ec50_coverage: float | None = None
+    min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE
+    coverage_pass: bool | None = None
     ec50_boundary_flag: bool = False
-    ec50_uncertainty_fold: Optional[float] = None
+    ec50_uncertainty_fold: float | None = None
     message: str = ""
 
     def to_dict(self) -> dict:
-        return {
-            "endpoint": self.endpoint,
-            "success": self.success,
-            "quality_pass": self.quality_pass,
-            "n_points": self.n_points,
-            "ec50": self.ec50,
-            "ec50_ci_low": self.ec50_ci_low,
-            "ec50_ci_high": self.ec50_ci_high,
-            "hill_slope": self.hill_slope,
-            "hill_ci_low": self.hill_ci_low,
-            "hill_ci_high": self.hill_ci_high,
-            "bottom": self.bottom,
-            "top": self.top,
-            "r_squared": self.r_squared,
-            "rmse": self.rmse,
-            "weighted": self.weighted,
-            "monotonicity": self.monotonicity,
-            "monotonic_direction": self.monotonic_direction,
-            "harm_direction_compatible": self.harm_direction_compatible,
-            "harmful_effect_magnitude": self.harmful_effect_magnitude,
-            "effect_threshold": self.effect_threshold,
-            "effect_size_pass": self.effect_size_pass,
-            "ec50_coverage": self.ec50_coverage,
-            "min_ec50_coverage": self.min_ec50_coverage,
-            "coverage_pass": self.coverage_pass,
-            "ec50_boundary_flag": self.ec50_boundary_flag,
-            "ec50_uncertainty_fold": self.ec50_uncertainty_fold,
-            "message": self.message,
-        }
+        return self.__dict__.copy()
 
 
-def four_parameter_logistic(concentration: np.ndarray, bottom: float, top: float, ec50: float, hill_slope: float) -> np.ndarray:
-    concentration = np.asarray(concentration, dtype=float)
-    if np.any(concentration <= 0):
-        raise ValueError("4PL fitting requires strictly positive concentrations.")
-    return bottom + (top - bottom) / (1.0 + (ec50 / concentration) ** hill_slope)
+def _four_pl(x, bottom, top, ec50, hill):
+    return bottom + (top - bottom) / (1.0 + (ec50 / x) ** hill)
 
 
-def _ci95(value: float, standard_error: float) -> tuple[float, float]:
-    delta = 1.96 * standard_error
-    return value - delta, value + delta
+def _ci95(value: float, se: float) -> tuple[float, float]:
+    half_width = 1.96 * se
+    return float(value - half_width), float(value + half_width)
 
 
-def _positive_parameter_ci95(value: float, standard_error: float) -> tuple[float, float]:
-    """Approximate a 95% CI on a positive parameter using log-scale delta method."""
-    if value <= 0 or not np.isfinite(value) or not np.isfinite(standard_error):
-        return float("nan"), float("nan")
-    log_se = standard_error / value
-    half_width = 1.96 * log_se
-    return float(value * np.exp(-half_width)), float(value * np.exp(half_width))
+def _positive_parameter_ci95(value: float, se: float) -> tuple[float, float]:
+    if not np.isfinite(value) or not np.isfinite(se) or value <= 0:
+        return np.nan, np.nan
+    half_width = 1.96 * se
+    lower_log = np.log(value) - half_width / value
+    upper_log = np.log(value) + half_width / value
+    return float(np.exp(np.clip(lower_log, -745.0, 709.0))), float(np.exp(np.clip(upper_log, -745.0, 709.0)))
 
 
 def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
-    if len(x) < 2:
+    order = np.argsort(x)
+    diffs = np.diff(y[order])
+    if len(diffs) == 0:
         return 1.0, "flat"
-    deltas = np.diff(y)
-    overall = float(y[-1] - y[0])
-    if np.isclose(overall, 0.0):
-        return 0.0, "flat"
-    direction = 1.0 if overall > 0 else -1.0
-    matches = np.sum((deltas * direction) >= 0.0)
-    return float(matches / len(deltas)), "increasing" if direction > 0 else "decreasing"
+    increasing = float(np.mean(diffs >= 0))
+    decreasing = float(np.mean(diffs <= 0))
+    if increasing >= decreasing:
+        return increasing, "increase"
+    return decreasing, "decrease"
 
 
-def _fitted_monotonic_direction(bottom: float, top: float, hill_slope: float) -> str:
-    """Return the concentration direction implied by the fitted 4PL parameters."""
-    signed_change = (top - bottom) * hill_slope
-    if np.isclose(signed_change, 0.0):
+def _fitted_monotonic_direction(bottom: float, top: float, hill: float) -> str:
+    if np.isclose(top, bottom):
         return "flat"
-    return "increasing" if signed_change > 0 else "decreasing"
+    return "increase" if (top - bottom) * hill > 0 else "decrease"
 
 
-def _harm_direction_compatible(
-    endpoint: str,
-    monotonic_direction: str | None,
-    endpoint_directions: dict[str, str] | None = None,
-) -> bool | None:
-    expected = (endpoint_directions or {}).get(endpoint)
-    if expected is None or monotonic_direction in {None, "flat"}:
-        return None if expected is None else False
-    if expected == "absolute":
+def _harm_direction_compatible(endpoint: str, fitted_direction: str, endpoint_directions: Optional[dict[str, str]]) -> bool | None:
+    if not endpoint_directions or endpoint not in endpoint_directions or fitted_direction == "flat":
+        return None
+    configured = endpoint_directions[endpoint]
+    if configured in {"absolute", "abs"}:
         return True
-    expected_monotonic = {"increase": "increasing", "decrease": "decreasing"}.get(expected)
-    if expected_monotonic is None:
-        raise ValueError(f"Unsupported endpoint direction: {expected!r}.")
-    return monotonic_direction == expected_monotonic
+    if configured in {"increase", "inc"}:
+        return fitted_direction == "increase"
+    if configured in {"decrease", "dec"}:
+        return fitted_direction == "decrease"
+    raise ValueError(f"Unsupported endpoint direction: {configured!r} for {endpoint!r}.")
 
 
-def _harmful_effect_magnitude(
-    y: np.ndarray,
-    endpoint: str,
-    endpoint_directions: dict[str, str] | None = None,
-) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint)
-    if direction is None:
-        return None
-    if direction == "absolute":
-        return float(np.max(np.abs(y)))
-    if direction == "increase":
-        return float(max(0.0, np.max(y)))
-    if direction == "decrease":
-        return float(max(0.0, -np.min(y)))
-    raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
-
-
-def _fitted_harmful_effect_magnitude(
-    bottom: float,
-    top: float,
-    endpoint: str,
-    endpoint_directions: dict[str, str] | None = None,
-) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint)
-    if direction is None:
-        return None
-    if direction == "absolute":
-        return float(abs(top - bottom))
-    if direction == "increase":
-        return float(max(0.0, top - bottom))
-    if direction == "decrease":
-        return float(max(0.0, bottom - top))
-    raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
+def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, endpoint_directions: Optional[dict[str, str]]) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint, "absolute")
+    delta = top - bottom
+    if direction in {"absolute", "abs"}:
+        return abs(delta)
+    if direction in {"increase", "inc"}:
+        return max(delta, 0.0)
+    if direction in {"decrease", "dec"}:
+        return max(-delta, 0.0)
+    raise ValueError(f"Unsupported endpoint direction: {direction!r} for {endpoint!r}.")
 
 
 def fit_4pl(
-    concentrations: np.ndarray,
-    responses: np.ndarray,
+    concentrations,
+    responses,
     *,
-    response_sem: Optional[np.ndarray] = None,
+    response_sem=None,
     endpoint: str = "endpoint",
-    endpoint_directions: dict[str, str] | None = None,
+    endpoint_directions: Optional[dict[str, str]] = None,
+    effect_threshold: float | None = None,
     min_points: int = 4,
     min_r_squared: float = 0.0,
     min_monotonicity: float = 0.0,
     ec50_boundary_factor: float = 2.0,
     max_ec50_uncertainty_fold: float = 100.0,
-    effect_threshold: float | None = None,
     min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> DoseResponseFit:
-    if effect_threshold is not None and effect_threshold < 0:
-        raise ValueError("effect_threshold must be non-negative.")
-    if not 0.0 <= min_ec50_coverage <= 1.0:
-        raise ValueError("min_ec50_coverage must be between 0 and 1.")
-
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
     sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
-
     if x.ndim != 1 or y.ndim != 1:
-        raise ValueError("concentrations and responses must be one-dimensional arrays.")
+        raise ValueError("4PL fitting requires one-dimensional concentration and response arrays.")
     if x.shape != y.shape:
-        raise ValueError("concentrations and responses must have the same shape.")
-    if sigma is not None:
-        if sigma.shape != x.shape:
-            raise ValueError("response_sem must have the same shape as concentrations and responses.")
-        if not np.isfinite(sigma).all() or (sigma <= 0).any():
-            raise ValueError("response_sem must contain finite, strictly positive values.")
+        raise ValueError("4PL fitting requires concentrations and responses with identical lengths.")
+    if sigma is not None and (sigma.ndim != 1 or sigma.shape != x.shape):
+        raise ValueError("4PL response_sem must be one-dimensional and match the response length.")
+    if sigma is not None and (not np.isfinite(sigma).all() or np.any(sigma <= 0)):
+        raise ValueError("4PL response_sem must contain only finite positive values.")
     if not np.isfinite(x).all() or not np.isfinite(y).all():
-        raise ValueError("concentrations and responses must contain only finite values.")
-    if (x <= 0).any():
-        raise ValueError("4PL fitting requires strictly positive concentrations; invalid concentrations were supplied.")
-
+        raise ValueError("4PL concentrations and responses must contain only finite values.")
+    if np.any(x <= 0):
+        raise ValueError("4PL concentrations must be strictly positive for log-scale fitting.")
+    if np.unique(x).size != len(x):
+        raise ValueError("4PL fitting requires one response per concentration; duplicate concentrations were supplied.")
     if len(x) < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} positive concentrations; got {len(x)}.")
-
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), message=f"At least {min_points} concentrations are required for 4PL fitting.")
     order = np.argsort(x)
     x = x[order]
     y = y[order]
     if sigma is not None:
         sigma = sigma[order]
-
-    n_unique = int(np.unique(x).size)
-    if n_unique != len(x):
-        raise ValueError("4PL fitting requires one response per concentration; duplicate concentrations were supplied.")
-    if n_unique < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=n_unique, effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
-
-    span = float(np.max(y) - np.min(y))
-    observed_harmful_effect = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
-
-    if span <= 1e-12:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, harmful_effect_magnitude=observed_harmful_effect, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, coverage_pass=False, message="Response has negligible dynamic range; 4PL fit is not identifiable.")
-
-    p0 = [float(np.min(y)), float(np.max(y)), float(np.median(x)), 1.0]
-    y_min, y_max = float(np.min(y)), float(np.max(y))
-    margin = max(1.0, span * 2.0)
-    lower = [y_min - margin, y_min - margin, float(np.min(x)) * 1e-6, -10.0]
-    upper = [y_max + margin, y_max + margin, float(np.max(x)) * 1e6, 10.0]
-
     try:
-        params, covariance = curve_fit(four_parameter_logistic, x, y, p0=p0, bounds=(lower, upper), sigma=sigma, absolute_sigma=sigma is not None, maxfev=20000)
-    except (RuntimeError, ValueError) as exc:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), weighted=sigma is not None, harmful_effect_magnitude=observed_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=False if effect_threshold is not None else None, min_ec50_coverage=min_ec50_coverage, message=f"4PL optimization failed: {exc}")
-
-    fitted = four_parameter_logistic(x, *params)
+        p0 = [float(np.min(y)), float(np.max(y)), float(np.median(x)), 1.0]
+        bounds = ([-np.inf, -np.inf, float(np.min(x)) / 100.0, -20.0], [np.inf, np.inf, float(np.max(x)) * 100.0, 20.0])
+        params, covariance = curve_fit(_four_pl, x, y, p0=p0, sigma=sigma, absolute_sigma=sigma is not None, bounds=bounds, maxfev=50000)
+    except Exception as exc:  # pragma: no cover
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), message=f"4PL fitting failed: {exc}")
+    if covariance is None or not np.isfinite(covariance).all():
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), message="4PL covariance is unavailable or non-finite.")
+    fitted = _four_pl(x, *params)
     residuals = y - fitted
     ss_res = float(np.sum(residuals**2))
-    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    ss_tot = float(np.sum((y - np.mean(y))**2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
     rmse = float(np.sqrt(np.mean(residuals**2)))
     standard_errors = np.sqrt(np.clip(np.diag(covariance), 0.0, np.inf))
@@ -308,11 +218,14 @@ def fit_concentration_series(
     min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> list[DoseResponseFit]:
     """Fit all requested endpoint mean columns in a concentration summary."""
+    explicit_endpoint_columns = endpoint_columns is not None
     if endpoint_columns is None:
         endpoint_columns = ["fpd_change_pct_mean", "beat_rate_change_pct_mean", "amplitude_change_pct_mean", "stv_increase_mean", "triangulation_proxy_change_mean"]
     results: list[DoseResponseFit] = []
     for endpoint_column in endpoint_columns:
         if endpoint_column not in concentration_summary.columns:
+            if explicit_endpoint_columns:
+                raise ValueError(f"Requested concentration-response endpoint column {endpoint_column!r} is absent from the concentration summary.")
             continue
         endpoint = endpoint_column.removesuffix("_mean")
         sem_column = endpoint_column.removesuffix("_mean") + "_sem"
