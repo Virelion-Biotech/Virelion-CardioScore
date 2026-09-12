@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install patch dependencies
+        run: python -m pip install --disable-pip-version-check ruff
       - name: Integrate PipelineResult provenance
         shell: bash
         run: |
@@ -22,10 +24,6 @@ jobs:
           path = Path("virelion_cardioscore/analysis/pipeline.py")
           text = path.read_text(encoding="utf-8")
 
-          text = text.replace(
-              "from virelion_cardioscore.reporting.provenance import build_provenance\n",
-              "",
-          )
           if "from virelion_cardioscore.reporting.provenance import build_provenance" not in text:
               anchor = "from virelion_cardioscore.validation.config import validate_pipeline_config\n"
               if anchor not in text:
