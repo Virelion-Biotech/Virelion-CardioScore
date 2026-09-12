@@ -27,7 +27,8 @@ def hash_dataframe(frame: pd.DataFrame) -> str:
 
 def hash_config(config: Mapping[str, Any]) -> str:
     """Return a deterministic SHA-256 fingerprint for the effective config."""
-    payload = yaml.safe_dump(dict(config), sort_keys=True, default_flow_style=False)
+    public_config = {str(key): value for key, value in config.items() if not str(key).startswith("_")}
+    payload = yaml.safe_dump(public_config, sort_keys=True, default_flow_style=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
