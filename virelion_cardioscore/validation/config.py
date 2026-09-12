@@ -24,13 +24,34 @@ def _require_number(value, name: str, *, minimum: float | None = None, maximum: 
     return result
 
 
+def _require_integer(value, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ConfigValidationError(f"{name} must be an integer; got {value!r}.")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        result = int(value)
+    elif isinstance(value, str):
+        try:
+            result = int(value.strip())
+        except (TypeError, ValueError) as exc:
+            raise ConfigValidationError(f"{name} must be an integer; got {value!r}.") from exc
+        if str(result) != value.strip():
+            raise ConfigValidationError(f"{name} must be an integer; got {value!r}.")
+    else:
+        raise ConfigValidationError(f"{name} must be an integer; got {value!r}.")
+    if minimum is not None and result < minimum:
+        raise ConfigValidationError(f"{name} must be >= {minimum}; got {result}.")
+    return result
+
+
 def validate_pipeline_config(config: Mapping) -> None:
     """Validate settings used by preprocessing, scoring, and inference."""
     if not isinstance(config, Mapping):
         raise ConfigValidationError("Pipeline configuration must be a mapping.")
 
     qc = config.get("quality_control", {})
-    _require_number(qc.get("min_electrodes_per_well", 4), "quality_control.min_electrodes_per_well", minimum=1)
+    _require_integer(qc.get("min_electrodes_per_well", 4), "quality_control.min_electrodes_per_well", minimum=1)
     _require_number(qc.get("max_noise_sd_uv", 25.0), "quality_control.max_noise_sd_uv", minimum=0)
     _require_number(qc.get("min_beat_detection_rate", 0.7), "quality_control.min_beat_detection_rate", minimum=0, maximum=1)
     stv_limit = qc.get("arrhythmia_proxy_max_stv")
@@ -72,10 +93,10 @@ def validate_pipeline_config(config: Mapping) -> None:
     if str(concentration.get("concentration_aggregation", "mean_harmful_effect")) not in {"mean_harmful_effect", "max_absolute_effect"}:
         raise ConfigValidationError("concentration_response.concentration_aggregation has an unsupported value.")
     _require_number(concentration.get("effect_threshold_pct", 10.0), "concentration_response.effect_threshold_pct", minimum=0)
-    _require_number(concentration.get("min_concentrations", 3), "concentration_response.min_concentrations", minimum=1)
+    _require_integer(concentration.get("min_concentrations", 3), "concentration_response.min_concentrations", minimum=1)
     if not isinstance(concentration.get("require_min_concentrations_for_scoring", False), bool):
         raise ConfigValidationError("concentration_response.require_min_concentrations_for_scoring must be boolean.")
-    _require_number(concentration.get("fit_min_concentrations", 4), "concentration_response.fit_min_concentrations", minimum=2)
+    _require_integer(concentration.get("fit_min_concentrations", 4), "concentration_response.fit_min_concentrations", minimum=2)
     _require_number(concentration.get("fit_min_r_squared", 0.8), "concentration_response.fit_min_r_squared", minimum=-math.inf, maximum=1)
     _require_number(concentration.get("fit_min_monotonicity", 0.8), "concentration_response.fit_min_monotonicity", minimum=0, maximum=1)
     _require_number(concentration.get("fit_ec50_boundary_factor", 2.0), "concentration_response.fit_ec50_boundary_factor", minimum=1)
@@ -83,7 +104,7 @@ def validate_pipeline_config(config: Mapping) -> None:
     _require_number(concentration.get("min_ec50_coverage", 0.10), "concentration_response.min_ec50_coverage", minimum=0, maximum=1)
 
     inference = config.get("inference", {})
-    _require_number(inference.get("n_bootstrap", 2000), "inference.n_bootstrap", minimum=1)
+    _require_integer(inference.get("n_bootstrap", 2000), "inference.n_bootstrap", minimum=1)
     _require_number(inference.get("confidence", 0.95), "inference.confidence", minimum=0.5, maximum=0.999999)
     cluster_column = inference.get("cluster_column")
     if cluster_column is not None and (not isinstance(cluster_column, str) or not cluster_column.strip()):
