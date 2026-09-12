@@ -123,6 +123,7 @@ def test_runtime_schema_allows_missing_endpoint_for_qc_rejection():
 
 def test_pipeline_run_rejects_non_numeric_feature_values():
     frame = _runtime_frame()
+    frame["amplitude_uv"] = frame["amplitude_uv"].astype(object)
     frame.loc[0, "amplitude_uv"] = "bad"
     pipeline = CardioScorePipeline.from_defaults()
 
