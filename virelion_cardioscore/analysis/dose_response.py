@@ -196,15 +196,20 @@ def fit_4pl(
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
     sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
-    finite = np.isfinite(x) & np.isfinite(y) & (x > 0)
+
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError("concentrations and responses must be one-dimensional arrays.")
+    if x.shape != y.shape:
+        raise ValueError("concentrations and responses must have the same shape.")
     if sigma is not None:
         if sigma.shape != x.shape:
             raise ValueError("response_sem must have the same shape as concentrations and responses.")
-        finite &= np.isfinite(sigma) & (sigma > 0)
-    x = x[finite]
-    y = y[finite]
-    if sigma is not None:
-        sigma = sigma[finite]
+        if not np.isfinite(sigma).all() or (sigma <= 0).any():
+            raise ValueError("response_sem must contain finite, strictly positive values.")
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
+        raise ValueError("concentrations and responses must contain only finite values.")
+    if (x <= 0).any():
+        raise ValueError("4PL fitting requires strictly positive concentrations; invalid concentrations were supplied.")
 
     if len(x) < min_points:
         return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} positive concentrations; got {len(x)}.")
@@ -215,8 +220,11 @@ def fit_4pl(
     if sigma is not None:
         sigma = sigma[order]
 
-    if np.unique(x).size < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=int(np.unique(x).size), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
+    n_unique = int(np.unique(x).size)
+    if n_unique != len(x):
+        raise ValueError("4PL fitting requires one response per concentration; duplicate concentrations were supplied.")
+    if n_unique < min_points:
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=n_unique, effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
 
     span = float(np.max(y) - np.min(y))
     observed_harmful_effect = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
