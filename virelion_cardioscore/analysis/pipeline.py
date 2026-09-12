@@ -190,7 +190,8 @@ class CardioScorePipeline:
         irregularity_threshold = qc.get("arrhythmia_proxy_max_stv")
         before = len(df)
         endpoint_complete = np.ones(len(df), dtype=bool)
-        for endpoint in RUNTIME_ENDPOINT_COLUMNS:
+        available_endpoints = [endpoint for endpoint in RUNTIME_ENDPOINT_COLUMNS if endpoint in df.columns]
+        for endpoint in available_endpoints:
             numeric = pd.to_numeric(df[endpoint], errors="coerce")
             endpoint_complete &= np.isfinite(numeric.to_numpy(dtype=float))
         mask = (
@@ -215,7 +216,7 @@ class CardioScorePipeline:
                 )
                 missing_endpoints = [
                     endpoint
-                    for endpoint in RUNTIME_ENDPOINT_COLUMNS
+                    for endpoint in available_endpoints
                     if not np.isfinite(pd.to_numeric(pd.Series([row[endpoint]]), errors="coerce").iloc[0])
                 ]
                 if missing_endpoints:
