@@ -286,7 +286,7 @@ def test_concentration_coverage_can_be_explicitly_allowed():
 
     assert len(result.scores) == 1
     assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
-    assert any("scoring is allowed" in msg for msg in result.qc_log)
+    assert any("scoring is allowed" in msg.lower() for msg in result.qc_log)
 
 
 def test_replicates_are_aggregated_within_concentration():
