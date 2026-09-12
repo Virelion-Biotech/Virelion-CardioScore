@@ -18,6 +18,7 @@ from virelion_cardioscore.analysis.variability import control_variability, stand
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 from virelion_cardioscore.utils.coercion import coerce_bool_series
 from virelion_cardioscore.validation.config import validate_pipeline_config
+from virelion_cardioscore.reporting.provenance import build_provenance
 
 
 RUNTIME_REQUIRED_COLUMNS = {
@@ -65,6 +66,7 @@ class PipelineResult:
     dose_response_fits: dict[str, list[DoseResponseFit]] = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
     def to_html(self, path: str | Path) -> None:
         from virelion_cardioscore.reporting.report_generator import write_html_report
@@ -88,6 +90,7 @@ class PipelineResult:
                 compound: [fit.to_dict() for fit in fits]
                 for compound, fits in self.dose_response_fits.items()
             },
+            "provenance": self.provenance,
         }
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
@@ -714,6 +717,18 @@ class CardioScorePipeline:
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
             summary = summary.sort_values("cardioscore", ascending=False)
+        excluded_compounds = sorted(
+            set(map(str, concentration_summary["compound"].unique())) - scorable_compounds
+        ) if not concentration_summary.empty else []
+        provenance = build_provenance(
+            input_frame=(dataset.features if isinstance(dataset, SyntheticMEADataset) else dataset),
+            config=self.config,
+            input_rows_after_qc=len(df),
+            effect_rows=len(effects),
+            scoring_unit_rows=len(scoring_effects),
+            excluded_compounds=excluded_compounds,
+            qc_log=self.qc_log,
+        )
         return PipelineResult(
             scores=scores,
             feature_table=effects,
@@ -727,4 +742,5 @@ class CardioScorePipeline:
             dose_response_fits=dose_response_fits,
             config=self.config,
             qc_log=self.qc_log,
+            provenance=provenance,
         )
