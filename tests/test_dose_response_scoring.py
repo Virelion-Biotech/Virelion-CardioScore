@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from virelion_cardioscore.analysis.dose_response import (
     fit_4pl,
     four_parameter_logistic,
 )
-from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
 
 AMPLITUDE_METADATA = {"amplitude_change_pct": "decrease"}
