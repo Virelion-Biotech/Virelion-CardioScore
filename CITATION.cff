@@ -2,9 +2,9 @@ cff-version: 1.2.0
 message: "If you use Virelion CardioScore, please cite it as below."
 type: software
 title: "Virelion CardioScore: CiPA-aligned cardiotoxicity scoring for iPSC-CM MEA data"
-version: 0.1.0
-date-released: "2026-08-16"
-license: GPL-3.0-or-later
+version: 0.1.1
+date-released: "2026-09-12"
+license: AGPL-3.0-or-later
 repository-code: "https://github.com/Virelion-Biotech/Virelion-CardioScore"
 authors:
   - name: "Virelion Biotech"
