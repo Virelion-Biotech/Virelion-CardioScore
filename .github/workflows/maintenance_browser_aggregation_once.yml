@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, '[browser-aggregation-maintenance]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,13 +16,15 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("web/app.js")
           text = path.read_text(encoding="utf-8")
-
-          fn_pattern = re.compile(r"  function normalizeValue\(val,dir,th\)\{.*?\n  \}\n", re.DOTALL)
-          new_fn = """  function normalizeDirection(direction){
+          if "function aggregateEndpoint(values,direction,aggregation)" in text:
+              print("Browser aggregation patch already present; no change needed.")
+          else:
+              start = text.index("  function normalizeValue")
+              end = text.index("  function scoreRows", start)
+              new_fn = """  function normalizeDirection(direction){
     return direction==='absolute'?'abs':direction==='increase'?'inc':direction==='decrease'?'dec':direction;
   }
   function aggregateEndpoint(values,direction,aggregation){
@@ -45,13 +46,14 @@ jobs:
     var excess=direction==='abs'?Math.max(0,Math.abs(val)-th):direction==='inc'?Math.max(0,val-th):(direction==='dec'?Math.max(0,-val-th):0);
     return Math.min(1,excess/(3*(th>0?th:1)));
   }
-"""
-          text, count = fn_pattern.subn(new_fn, text, count=1)
-          if count != 1:
-              raise SystemExit("normalizeValue block not found")
 
-          endpoint_pattern = re.compile(r"      var endpoints=\{.*?\};\n      var defs=\[.*?\];\n", re.DOTALL)
-          new_endpoints = """      var aggregation=scoringContract.concentration_aggregation;
+"""
+              text = text[:start] + new_fn + text[end:]
+
+              score_start = text.index("  function scoreRows")
+              start = text.index("      var endpoints=", score_start)
+              end = text.index("      var sum=0,tw=0,contribs=[];", start)
+              new_endpoints = """      var aggregation=scoringContract.concentration_aggregation;
       if(aggregation!=='mean_harmful_effect' && aggregation!=='max_absolute_effect') throw new Error('Unsupported concentration aggregation in scoring contract.');
       var endpoints={
         fpd_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation),
@@ -68,16 +70,13 @@ jobs:
         ['triangulation_proxy',scoringContract.endpoints.triangulation_proxy.weight,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]
       ];
 """
-          text, count = endpoint_pattern.subn(new_endpoints, text, count=1)
-          if count != 1:
-              raise SystemExit("browser endpoint aggregation block not found")
-
-          text = text.replace(
-              "Browser mode mirrors Python well-level concentration aggregation; biological-unit inference and 4PL evidence remain Python-only.",
-              "Browser mode uses the shared endpoint contract and concentration aggregation; plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only.",
-              1,
-          )
-          path.write_text(text, encoding="utf-8")
+              text = text[:start] + new_endpoints + text[end:]
+              text = text.replace(
+                  "Browser mode mirrors Python well-level concentration aggregation; biological-unit inference and 4PL evidence remain Python-only.",
+                  "Browser mode uses the shared endpoint contract and concentration aggregation; plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only.",
+                  1,
+              )
+              path.write_text(text, encoding="utf-8")
           PY
           node --check web/app.js
           git diff --check
@@ -85,6 +84,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/app.js
-          git commit -m "Align browser concentration aggregation with scoring contract [browser-aggregation-maintenance]"
-          git push
+          if git diff --quiet -- web/app.js; then
+            echo "No browser patch changes remain."
+          else
+            git add web/app.js
+            git commit -m "Align browser concentration aggregation with scoring contract [browser-aggregation-maintenance]"
+            git push
+          fi
