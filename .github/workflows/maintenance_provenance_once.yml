@@ -1,0 +1,75 @@
+name: One-time provenance integration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[provenance-maintenance]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Integrate result provenance
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('virelion_cardioscore/analysis/pipeline.py')
+          text = path.read_text(encoding='utf-8')
+
+          import_old = 'from virelion_cardioscore.validation.config import validate_pipeline_config\n'
+          import_new = import_old + 'from virelion_cardioscore.reporting.provenance import build_provenance\n'
+          if import_old not in text:
+              raise SystemExit('Expected config validator import not found; refusing to patch.')
+          if 'from virelion_cardioscore.reporting.provenance import build_provenance' not in text:
+              text = text.replace(import_old, import_new, 1)
+
+          field_old = '    qc_log: list[str] = field(default_factory=list)\n\n    def to_html'
+          field_new = '    qc_log: list[str] = field(default_factory=list)\n    provenance: dict = field(default_factory=dict)\n\n    def to_html'
+          if field_old not in text:
+              raise SystemExit('Expected PipelineResult field block not found; refusing to patch.')
+          if '    provenance: dict = field(default_factory=dict)' not in text:
+              text = text.replace(field_old, field_new, 1)
+
+          json_old = '            "normalization": self.normalization_diagnostic,\n            "dose_response_fits": {'
+          json_new = '            "normalization": self.normalization_diagnostic,\n            "provenance": self.provenance,\n            "dose_response_fits": {'
+          if json_old not in text:
+              raise SystemExit('Expected JSON payload block not found; refusing to patch.')
+          if '"provenance": self.provenance' not in text:
+              text = text.replace(json_old, json_new, 1)
+
+          input_old = '        df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()\n        if "vehicle" not in df.columns:'
+          input_new = '        input_df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()\n        df = input_df.copy()\n        if "vehicle" not in df.columns:'
+          if input_old not in text:
+              raise SystemExit('Expected pipeline input block not found; refusing to patch.')
+          text = text.replace(input_old, input_new, 1)
+
+          return_old = '        if not summary.empty:\n            summary = summary.sort_values("cardioscore", ascending=False)\n        return PipelineResult(\n'
+          return_new = '''        if not summary.empty:\n            summary = summary.sort_values("cardioscore", ascending=False)\n        excluded_compounds = sorted(\n            set(concentration_summary["compound"].astype(str)) - scorable_compounds\n        ) if not concentration_summary.empty else []\n        provenance = build_provenance(\n            input_frame=input_df,\n            config=self.config,\n            input_rows_after_qc=len(df),\n            effect_rows=len(effects),\n            scoring_unit_rows=len(scoring_effects),\n            excluded_compounds=excluded_compounds,\n            qc_log=self.qc_log,\n        )\n        return PipelineResult(\n'''
+          if return_old not in text:
+              raise SystemExit('Expected pipeline return block not found; refusing to patch.')
+          text = text.replace(return_old, return_new, 1)
+
+          result_old = '            qc_log=self.qc_log,\n        )'
+          result_new = '            qc_log=self.qc_log,\n            provenance=provenance,\n        )'
+          if result_old not in text:
+              raise SystemExit('Expected PipelineResult constructor tail not found; refusing to patch.')
+          text = text.replace(result_old, result_new, 1)
+
+          path.write_text(text, encoding='utf-8')
+      - name: Verify syntax
+        run: python -m py_compile virelion_cardioscore/analysis/pipeline.py virelion_cardioscore/reporting/provenance.py
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add virelion_cardioscore/analysis/pipeline.py
+          git diff --cached --check
+          git commit -m "Record machine-readable pipeline provenance [provenance-maintenance]"
+          git push
