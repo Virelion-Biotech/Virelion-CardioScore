@@ -9,5 +9,6 @@
     "triangulation_proxy": {"direction": "increase", "weight": 0.15, "effect_threshold": 0.20}
   },
   "risk_thresholds": {"low": 0.30, "moderate": 0.60},
+  "concentration_aggregation": "mean_harmful_effect",
   "status": "non-authoritative-browser-contract"
 }
