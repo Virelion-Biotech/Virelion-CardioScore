@@ -1,14 +1,12 @@
-"""Tests for raw-trace ingestion and feature extraction."""
+"""Tests for virelion_cardioscore.io.raw_trace."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from virelion_cardioscore.io.raw_trace import (
-    RawTraceValidationError,
-    infer_sampling_rate,
+    RawTraceSchemaError,
     load_raw_traces_csv,
     load_raw_traces_to_feature_table,
     recordings_to_feature_table,
@@ -17,118 +15,134 @@ from virelion_cardioscore.io.raw_trace import (
 
 
 def test_validate_raw_trace_schema_missing_column():
-    frame = pd.DataFrame({"time_s": [0.0, 0.001], "voltage_uv": [1.0, 2.0]})
-    with pytest.raises(RawTraceValidationError, match="missing"):
-        validate_raw_trace_schema(frame)
+    df = pd.DataFrame({"compound": ["A"], "well": ["W01"]})
+    with pytest.raises(RawTraceSchemaError, match="missing required column"):
+        validate_raw_trace_schema(df)
 
 
 def test_validate_raw_trace_schema_empty_dataframe():
-    frame = pd.DataFrame(
+    df = pd.DataFrame(
         columns=["compound", "well", "concentration_uM", "vehicle", "electrode_id", "time_s", "voltage_uv"]
     )
-    with pytest.raises(RawTraceValidationError, match="empty"):
-        validate_raw_trace_schema(frame)
+    with pytest.raises(RawTraceSchemaError, match="no rows"):
+        validate_raw_trace_schema(df)
 
 
 def test_validate_raw_trace_schema_non_numeric_voltage():
-    frame = pd.DataFrame(
+    df = pd.DataFrame(
         {
-            "compound": ["A", "A"],
-            "well": ["W1", "W1"],
-            "concentration_uM": [0.0, 0.0],
-            "vehicle": [True, True],
-            "electrode_id": ["E1", "E1"],
-            "time_s": [0.0, 0.001],
-            "voltage_uv": ["bad", 2.0],
+            "compound": ["A"],
+            "well": ["W01"],
+            "concentration_uM": [1.0],
+            "vehicle": [True],
+            "electrode_id": ["E1"],
+            "time_s": [0.0],
+            "voltage_uv": ["not a number"],
         }
     )
-    with pytest.raises(RawTraceValidationError, match="numeric"):
-        validate_raw_trace_schema(frame)
+    with pytest.raises(RawTraceSchemaError, match="must be numeric"):
+        validate_raw_trace_schema(df)
 
 
 def test_validate_raw_trace_schema_nan_values():
-    frame = pd.DataFrame(
+    df = pd.DataFrame(
         {
-            "compound": ["A", "A"],
-            "well": ["W1", "W1"],
-            "concentration_uM": [0.0, 0.0],
-            "vehicle": [True, True],
-            "electrode_id": ["E1", "E1"],
-            "time_s": [0.0, 0.001],
-            "voltage_uv": [1.0, np.nan],
+            "compound": ["A"],
+            "well": ["W01"],
+            "concentration_uM": [1.0],
+            "vehicle": [True],
+            "electrode_id": ["E1"],
+            "time_s": [float("nan")],
+            "voltage_uv": [1.5],
         }
     )
-    with pytest.raises(RawTraceValidationError, match="finite"):
-        validate_raw_trace_schema(frame)
+    with pytest.raises(RawTraceSchemaError, match="finite values"):
+        validate_raw_trace_schema(df)
 
 
 def test_validate_raw_trace_schema_bad_vehicle_values():
-    frame = pd.DataFrame(
+    df = pd.DataFrame(
         {
-            "compound": ["A", "A"],
-            "well": ["W1", "W1"],
-            "concentration_uM": [0.0, 0.0],
-            "vehicle": ["maybe", "maybe"],
-            "electrode_id": ["E1", "E1"],
-            "time_s": [0.0, 0.001],
-            "voltage_uv": [1.0, 2.0],
+            "compound": ["A"],
+            "well": ["W01"],
+            "concentration_uM": [1.0],
+            "vehicle": ["maybe"],
+            "electrode_id": ["E1"],
+            "time_s": [0.0],
+            "voltage_uv": [1.5],
         }
     )
-    with pytest.raises(RawTraceValidationError, match="vehicle"):
-        validate_raw_trace_schema(frame)
+    with pytest.raises(RawTraceSchemaError, match="vehicle"):
+        validate_raw_trace_schema(df)
 
 
 def test_load_raw_traces_csv_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
-        load_raw_traces_csv(tmp_path / "missing.csv")
+        load_raw_traces_csv(tmp_path / "does_not_exist.csv")
 
 
 def test_load_raw_traces_csv_groups_by_well_and_electrode(two_compound_plate):
-    frame, recordings = load_raw_traces_csv(two_compound_plate, return_recordings=True)
-    assert len(frame) > 0
-    assert set(frame["compound"]) == {"Compound_Safe", "Compound_Toxic"}
-    assert len(recordings) == 24
+    recordings = load_raw_traces_csv(two_compound_plate)
+    assert len(recordings) == 12
+    for rec in recordings:
+        assert rec.fs_hz == pytest.approx(1000.0, rel=0.01)
+        assert len(rec.electrode_traces) == 4
 
 
 def test_load_raw_traces_csv_infers_sampling_rate(two_compound_plate):
-    frame, recordings = load_raw_traces_csv(two_compound_plate, return_recordings=True)
-    assert infer_sampling_rate(recordings[0].time_s) == pytest.approx(1000.0)
-    assert frame["time_s"].min() == pytest.approx(0.0)
+    recordings = load_raw_traces_csv(two_compound_plate)
+    for rec in recordings:
+        assert 900.0 < rec.fs_hz < 1100.0
 
 
 def test_load_raw_traces_csv_rejects_irregular_sampling(two_compound_plate, tmp_path):
+    """Raw traces with non-uniform timestamp gaps must fail closed."""
     frame = pd.read_csv(two_compound_plate)
-    mask = (frame["well"] == "W01") & (frame["electrode_id"] == "E1")
-    frame.loc[mask, "time_s"] = frame.loc[mask, "time_s"].to_numpy() + np.linspace(0, 0.05, mask.sum())
-    path = tmp_path / "irregular.csv"
-    frame.to_csv(path, index=False)
-    with pytest.raises(RawTraceValidationError, match="sampling"):
-        load_raw_traces_csv(path)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E1")
+    indices = frame.index[mask]
+    assert len(indices) > 5
+    frame.loc[indices[3], "time_s"] = float(
+        frame.loc[indices[2], "time_s"]
+        + 1.05 * (frame.loc[indices[2], "time_s"] - frame.loc[indices[1], "time_s"])
+    )
+    broken = tmp_path / "irregular.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Irregular sampling detected"):
+        load_raw_traces_csv(broken)
 
 
 def test_load_raw_traces_csv_rejects_cross_electrode_time_shift(two_compound_plate, tmp_path):
+    """Same sampling rate is insufficient when electrode time grids differ."""
     frame = pd.read_csv(two_compound_plate)
-    mask = (frame["well"] == "W01") & (frame["electrode_id"] == "E2")
-    frame.loc[mask, "time_s"] = frame.loc[mask, "time_s"] + 0.001
-    path = tmp_path / "shifted.csv"
-    frame.to_csv(path, index=False)
-    with pytest.raises(RawTraceValidationError, match="time axis"):
-        load_raw_traces_csv(path)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E2")
+    indices = frame.index[mask]
+    assert len(indices) > 5
+    frame.loc[indices, "time_s"] = frame.loc[indices, "time_s"] + 1e-5
+    broken = tmp_path / "misaligned.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
 
 
 def test_load_raw_traces_csv_rejects_cross_electrode_length_mismatch(two_compound_plate, tmp_path):
+    """Electrodes with different sample counts cannot be averaged implicitly."""
     frame = pd.read_csv(two_compound_plate)
-    mask = (frame["well"] == "W01") & (frame["electrode_id"] == "E2")
-    frame = frame.loc[~(mask & (frame["time_s"] > 7.9))].copy()
-    path = tmp_path / "short_electrode.csv"
-    frame.to_csv(path, index=False)
-    with pytest.raises(RawTraceValidationError, match="sample count"):
-        load_raw_traces_csv(path)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E3")
+    drop_index = frame.index[mask][0]
+    frame = frame.drop(index=drop_index)
+    broken = tmp_path / "length_mismatch.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
 
 
 def test_recordings_to_feature_table_schema(two_compound_plate):
-    _, recordings = load_raw_traces_csv(two_compound_plate, return_recordings=True)
+    recordings = load_raw_traces_csv(two_compound_plate)
     table = recordings_to_feature_table(recordings)
+
     expected_cols = {
         "compound", "concentration_uM", "well", "vehicle", "fpd_ms",
         "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy",
