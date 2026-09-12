@@ -107,8 +107,26 @@
   }
 
   function mean(values){return values.length?values.reduce(function(s,x){return s+x},0)/values.length:NaN}
+  function normalizeDirection(direction){
+    return direction==='absolute'?'abs':direction==='increase'?'inc':direction==='decrease'?'dec':direction;
+  }
+  function aggregateEndpoint(values,direction,aggregation){
+    if(!values.length) return NaN;
+    if(aggregation==='max_absolute_effect'){
+      if(direction==='decrease') return Math.min.apply(null,values);
+      if(direction==='increase') return Math.max.apply(null,values);
+      if(direction==='absolute') return Math.max.apply(null,values.map(function(v){return Math.abs(v)}));
+    }
+    if(aggregation==='mean_harmful_effect'){
+      if(direction==='decrease') return -mean(values.map(function(v){return Math.max(-v,0)}));
+      if(direction==='increase') return mean(values.map(function(v){return Math.max(v,0)}));
+      if(direction==='absolute') return mean(values.map(function(v){return Math.abs(v)}));
+    }
+    throw new Error('Unsupported concentration aggregation or endpoint direction.');
+  }
   function normalizeValue(val,dir,th){
-    var excess=dir==='abs'?Math.max(0,Math.abs(val)-th):dir==='inc'?Math.max(0,val-th):(dir==='dec'?Math.max(0,-val-th):0);
+    var direction=normalizeDirection(dir);
+    var excess=direction==='abs'?Math.max(0,Math.abs(val)-th):direction==='inc'?Math.max(0,val-th):(direction==='dec'?Math.max(0,-val-th):0);
     return Math.min(1,excess/(3*(th>0?th:1)));
   }
 
@@ -133,8 +151,22 @@
         concentrationEffects.push({concentration_uM:Number(key),fpd:mean(group.map(function(r){return 100*(r.fpd_ms-v.fpd)/v.fpd})),rate:mean(group.map(function(r){return 100*(r.beat_rate_bpm-v.rate)/v.rate})),amp:mean(group.map(function(r){return 100*(r.amplitude_uv-v.amp)/v.amp})),stv:mean(group.map(function(r){return (r.stv-v.stv)/Math.max(Math.abs(v.stv),1e-6)})),tri:mean(group.map(function(r){return (r.triangulation_proxy-v.tri)/Math.max(Math.abs(v.tri),1e-6)}))});
       });
       if(!concentrationEffects.length)return;
-      var endpoints={fpd_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)})),beat_rate_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)})),amplitude_change_pct:Math.min.apply(null,concentrationEffects.map(function(e){return e.amp})),stv_increase:Math.max.apply(null,concentrationEffects.map(function(e){return e.stv})),triangulation_proxy:Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))};
-      var defs=[['fpd_change_pct',weights.fpd,10,'abs'],['beat_rate_change_pct',weights.rate,15,'abs'],['amplitude_change_pct',weights.amp,20,'dec'],['stv_increase',weights.stv,0.15,'inc'],['triangulation_proxy',weights.tri,0.20,'inc']];
+      var aggregation=scoringContract.concentration_aggregation;
+      if(aggregation!=='mean_harmful_effect' && aggregation!=='max_absolute_effect') throw new Error('Unsupported concentration aggregation in scoring contract.');
+      var endpoints={
+        fpd_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation),
+        beat_rate_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.rate}),scoringContract.endpoints.beat_rate_change_pct.direction,aggregation),
+        amplitude_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.amp}),scoringContract.endpoints.amplitude_change_pct.direction,aggregation),
+        stv_increase:aggregateEndpoint(concentrationEffects.map(function(e){return e.stv}),scoringContract.endpoints.stv_increase.direction,aggregation),
+        triangulation_proxy:aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)
+      };
+      var defs=[
+        ['fpd_change_pct',scoringContract.endpoints.fpd_change_pct.weight,scoringContract.endpoints.fpd_change_pct.effect_threshold,scoringContract.endpoints.fpd_change_pct.direction],
+        ['beat_rate_change_pct',scoringContract.endpoints.beat_rate_change_pct.weight,scoringContract.endpoints.beat_rate_change_pct.effect_threshold,scoringContract.endpoints.beat_rate_change_pct.direction],
+        ['amplitude_change_pct',scoringContract.endpoints.amplitude_change_pct.weight,scoringContract.endpoints.amplitude_change_pct.effect_threshold,scoringContract.endpoints.amplitude_change_pct.direction],
+        ['stv_increase',scoringContract.endpoints.stv_increase.weight,scoringContract.endpoints.stv_increase.effect_threshold,scoringContract.endpoints.stv_increase.direction],
+        ['triangulation_proxy',scoringContract.endpoints.triangulation_proxy.weight,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]
+      ];
       var sum=0,tw=0,contribs=[];
       defs.forEach(function(d){var c=normalizeValue(endpoints[d[0]],d[3],d[2]);sum+=d[1]*c;tw+=d[1];contribs.push({name:d[0],raw:endpoints[d[0]],c:c,w:d[1]})});
       var score=Math.min(1,Math.max(0,tw?sum/tw:0));
