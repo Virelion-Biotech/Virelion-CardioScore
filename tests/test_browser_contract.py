@@ -15,18 +15,18 @@ def test_browser_scoring_uses_concentration_level_replicate_means():
     assert "tri:mean(group.map" in text
 
 
-def test_browser_scoring_uses_directional_compound_aggregation():
+def test_browser_scoring_uses_contract_driven_concentration_aggregation():
     text = APP.read_text(encoding="utf-8")
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)}))" in text
-    assert "Math.min.apply(null,concentrationEffects.map(function(e){return e.amp}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return e.stv}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))" in text
-
-
-def test_browser_does_not_claim_hierarchical_or_4pl_parity():
-    text = APP.read_text(encoding="utf-8")
-    assert "biological-unit inference and 4PL evidence remain Python-only" in text
+    contract = CONTRACT.read_text(encoding="utf-8")
+    assert "function aggregateEndpoint(values,direction,aggregation)" in text
+    assert "aggregation==='mean_harmful_effect'" in text
+    assert "scoringContract.concentration_aggregation" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.rate}),scoringContract.endpoints.beat_rate_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.amp}),scoringContract.endpoints.amplitude_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.stv}),scoringContract.endpoints.stv_increase.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)" in text
+    assert '"concentration_aggregation": "mean_harmful_effect"' in contract
 
 
 def test_browser_uses_shared_contract_for_weights_and_thresholds():
@@ -42,3 +42,8 @@ def test_browser_uses_shared_contract_for_weights_and_thresholds():
     assert "scoringContract.risk_thresholds.moderate" in text
     assert '"fpd_change_pct"' in contract
     assert '"risk_thresholds"' in contract
+
+
+def test_browser_does_not_claim_full_python_parity():
+    text = APP.read_text(encoding="utf-8")
+    assert "plate/batch normalization and biological-unit inference and 4PL evidence remain Python-only" in text
