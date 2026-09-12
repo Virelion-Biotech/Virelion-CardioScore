@@ -13,6 +13,15 @@
     return Number.isFinite(value)?value:fallback;
   }
 
+  var scoringContract=null;
+  fetch('scoring_contract.json')
+    .then(function(response){
+      if(!response.ok) throw new Error('Unable to load scoring contract.');
+      return response.json();
+    })
+    .then(function(contract){scoringContract=contract;})
+    .catch(function(){scoringContract=null;});
+
   var PRESETS={
     mcm_mix:[['vaccine',0.2],['antitoxin',0.25],['antiviral',0.35],['mcm',1.0]],
     vaccine:[['vaccine',0.15],['vaccine',0.25],['vaccine',0.4],['vaccine',0.9]],
@@ -149,10 +158,24 @@
     });
     document.getElementById('out').innerHTML=html;
   }
-  function weights(){return{fpd:numericOrDefault('w_fpd',0.3),rate:numericOrDefault('w_rate',0.15),amp:numericOrDefault('w_amp',0.15),stv:numericOrDefault('w_stv',0.25),tri:numericOrDefault('w_tri',0.15)}}
+  function weights(){
+    if(!scoringContract || !scoringContract.endpoints) throw new Error('Scoring contract is not loaded.');
+    return {
+      fpd:scoringContract.endpoints.fpd_change_pct.weight,
+      rate:scoringContract.endpoints.beat_rate_change_pct.weight,
+      amp:scoringContract.endpoints.amplitude_change_pct.weight,
+      stv:scoringContract.endpoints.stv_increase.weight,
+      tri:scoringContract.endpoints.triangulation_proxy.weight
+    };
+  }
 
   document.getElementById('csvFile').addEventListener('change',function(e){var f=e.target.files&&e.target.files[0];if(!f){uploaded=null;return}var reader=new FileReader();reader.onload=function(){try{uploaded=parseCsv(String(reader.result));alert('Loaded '+uploaded.length+' validated rows')}catch(err){uploaded=null;alert(err.message)}};reader.readAsText(f)});
-  document.getElementById('run').onclick=function(){var rows=uploaded&&uploaded.length?uploaded:generate(numericOrDefault('nComp',4),numericOrDefault('nConc',6),numericOrDefault('seed',42),document.getElementById('preset').value,document.getElementById('includeToxic').checked);var qc=applyQc(rows);render(scoreRows(qc.rows,weights(),numericOrDefault('th_low',0.3),numericOrDefault('th_mod',0.6)),qc.log)};
+  document.getElementById('run').onclick=function(){
+    if(!scoringContract){alert('Scoring contract is still loading; please run again.');return;}
+    var rows=uploaded&&uploaded.length?uploaded:generate(numericOrDefault('nComp',4),numericOrDefault('nConc',6),numericOrDefault('seed',42),document.getElementById('preset').value,document.getElementById('includeToxic').checked);
+    var qc=applyQc(rows);
+    render(scoreRows(qc.rows,weights(),scoringContract.risk_thresholds.low,scoringContract.risk_thresholds.moderate),qc.log)
+  };
   document.getElementById('clear').onclick=function(){document.getElementById('out').innerHTML='';document.getElementById('qc').style.display='none';lastResults=null};
   function download(name,text,type){var a=document.createElement('a');var url=URL.createObjectURL(new Blob([text],{type:type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
   document.getElementById('exportJson').onclick=function(){if(!lastResults){alert('Run scoring first');return}download('cardioscore_results.json',JSON.stringify({qc:lastQc,scores:lastResults},null,2),'application/json')};
