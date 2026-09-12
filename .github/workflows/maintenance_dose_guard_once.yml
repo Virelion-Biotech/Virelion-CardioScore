@@ -1,0 +1,52 @@
+name: maintenance-dose-guard-once
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply surgical explicit-endpoint guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("virelion_cardioscore/analysis/dose_response.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    """Fit all requested endpoint mean columns in a concentration summary."""
+    if endpoint_columns is None:
+        endpoint_columns = ["fpd_change_pct_mean", "beat_rate_change_pct_mean", "amplitude_change_pct_mean", "stv_increase_mean", "triangulation_proxy_change_mean"]
+    results: list[DoseResponseFit] = []
+    for endpoint_column in endpoint_columns:
+        if endpoint_column not in concentration_summary.columns:
+            continue
+'''
+          new = '''    """Fit all requested endpoint mean columns in a concentration summary."""
+    explicit_endpoint_columns = endpoint_columns is not None
+    if endpoint_columns is None:
+        endpoint_columns = ["fpd_change_pct_mean", "beat_rate_change_pct_mean", "amplitude_change_pct_mean", "stv_increase_mean", "triangulation_proxy_change_mean"]
+    results: list[DoseResponseFit] = []
+    for endpoint_column in endpoint_columns:
+        if endpoint_column not in concentration_summary.columns:
+            if explicit_endpoint_columns:
+                raise ValueError(f"Requested concentration-response endpoint column {endpoint_column!r} is absent from the concentration summary.")
+            continue
+'''
+          if old not in text:
+              raise SystemExit("dose-response endpoint loop anchor not found; refusing unsafe edit")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git diff --check
+          python -m compileall -q virelion_cardioscore/analysis/dose_response.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add virelion_cardioscore/analysis/dose_response.py
+          git commit -m "Fail closed on explicitly missing dose-response endpoints [dose-guard]"
+          git push
