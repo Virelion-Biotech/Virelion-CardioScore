@@ -44,6 +44,6 @@ def test_browser_uses_shared_contract_for_weights_and_thresholds():
     assert '"risk_thresholds"' in contract
 
 
-def test_browser_does_not_claim_full_python_parity():
+def test_browser_discloses_python_only_features():
     text = APP.read_text(encoding="utf-8")
-    assert "plate/batch normalization and biological-unit inference and 4PL evidence remain Python-only" in text
+    assert "plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only" in text
