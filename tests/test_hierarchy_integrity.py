@@ -36,6 +36,7 @@ def test_hierarchy_aggregation_fails_on_partial_endpoint_data():
 
 def test_hierarchy_aggregation_fails_on_non_numeric_endpoint_data():
     frame = _effects()
+    frame["fpd_change_pct"] = frame["fpd_change_pct"].astype(object)
     frame.loc[2, "fpd_change_pct"] = "bad"
 
     with pytest.raises(ValueError, match="partial endpoint data are not allowed"):
