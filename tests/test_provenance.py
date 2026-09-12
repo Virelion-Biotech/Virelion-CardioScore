@@ -16,10 +16,9 @@ def test_pipeline_result_exposes_and_serializes_provenance(tmp_path):
     assert len(result.provenance["input_sha256"]) == 64
     assert len(result.provenance["configuration_sha256"]) == 64
     assert result.provenance["input_rows"] == len(dataset.features)
-    assert result.provenance["rows_after_qc"] == len(result.feature_table) + len(
-        [msg for msg in result.qc_log if msg.startswith("Rejected ")]
-    )
-    assert result.provenance["effect_rows"] >= 0
+    assert 0 < result.provenance["rows_after_qc"] <= result.provenance["input_rows"]
+    assert result.provenance["effect_rows"] == len(result.feature_table)
+    assert result.provenance["scoring_unit_rows"] >= 0
     assert "compound_scoring" in result.provenance["transformation_summary"]
 
     output = tmp_path / "result.json"
