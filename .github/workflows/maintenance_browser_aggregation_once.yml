@@ -17,22 +17,66 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("web/app.js")
           text = path.read_text(encoding="utf-8")
 
-          old_fn = """  function normalizeValue(val,dir,th){\n    var excess=dir==='abs'?Math.max(0,Math.abs(val)-th):dir==='inc'?Math.max(0,val-th):(dir==='dec'?Math.max(0,-val-th):0);\n    return Math.min(1,excess/(3*(th>0?th:1)));\n  }\n"""
-          new_fn = """  function normalizeDirection(direction){\n    return direction==='absolute'?'abs':direction==='increase'?'inc':direction==='decrease'?'dec':direction;\n  }\n  function aggregateEndpoint(values,direction,aggregation){\n    if(!values.length) return NaN;\n    if(aggregation==='max_absolute_effect'){\n      if(direction==='decrease') return Math.min.apply(null,values);\n      if(direction==='increase') return Math.max.apply(null,values);\n      if(direction==='absolute') return Math.max.apply(null,values.map(function(v){return Math.abs(v)}));\n    }\n    if(aggregation==='mean_harmful_effect'){\n      if(direction==='decrease') return -mean(values.map(function(v){return Math.max(-v,0)}));\n      if(direction==='increase') return mean(values.map(function(v){return Math.max(v,0)}));\n      if(direction==='absolute') return mean(values.map(function(v){return Math.abs(v)}));\n    }\n    throw new Error('Unsupported concentration aggregation or endpoint direction.');\n  }\n  function normalizeValue(val,dir,th){\n    var direction=normalizeDirection(dir);\n    var excess=direction==='abs'?Math.max(0,Math.abs(val)-th):direction==='inc'?Math.max(0,val-th):(direction==='dec'?Math.max(0,-val-th):0);\n    return Math.min(1,excess/(3*(th>0?th:1)));\n  }\n"""
-          if old_fn not in text:
+          fn_pattern = re.compile(r"  function normalizeValue\(val,dir,th\)\{.*?\n  \}\n", re.DOTALL)
+          new_fn = """  function normalizeDirection(direction){
+    return direction==='absolute'?'abs':direction==='increase'?'inc':direction==='decrease'?'dec':direction;
+  }
+  function aggregateEndpoint(values,direction,aggregation){
+    if(!values.length) return NaN;
+    if(aggregation==='max_absolute_effect'){
+      if(direction==='decrease') return Math.min.apply(null,values);
+      if(direction==='increase') return Math.max.apply(null,values);
+      if(direction==='absolute') return Math.max.apply(null,values.map(function(v){return Math.abs(v)}));
+    }
+    if(aggregation==='mean_harmful_effect'){
+      if(direction==='decrease') return -mean(values.map(function(v){return Math.max(-v,0)}));
+      if(direction==='increase') return mean(values.map(function(v){return Math.max(v,0)}));
+      if(direction==='absolute') return mean(values.map(function(v){return Math.abs(v)}));
+    }
+    throw new Error('Unsupported concentration aggregation or endpoint direction.');
+  }
+  function normalizeValue(val,dir,th){
+    var direction=normalizeDirection(dir);
+    var excess=direction==='abs'?Math.max(0,Math.abs(val)-th):direction==='inc'?Math.max(0,val-th):(direction==='dec'?Math.max(0,-val-th):0);
+    return Math.min(1,excess/(3*(th>0?th:1)));
+  }
+"""
+          text, count = fn_pattern.subn(new_fn, text, count=1)
+          if count != 1:
               raise SystemExit("normalizeValue block not found")
-          text = text.replace(old_fn, new_fn, 1)
 
-          old_endpoints = """      var endpoints={fpd_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)})),beat_rate_change_pct:Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)})),amplitude_change_pct:Math.min.apply(null,concentrationEffects.map(function(e){return e.amp})),stv_increase:Math.max.apply(null,concentrationEffects.map(function(e){return e.stv})),triangulation_proxy:Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))};\n      var defs=[['fpd_change_pct',weights.fpd,10,'abs'],['beat_rate_change_pct',weights.rate,15,'abs'],['amplitude_change_pct',weights.amp,20,'dec'],['stv_increase',weights.stv,0.15,'inc'],['triangulation_proxy',weights.tri,0.20,'inc']];\n"""
-          new_endpoints = """      var aggregation=scoringContract.concentration_aggregation;\n      if(aggregation!=='mean_harmful_effect' && aggregation!=='max_absolute_effect') throw new Error('Unsupported concentration aggregation in scoring contract.');\n      var endpoints={\n        fpd_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation),\n        beat_rate_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.rate}),scoringContract.endpoints.beat_rate_change_pct.direction,aggregation),\n        amplitude_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.amp}),scoringContract.endpoints.amplitude_change_pct.direction,aggregation),\n        stv_increase:aggregateEndpoint(concentrationEffects.map(function(e){return e.stv}),scoringContract.endpoints.stv_increase.direction,aggregation),\n        triangulation_proxy:aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)\n      };\n      var defs=[\n        ['fpd_change_pct',scoringContract.endpoints.fpd_change_pct.weight,scoringContract.endpoints.fpd_change_pct.effect_threshold,scoringContract.endpoints.fpd_change_pct.direction],\n        ['beat_rate_change_pct',scoringContract.endpoints.beat_rate_change_pct.weight,scoringContract.endpoints.beat_rate_change_pct.effect_threshold,scoringContract.endpoints.beat_rate_change_pct.direction],\n        ['amplitude_change_pct',scoringContract.endpoints.amplitude_change_pct.weight,scoringContract.endpoints.amplitude_change_pct.effect_threshold,scoringContract.endpoints.amplitude_change_pct.direction],\n        ['stv_increase',scoringContract.endpoints.stv_increase.weight,scoringContract.endpoints.stv_increase.effect_threshold,scoringContract.endpoints.stv_increase.direction],\n        ['triangulation_proxy',scoringContract.endpoints.triangulation_proxy.weight,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]\n      ];\n"""
-          if old_endpoints not in text:
+          endpoint_pattern = re.compile(r"      var endpoints=\{.*?\};\n      var defs=\[.*?\];\n", re.DOTALL)
+          new_endpoints = """      var aggregation=scoringContract.concentration_aggregation;
+      if(aggregation!=='mean_harmful_effect' && aggregation!=='max_absolute_effect') throw new Error('Unsupported concentration aggregation in scoring contract.');
+      var endpoints={
+        fpd_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation),
+        beat_rate_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.rate}),scoringContract.endpoints.beat_rate_change_pct.direction,aggregation),
+        amplitude_change_pct:aggregateEndpoint(concentrationEffects.map(function(e){return e.amp}),scoringContract.endpoints.amplitude_change_pct.direction,aggregation),
+        stv_increase:aggregateEndpoint(concentrationEffects.map(function(e){return e.stv}),scoringContract.endpoints.stv_increase.direction,aggregation),
+        triangulation_proxy:aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)
+      };
+      var defs=[
+        ['fpd_change_pct',scoringContract.endpoints.fpd_change_pct.weight,scoringContract.endpoints.fpd_change_pct.effect_threshold,scoringContract.endpoints.fpd_change_pct.direction],
+        ['beat_rate_change_pct',scoringContract.endpoints.beat_rate_change_pct.weight,scoringContract.endpoints.beat_rate_change_pct.effect_threshold,scoringContract.endpoints.beat_rate_change_pct.direction],
+        ['amplitude_change_pct',scoringContract.endpoints.amplitude_change_pct.weight,scoringContract.endpoints.amplitude_change_pct.effect_threshold,scoringContract.endpoints.amplitude_change_pct.direction],
+        ['stv_increase',scoringContract.endpoints.stv_increase.weight,scoringContract.endpoints.stv_increase.effect_threshold,scoringContract.endpoints.stv_increase.direction],
+        ['triangulation_proxy',scoringContract.endpoints.triangulation_proxy.weight,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]
+      ];
+"""
+          text, count = endpoint_pattern.subn(new_endpoints, text, count=1)
+          if count != 1:
               raise SystemExit("browser endpoint aggregation block not found")
-          text = text.replace(old_endpoints, new_endpoints, 1)
 
+          text = text.replace(
+              "Browser mode mirrors Python well-level concentration aggregation; biological-unit inference and 4PL evidence remain Python-only.",
+              "Browser mode uses the shared endpoint contract and concentration aggregation; plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only.",
+              1,
+          )
           path.write_text(text, encoding="utf-8")
           PY
           node --check web/app.js
