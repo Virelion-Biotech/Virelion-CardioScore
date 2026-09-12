@@ -17,6 +17,7 @@ from virelion_cardioscore.analysis.statistics import bootstrap_cluster_ci
 from virelion_cardioscore.analysis.variability import control_variability, standardized_treatment_separation
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
 from virelion_cardioscore.utils.coercion import coerce_bool_series
+from virelion_cardioscore.validation.config import validate_pipeline_config
 
 
 RUNTIME_REQUIRED_COLUMNS = {
@@ -96,6 +97,7 @@ class CardioScorePipeline:
     """High-level orchestrator of the CardioScore workflow."""
 
     def __init__(self, config: dict):
+        validate_pipeline_config(config)
         self.config = config
         scoring_cfg = config.get("scoring", {})
         endpoint_config = scoring_cfg.get("endpoint_config", "cipa_endpoints.yaml")
