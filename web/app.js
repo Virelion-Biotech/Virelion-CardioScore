@@ -180,7 +180,7 @@
     lastResults=results;lastQc=qcLog||[];
     var qc=document.getElementById('qc'),ul=document.getElementById('qcList');
     if(lastQc.length){qc.style.display='block';ul.textContent='';lastQc.forEach(function(l){var li=document.createElement('li');li.textContent=l;ul.appendChild(li)})}else qc.style.display='none';
-    var html='<div class="card"><h3>Summary — MCM / biodefense prioritization</h3><p class="meta">Browser mode mirrors Python well-level concentration aggregation; biological-unit inference and 4PL evidence remain Python-only.</p><table><thead><tr><th>Candidate</th><th>CardioScore</th><th>Risk</th><th>Max uM</th><th>Concentrations</th><th>Technical wells</th></tr></thead><tbody>';
+    var html='<div class="card"><h3>Summary — MCM / biodefense prioritization</h3><p class="meta">Browser mode uses the shared endpoint contract and concentration aggregation; plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only.</p><table><thead><tr><th>Candidate</th><th>CardioScore</th><th>Risk</th><th>Max uM</th><th>Concentrations</th><th>Technical wells</th></tr></thead><tbody>';
     results.forEach(function(r){html+='<tr><td><strong>'+escapeHtml(r.compound)+'</strong></td><td>'+r.score.toFixed(3)+'</td><td><span class="badge badge-'+escapeHtml(r.cls)+'">'+escapeHtml(r.cls)+'</span></td><td>'+r.maxConc.toFixed(2)+'</td><td>'+r.nConcentrations+'</td><td>'+r.nWells+'</td></tr>'});
     html+='</tbody></table></div>';
     results.forEach(function(r){
