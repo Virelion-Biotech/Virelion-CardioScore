@@ -84,18 +84,37 @@ def test_pipeline_exposes_variability_diagnostics_without_scoring_change(tmp_pat
     frame["amplitude_uv"] = 100.0
     frame["stv"] = 0.1
     frame["triangulation_proxy"] = 0.1
-    # Provide three nonzero tested concentrations so the production
-    # concentration-coverage gate remains enabled in this integration test.
-    extra = frame.loc[frame["vehicle"]].copy()
-    extra["vehicle"] = False
-    extra["concentration_uM"] = 10.0
-    extra["fpd_ms"] = extra["fpd_ms"] + 40.0
-    extra["well"] = ["W8", "W9", "W10", "W11"]
     frame["concentration_uM"] = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
     frame["well"] = [f"W{i}" for i in range(len(frame))]
-    extra["concentration_uM"] = 10.0
-    # Keep one extra treated concentration per compound/plate.
-    frame = pd.concat([frame, extra[["compound", "vehicle", "plate_id", "fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy", "n_electrodes", "noise_sd_uv", "beat_detection_rate", "concentration_uM", "well"]]], ignore_index=True)
+
+    extra_10 = frame.loc[frame["vehicle"]].copy()
+    extra_10["vehicle"] = False
+    extra_10["concentration_uM"] = 10.0
+    extra_10["fpd_ms"] = extra_10["fpd_ms"] + 40.0
+    extra_10["well"] = ["W8", "W9", "W10", "W11"]
+
+    extra_30 = frame.loc[frame["vehicle"]].copy()
+    extra_30["vehicle"] = False
+    extra_30["concentration_uM"] = 30.0
+    extra_30["fpd_ms"] = extra_30["fpd_ms"] + 60.0
+    extra_30["well"] = ["W12", "W13", "W14", "W15"]
+
+    columns = [
+        "compound",
+        "vehicle",
+        "plate_id",
+        "fpd_ms",
+        "beat_rate_bpm",
+        "amplitude_uv",
+        "stv",
+        "triangulation_proxy",
+        "n_electrodes",
+        "noise_sd_uv",
+        "beat_detection_rate",
+        "concentration_uM",
+        "well",
+    ]
+    frame = pd.concat([frame, extra_10[columns], extra_30[columns]], ignore_index=True)
 
     pipeline = CardioScorePipeline.from_defaults()
     pipeline.config["variability"]["enabled"] = True
