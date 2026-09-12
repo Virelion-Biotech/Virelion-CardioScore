@@ -34,7 +34,7 @@ def test_mixed_effects_requires_three_independent_groups():
 
 
 def test_mixed_effects_requires_two_observations_per_group():
-    frame = _base_frame().iloc[[0, 1, 2, 3, 4, 5, 6, 8, 9]].copy()
+    frame = _base_frame().iloc[[0, 1, 2, 3, 4, 5, 8]].copy()
     with pytest.raises(ValueError, match="at least two observations in every independent group"):
         fit_random_intercept(frame, endpoint="fpd_ms")
 
