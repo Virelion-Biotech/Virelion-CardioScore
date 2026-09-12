@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   patch:
+    # One-shot maintenance workflow; deleted after the bot commit lands.
     if: ${{ !contains(github.event.head_commit.message, '[fixture-maintenance]') }}
     runs-on: ubuntu-latest
     steps:
