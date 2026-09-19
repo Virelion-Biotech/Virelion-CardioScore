@@ -1,24 +1,81 @@
-# CardioScore validation notebooks
+# CardioScore validation execution
 
-Pinned CardioScore revision: `869150cd5fb5ccf155fb066258404bd4df163ade`
+Pinned CardioScore revision used by the validation runner: `869150cd5fb5ccf155fb066258404bd4df163ade`
 
-Run in order:
+## Recommended mode: one Colab runtime
 
-1. `00_validation_intake_colab.ipynb` — immutable source receipt, SHA-256, archive inventory, and schema inspection.
-2. `01_blinova_cipa_summary_colab.ipynb` — official CiPA workbook semantic/component audit; Q is kept separate from A–D.
-3. `02_raw_mea_validation_colab.ipynb` — raw MEA CSV through the repository's real trace ingestion and feature extraction.
-4. `03_locked_external_validation_colab.ipynb` — headline external risk-class validation; it requires an explicitly verified source-to-feature rebuild.
-5. `04_robustness_and_report_colab.ipynb` — secondary endpoint/threshold sensitivity and QC/dropout reporting.
-6. `05_publish_validation_results_colab.ipynb` — safety-gated Colab → GitHub `main` publication of derived validation artifacts.
+Use `scripts/validation/run_colab_validation.py`. It replaces notebook-to-notebook handoff with a single stateful run:
+
+```text
+Colab cell
+  |
+  v
+GitHub runner
+  |
+  +--> intake / source hashes
+  +--> Blinova/CiPA component audit (when a matching workbook is uploaded)
+  +--> raw MEA -> feature extraction (when a supported raw CSV is uploaded)
+  +--> locked external validation (only when verified locked inputs exist)
+  +--> robustness + QC (only after a complete primary result)
+  +--> optional GitHub publication
+```
+
+Every stage uses the same runtime workspace:
+
+```text
+/content/cardioscore_validation/runs/<RUN_LABEL>/
+    input/
+    derived/
+    work/
+    results/
+```
+
+The runner writes its handoff artifacts directly into that workspace, so a later stage reads exactly what the earlier stage produced. No notebook variables or manual file copying are required.
+
+### Single Colab cell
+
+Paste this into a fresh Colab cell:
+
+```python
+import urllib.request
+
+RUNNER = "https://raw.githubusercontent.com/Virelion-Biotech/Virelion-CardioScore/main/scripts/validation/run_colab_validation.py"
+exec(compile(urllib.request.urlopen(RUNNER).read(), "run_colab_validation.py", "exec"))
+```
+
+The runner will prompt for a run label and then open one upload dialog. Upload all assets needed for that validation run together.
+
+Optional environment controls can be set before the fetch:
+
+```python
+import os
+os.environ["CARDIOSCORE_RUN_LABEL"] = "patel_2019_2026-09-19"
+os.environ["CARDIOSCORE_PUBLISH"] = "1"  # set to "0" to keep results only in Colab
+```
+
+### GitHub publication
+
+When publication is enabled, create a Colab Secret named `GITHUB_TOKEN`. The runner uses it only through Colab Secrets and never prints it.
+
+The publisher:
+- clones current `main`;
+- creates `validation_results/<RUN_LABEL>/`;
+- copies only an allowlisted set of derived JSON/CSV artifacts;
+- creates `PUBLISH_MANIFEST.json` containing artifact hashes;
+- refuses unexpected Git changes;
+- commits and pushes without force;
+- verifies the resulting `origin/main` commit SHA.
+
+Raw `.zip`, `.mat`, `.h5/.hdf5`, raw source datasets, and credentials are not published.
 
 ## GIGO gates
 
-The suite fails closed on missing schema, unexpected platform labels, unverified source-to-feature lineage, leakage-prone reference columns, missing reference compounds, and unsupported raw source formats. Technical wells are not treated as independent drugs. Missing endpoints are not fabricated.
+The runner fails closed on missing schema, unexpected CiPA platform/event labels, non-deterministic raw-to-feature rebuilds, reference/feature leakage, missing verification lineage, and unsupported raw formats.
 
-The released CiPA workbook is not used as a five-endpoint CardioScore gold standard. A complete external CardioScore claim requires a genuinely verified feature table containing all five endpoints, explicit vehicle controls, and a locked reference table.
+Technical wells are not treated as independent drugs. Missing endpoints are not fabricated. Q/quiescence is kept separate from A-D arrhythmia-like events.
 
-## Publishing results
+The released CiPA workbook is a component/semantic validation source, not a five-endpoint CardioScore gold standard. A headline external CardioScore result requires a verified source-to-feature rebuild, explicit vehicle structure, complete scoreable reference coverage, and a separate reference table.
 
-Notebook 05 requires a Colab Secret named `GITHUB_TOKEN`. It clones `main`, copies only an allowlisted set of derived JSON/CSV/Markdown artifacts into `validation_results/<run_label>/`, creates a hash manifest, checks that no other repository paths changed, commits, pushes to `main`, and verifies the remote commit SHA.
+## Legacy modular notebooks
 
-Never paste a token directly into notebook code. Never publish the raw external dataset.
+The numbered notebooks remain in the repository as inspectable modular examples. They are no longer required for routine execution; the single runner above is the preferred Colab workflow.
