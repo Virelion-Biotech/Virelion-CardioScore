@@ -295,8 +295,8 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
     raw_names = df["Drug_Name"].astype(str).str.strip()
     canonical_names = (
         raw_names.str.lower()
-        .str.replace(r"d[\\s,.-]*l[\\s,.-]*sotalol", "sotalol", regex=True)
-        .str.replace(r"dl[\\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"d[\s,.-]*l[\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"dl[\s,.-]*sotalol", "sotalol", regex=True)
     )
     raw_to_canonical = (
         pd.DataFrame({"raw": raw_names, "canonical": canonical_names})
@@ -324,8 +324,8 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
         .astype(str)
         .str.strip()
         .str.lower()
-        .str.replace(r"d[\\s,.-]*l[\\s,.-]*sotalol", "sotalol", regex=True)
-        .str.replace(r"dl[\\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"d[\s,.-]*l[\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"dl[\s,.-]*sotalol", "sotalol", regex=True)
     )
     frame["raw_Drug_Name"] = frame["Drug_Name"]
     frame["reference_risk"] = (
