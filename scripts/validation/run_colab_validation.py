@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "Virelion-Biotech/Virelion-CardioScore"
-RUNNER_REVISION = "4672d67c3cc833850759e576ca823e0263c064e1"
+RUNNER_REVISION = "main"
 PIN = "869150cd5fb5ccf155fb066258404bd4df163ade"
 BRANCH = "main"
 ROOT = Path("/content/cardioscore_validation")
@@ -315,8 +315,14 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
         raise ValueError(f"Expected 10 sites, found {df['site'].nunique()}.")
     if not pd.to_numeric(df["conc"], errors="coerce").notna().all():
         raise ValueError("Blinova conc contains non-numeric values.")
-    if not pd.to_numeric(df["ddFPDc"], errors="coerce").notna().all():
-        raise ValueError("Blinova ddFPDc contains non-numeric values.")
+    dd_numeric = pd.to_numeric(df["ddFPDc"], errors="coerce")
+    dd_malformed = df["ddFPDc"].notna() & dd_numeric.isna()
+    if dd_malformed.any():
+        examples = sorted({str(v) for v in df.loc[dd_malformed, "ddFPDc"].tolist()})[:10]
+        raise ValueError(
+            f"Blinova ddFPDc contains malformed non-numeric value(s): {examples}"
+        )
+    n_dd_missing = int(dd_numeric.isna().sum())
 
     risk_map = {"l": "low", "m": "intermediate", "h": "high"}
     frame = df.copy()
@@ -393,6 +399,8 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
         "n_sites": int(frame["site"].nunique()),
         "n_abcd_events": int(frame["is_abcd_arrhythmia"].sum()),
         "n_Q_events": int(frame["is_Q_quiescence"].sum()),
+        "n_ddFPDc_missing": n_dd_missing,
+        "ddFPDc_missing_fraction": float(n_dd_missing / len(frame)) if len(frame) else 0.0,
     }
 
 
