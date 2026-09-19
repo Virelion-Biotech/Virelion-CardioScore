@@ -447,7 +447,7 @@ def config_sha256() -> str:
     return sha256_file(cfg)
 
 
-def run_locked_external(assets: dict[str, Path], results_dir: Path) -> dict:
+def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: Path) -> dict:
     import pandas as pd
     import yaml
 
@@ -466,12 +466,29 @@ def run_locked_external(assets: dict[str, Path], results_dir: Path) -> dict:
     derivation = json.loads(assets["manifest"].read_text(encoding="utf-8"))
 
     assert receipt.get("sha256"), "Source receipt must contain sha256."
+    assert receipt.get("source_filename"), "Source receipt must name the exact source file."
+    source_path = input_dir / Path(str(receipt["source_filename"])).name
+    assert source_path.is_file(), f"Source file named by receipt is not uploaded: {source_path.name}"
+    assert sha256_file(source_path) == receipt["sha256"], "Uploaded source SHA-256 does not match source receipt."
+    assert receipt.get("source_url") not in {None, "", "REPLACE_ME", "user_uploaded_to_colab"}, (
+        "Locked validation requires an explicit authoritative source URL/identifier."
+    )
     assert derivation.get("verified_rebuild") is True, "verified_rebuild=true is required."
     assert derivation.get("source_sha256") == receipt["sha256"], "Source hash mismatch."
     assert derivation.get("canonical_features_sha256") == sha256_file(assets["features"])
     assert derivation.get("reference_sha256") == sha256_file(assets["reference"])
     assert derivation.get("config_sha256") == config_sha256(), (
         "Locked feature/reference files were not derived under the current pinned default config."
+    )
+    reference_provenance = derivation.get("reference_provenance")
+    assert isinstance(reference_provenance, dict), (
+        "Locked validation requires reference_provenance metadata in derivation_manifest.json."
+    )
+    assert reference_provenance.get("source_url"), (
+        "reference_provenance.source_url is required so the reference labels have documented provenance."
+    )
+    assert reference_provenance.get("source_id"), (
+        "reference_provenance.source_id is required so the reference labels have documented provenance."
     )
 
     validate_feature_schema(features)
