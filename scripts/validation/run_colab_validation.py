@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "Virelion-Biotech/Virelion-CardioScore"
+RUNNER_REVISION = "4672d67c3cc833850759e576ca823e0263c064e1"
 PIN = "869150cd5fb5ccf155fb066258404bd4df163ade"
 BRANCH = "main"
 ROOT = Path("/content/cardioscore_validation")
@@ -83,6 +84,7 @@ def file_inventory(path: Path) -> list[dict]:
 
 
 def install_pinned_package() -> str:
+    log(f"Runner revision {RUNNER_REVISION}")
     log(f"Installing CardioScore at pinned revision {PIN}")
     subprocess.run(
         [
@@ -293,11 +295,10 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
     # Canonicalize the known sotalol naming variants before counting compounds.
     # Preserve the raw Drug_Name column for provenance; never broadly fuzzy-match names.
     raw_names = df["Drug_Name"].astype(str).str.strip()
-    canonical_names = (
-        raw_names.str.lower()
-        .str.replace(r"d[\s,.-]*l[\s,.-]*sotalol", "sotalol", regex=True)
-        .str.replace(r"dl[\s,.-]*sotalol", "sotalol", regex=True)
-    )
+    canonical_names = raw_names.str.lower().replace({
+        "d,l sotalol": "sotalol",
+        "d,l,sotalol": "sotalol",
+    })
     raw_to_canonical = (
         pd.DataFrame({"raw": raw_names, "canonical": canonical_names})
         .drop_duplicates()
@@ -324,8 +325,10 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
         .astype(str)
         .str.strip()
         .str.lower()
-        .str.replace(r"d[\s,.-]*l[\s,.-]*sotalol", "sotalol", regex=True)
-        .str.replace(r"dl[\s,.-]*sotalol", "sotalol", regex=True)
+        .replace({
+            "d,l sotalol": "sotalol",
+            "d,l,sotalol": "sotalol",
+        })
     )
     frame["raw_Drug_Name"] = frame["Drug_Name"]
     frame["reference_risk"] = (
