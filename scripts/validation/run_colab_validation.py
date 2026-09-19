@@ -263,7 +263,10 @@ def make_source_receipt(source: Path, derived_dir: Path, source_id: str | None =
         "inventory": file_inventory(source),
         "acquired_at_utc": datetime.now(timezone.utc).isoformat(),
     }
-    path = derived_dir / "source_receipt.json"
+    receipt_dir = derived_dir / "source_receipts"
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in source.name)
+    path = receipt_dir / f"{safe_name}.json"
     write_json(path, receipt)
     return path
 
@@ -851,9 +854,13 @@ def main() -> None:
         source_candidates.append(classified["blinova"])
     if classified["raw_csv"] is not None:
         source_candidates.append(classified["raw_csv"])
+    receipt_paths = []
     for source in source_candidates:
         receipt = make_source_receipt(source, paths["derived"])
-        log(f"Source receipt: {receipt.name} for {source.name}")
+        receipt_paths.append(receipt)
+        log(f"Source receipt: {receipt}")
+    if len(receipt_paths) == 1:
+        shutil.copy2(receipt_paths[0], paths["derived"] / "source_receipt.json")
 
     # Stage 01: Blinova/CiPA semantic/component validation.
     if classified["blinova"] is not None:
