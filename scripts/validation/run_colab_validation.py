@@ -289,10 +289,29 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
     missing = sorted(required - set(df.columns))
     if missing:
         raise ValueError(f"Blinova source is missing required columns: {missing}")
-    if df["Drug_Name"].nunique() != 28:
-        raise ValueError(f"Expected the released 28-drug panel; found {df['Drug_Name'].nunique()}.")
+
+    # Canonicalize the known sotalol naming variants before counting compounds.
+    # Preserve the raw Drug_Name column for provenance; never broadly fuzzy-match names.
+    raw_names = df["Drug_Name"].astype(str).str.strip()
+    canonical_names = (
+        raw_names.str.lower()
+        .str.replace(r"d[\\s,.-]*l[\\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"dl[\\s,.-]*sotalol", "sotalol", regex=True)
+    )
+    raw_to_canonical = (
+        pd.DataFrame({"raw": raw_names, "canonical": canonical_names})
+        .drop_duplicates()
+        .sort_values(["canonical", "raw"])
+    )
+    canonical_n = canonical_names.nunique()
+    if canonical_n != 28:
+        raise ValueError(
+            f"Expected the released 28-drug panel after documented name normalization; "
+            f"found {canonical_n} canonical compounds. Raw aliases: "
+            f"{raw_to_canonical.to_dict(orient='records')}"
+        )
     if df["site"].nunique() != 10:
-        raise ValueError(f"Expected 10 sites; found {df['site'].nunique()}.")
+        raise ValueError(f"Expected 10 sites, found {df['site'].nunique()}.")
     if not pd.to_numeric(df["conc"], errors="coerce").notna().all():
         raise ValueError("Blinova conc contains non-numeric values.")
     if not pd.to_numeric(df["ddFPDc"], errors="coerce").notna().all():
@@ -305,9 +324,10 @@ def run_blinova(path: Path, derived_dir: Path) -> dict:
         .astype(str)
         .str.strip()
         .str.lower()
-        .str.replace("d,l sotalol", "sotalol", regex=False)
-        .str.replace("dl sotalol", "sotalol", regex=False)
+        .str.replace(r"d[\\s,.-]*l[\\s,.-]*sotalol", "sotalol", regex=True)
+        .str.replace(r"dl[\\s,.-]*sotalol", "sotalol", regex=True)
     )
+    frame["raw_Drug_Name"] = frame["Drug_Name"]
     frame["reference_risk"] = (
         frame["risk"].astype(str).str.strip().str.lower().map(risk_map)
     )
