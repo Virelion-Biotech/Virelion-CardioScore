@@ -70,11 +70,11 @@ Raw `.zip`, `.mat`, `.h5/.hdf5`, raw source datasets, and credentials are not pu
 
 ## GIGO gates
 
-The runner fails closed on missing schema, unexpected CiPA platform/event labels, non-deterministic raw-to-feature rebuilds, reference/feature leakage, missing verification lineage, and unsupported raw formats.
+The runner fails closed on missing schema, unexpected CiPA platform/event labels, non-deterministic raw-to-feature rebuilds, reference/feature leakage, missing verification lineage, a source receipt whose uploaded file/hash does not match, missing authoritative source metadata, and unsupported raw formats.
 
 Technical wells are not treated as independent drugs. Missing endpoints are not fabricated. Q/quiescence is kept separate from A-D arrhythmia-like events.
 
-The released CiPA workbook is a component/semantic validation source, not a five-endpoint CardioScore gold standard. A headline external CardioScore result requires a verified source-to-feature rebuild, explicit vehicle structure, complete scoreable reference coverage, and a separate reference table.
+The released CiPA workbook is a component/semantic validation source, not a five-endpoint CardioScore gold standard. A headline external CardioScore result requires a verified source-to-feature rebuild, an uploaded source file whose SHA-256 matches the immutable receipt, explicit authoritative source metadata, explicit vehicle structure, complete scoreable reference coverage, and a separate reference table with documented reference provenance.
 
 ## Legacy modular notebooks
 
