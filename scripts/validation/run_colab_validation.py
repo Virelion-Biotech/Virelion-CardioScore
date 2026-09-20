@@ -42,7 +42,7 @@ def resolve_runner_revision(environ=None) -> tuple[str, str | None]:
 
 
 RUNNER_REVISION, RUNNER_SOURCE_SHA256 = resolve_runner_revision()
-PIN = "869150cd5fb5ccf155fb066258404bd4df163ade"
+PIN = "fdada43a8e07199f4eedccf7f8b941cd6cb351e8"
 BRANCH = "main"
 ROOT = Path("/content/cardioscore_validation")
 RUN_LABEL = os.environ.get("CARDIOSCORE_RUN_LABEL", "").strip()
@@ -727,10 +727,19 @@ def verify_locked_freeze(
 ) -> tuple[dict, dict | None]:
     """Verify the pre-registration/freeze; returns (audit info, parsed pre-registration or None)."""
     import virelion_cardioscore
-    from virelion_cardioscore.validation.freeze import parse_preregistration, verify_freeze
 
     try:
+        from virelion_cardioscore.validation.freeze import parse_preregistration, verify_freeze
+
         prereg_bytes, manifest, source = load_freeze_files(environ, fetch, runner_revision)
+    except ImportError as exc:
+        return {
+            "verified": False,
+            "problems": [
+                f"The installed CardioScore package (PIN {PIN}) has no freeze module ({exc}). "
+                "Set PIN to a commit that contains virelion_cardioscore/validation/freeze.py."
+            ],
+        }, None
     except Exception as exc:
         return {"verified": False, "problems": [f"Freeze files unavailable: {exc}"]}, None
     config_dir = Path(virelion_cardioscore.__file__).resolve().parent / "config"
