@@ -168,3 +168,65 @@ def stratified_failures(
         )
         .reset_index()
     )
+
+
+def binary_auroc_bootstrap(
+    positive: Iterable[bool],
+    scores: Iterable[float],
+    *,
+    n_bootstrap: int,
+    seed: int,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """AUROC with a percentile bootstrap CI that resamples *compounds* (the independent unit).
+
+    Resamples that contain only one class are skipped and counted; nothing is fitted or tuned.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    y = np.asarray(list(positive), dtype=bool)
+    x = np.asarray(list(scores), dtype=float)
+    if y.shape != x.shape or y.size == 0:
+        raise ValueError("positive and scores must have equal, non-zero length")
+    if not np.isfinite(x).all():
+        raise ValueError("scores must be finite")
+    if y.all() or (~y).all():
+        raise ValueError("AUROC requires both positive and negative compounds")
+    if not 0.0 < confidence < 1.0 or n_bootstrap < 1:
+        raise ValueError("confidence must be in (0, 1) and n_bootstrap must be >= 1")
+    auroc = float(roc_auc_score(y, x))
+    rng = np.random.default_rng(int(seed))
+    draws: list[float] = []
+    for _ in range(int(n_bootstrap)):
+        index = rng.integers(0, y.size, y.size)
+        if y[index].all() or (~y[index]).all():
+            continue
+        draws.append(float(roc_auc_score(y[index], x[index])))
+    if not draws:
+        raise ValueError("No valid bootstrap resamples contained both classes")
+    lower_q = (1.0 - confidence) / 2.0
+    lower, upper = np.quantile(draws, [lower_q, 1.0 - lower_q])
+    return {
+        "auroc": auroc,
+        "ci_lower": float(lower),
+        "ci_upper": float(upper),
+        "confidence": float(confidence),
+        "n": int(y.size),
+        "n_positive": int(y.sum()),
+        "n_negative": int((~y).sum()),
+        "n_bootstrap_requested": int(n_bootstrap),
+        "n_bootstrap_valid": len(draws),
+        "seed": int(seed),
+    }
+
+
+def primary_outcome(result: dict[str, Any], rule: dict[str, Any]) -> str:
+    """Apply the pre-registered three-outcome rule: 'success', 'inconclusive' or 'failure'."""
+    for outcome in ("success", "inconclusive"):
+        thresholds = rule[outcome]
+        if (
+            result["auroc"] >= float(thresholds["auroc_min"])
+            and result["ci_lower"] >= float(thresholds["ci_lower_min"])
+        ):
+            return outcome
+    return "failure"

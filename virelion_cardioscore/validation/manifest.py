@@ -116,20 +116,24 @@ def validate_feature_schema(frame: pd.DataFrame) -> None:
     if site_values.isna().any() or not np.isfinite(site_values.to_numpy()).all():
         raise ValueError("site must be numeric and finite")
 
-    numeric_runtime_columns = (
-        "fpd_ms",
-        "beat_rate_bpm",
-        "amplitude_uv",
-        "stv",
-        "triangulation_proxy",
-        "n_electrodes",
-        "noise_sd_uv",
-        "beat_detection_rate",
-    )
-    for column in numeric_runtime_columns:
+    endpoint_columns = ("fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy")
+    qc_columns = ("n_electrodes", "noise_sd_uv", "beat_detection_rate")
+    for column in qc_columns:
         values = pd.to_numeric(frame[column], errors="coerce")
         if values.isna().any() or not np.isfinite(values.to_numpy()).all():
             raise ValueError(f"{column} must be numeric and finite")
+    # A well that lost all usable signal (no electrodes or no detected beats) legitimately has no
+    # computable endpoints. Such wells must stay in the table, as missing values, so the pipeline
+    # can account for them as dropout; a missing endpoint on any other well is still an error.
+    no_signal = (pd.to_numeric(frame["n_electrodes"]) == 0) | (pd.to_numeric(frame["beat_detection_rate"]) == 0)
+    for column in endpoint_columns:
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if (values.notna() & ~np.isfinite(values.to_numpy(dtype=float))).any():
+            raise ValueError(f"{column} must be numeric and finite")
+        if (frame[column].notna() & values.isna()).any():
+            raise ValueError(f"{column} must be numeric and finite")
+        if (values.isna() & ~no_signal).any():
+            raise ValueError(f"{column} must be numeric and finite (missing values are only allowed on no-signal wells)")
 
     electrode_values = pd.to_numeric(frame["n_electrodes"], errors="coerce")
     if (electrode_values < 0).any() or not np.isclose(electrode_values, np.round(electrode_values)).all():
