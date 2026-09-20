@@ -27,6 +27,8 @@
 - Explicit vehicle-structure validation for locked external runs when vehicle normalization is enabled.
 
 ### Fixed
+- Corrected Blinova event-label parsing so combined A-D labels such as `AC`/`ABC` count as arrhythmia-like, unresolved labels remain explicit audit flags, and non-blank event labels with `EAD != 1` fail closed.
+- Added regression coverage for combined labels, quiescence separation, unresolved event codes, and the event-label semantics of `EAD`.
 - Hardened the Colab validation runner's Blinova stage: blank `risk`, undocumented platform codes such as `ACA`, missing `ddFPDc`, and the documented terfenadine/verapamil event discrepancies are recorded as explicit audit flags; structural inconsistencies still fail closed.
 - Fixed locked external validation invocation to pass the required `input_dir` argument and added regression coverage for internal call arity.
 - Pinned the Colab runner by commit SHA in the execution guide and recorded the runner source SHA-256 in the run manifest.

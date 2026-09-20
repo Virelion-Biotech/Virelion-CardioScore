@@ -42,7 +42,7 @@ import hashlib
 import os
 import urllib.request
 
-RUNNER_SHA = "bc2511c0df47a4140c31d791510538188b0b80f0"
+RUNNER_SHA = "c8ff40879e3d0084b4d8f446783189663cae15b7"
 RUNNER_URL = (
     "https://raw.githubusercontent.com/Virelion-Biotech/Virelion-CardioScore/"
     f"{RUNNER_SHA}/scripts/validation/run_colab_validation.py"
