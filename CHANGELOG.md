@@ -2,7 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+- Compounds whose treated wells lost signal at high concentration (cells stopped beating) were silently scored from the surviving lower concentrations, e.g. a High-risk profile became Low, or the compound vanished from the summary. The pipeline now reports structured QC rejections, per-concentration dropout, an `informative_dropout` flag, and an exclusion table with reasons; a dataset where no treated well survives QC no longer raises a bare `KeyError`.
+- `aggregate_compound_effects` no longer turns an endpoint with no finite values into a zero effect; it returns NaN so the scoring engine fails closed.
+- The locked feature-schema check no longer forces missing endpoints to be fabricated for wells with no usable signal; missing endpoints remain an error on wells that have signal.
+- Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
+
 ### Added
+- `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
+- Locked-stage primary analysis: AUROC with compound-level bootstrap CI and a pre-registered outcome rule, informative-dropout sensitivity analysis, exclusion reasons, and dropout/exclusion CSVs.
 - Optional exposure-response evidence contribution to CardioScore using only quality-passing 4PL fits.
 - Dose-response evidence is calculated from the tested log-concentration range above fitted EC50.
 - Default dose-response scoring weight remains `0.0`, preserving the endpoint-only CardioScore unless explicitly enabled.
