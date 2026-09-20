@@ -12,6 +12,11 @@ quality_control:
   reject_wells_with_arrhythmia_proxy: false
   arrhythmia_proxy_max_stv: null
   log_rejections: true
+  # Informative dropout: flag a concentration when >= min_fraction of its treated wells lost signal
+  # (cells stopped beating / no usable electrodes) AND that exceeds the compound's vehicle-well loss by
+  # >= min_excess. Flagged compounds are reported, never treated as clean.
+  informative_dropout_min_fraction: 0.5
+  informative_dropout_min_excess: 0.25
 
 preprocessing:
   highpass_hz: 0.5
