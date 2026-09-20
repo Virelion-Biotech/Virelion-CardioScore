@@ -45,3 +45,28 @@ produces no headline result if anything differs. The primary result is the pre-r
 intermediate + high) with a compound-level bootstrap interval and a three-outcome rule; the report also contains the
 three-class metrics, the informative-dropout list, and a sensitivity analysis that reclassifies those compounds as High.
 The git history, not this code, is the evidence of when the plan was frozen.
+
+## Informative dropout (signal loss is not "no effect")
+QC used to remove wells that lost signal (cells stopped beating, no usable electrodes, endpoints not computable) without any
+concentration-level accounting, so a genuinely proarrhythmic compound could drop from High to Low, or vanish, when its top
+concentrations collapsed. The pipeline now records every rejection with reason codes (`qc_rejections`), reports per
+compound x concentration signal loss (`dropout_table`), flags `informative_dropout` when at least
+`quality_control.informative_dropout_min_fraction` of treated wells lost signal and that exceeds the compound's vehicle loss by
+`informative_dropout_min_excess`, and lists every compound it could not score with a reason (`exclusion_table`). Missing
+endpoints are never aggregated to zero. In the locked feature table a well may carry missing endpoints only if it has no
+usable signal (`n_electrodes == 0` or `beat_detection_rate == 0`).
+
+## Freeze before scoring
+1. Commit the CardioScore code to be validated; note its commit SHA `A`.
+2. Set `PIN = A` in `scripts/validation/run_colab_validation.py`.
+3. Resolve every `null` in `validation/preregistration.yaml` (owner attestations, dataset DOI/URL, raw-data availability),
+   review the proposed numeric criteria, and set `status: frozen`.
+4. Run `python scripts/validation/make_freeze_manifest.py --package-sha A`. It refuses while anything is unresolved or
+   disagrees with the shipped configuration.
+5. Commit the pre-registration, the manifest and the `PIN` change as commit `B`, and run the Colab launcher with `RUNNER_SHA = B`.
+
+The locked stage reads both files from commit `B`, verifies their hashes against the installed package configuration, and
+produces no headline result if anything differs. The primary result is the pre-registered AUROC (positive class
+intermediate + high) with a compound-level bootstrap interval and a three-outcome rule; the report also contains the
+three-class metrics, the informative-dropout list, and a sensitivity analysis that reclassifies those compounds as High.
+The git history, not this code, is the evidence of when the plan was frozen.
