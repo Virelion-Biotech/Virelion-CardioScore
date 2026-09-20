@@ -101,53 +101,41 @@ def test_fpd_is_recovered_within_two_ms_up_to_400_ms(true_fpd_ms):
     assert features.fpd_ms is not None and abs(features.fpd_ms - true_fpd_ms) < 2.0
 
 
-def test_beat_rate_and_interval_variability_match_truth():
-    recording = make_truth_recording(5, ibi_jitter_ms=20.0)
+def test_beat_rate_and_repolarization_stv_match_truth():
+    recording = make_truth_recording(5, ibi_jitter_ms=20.0, fpd_jitter_ms=10.0)
     features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
     true_rate = 60.0 / np.mean(recording.ibi_s)
     assert abs(features.beat_rate_bpm - true_rate) < 0.5
-    # CardioScore's `stv` is inter-beat-interval variability; it matches that truth, not repolarization STV.
-    assert features.stv == pytest.approx(recording.ibi_variability(), abs=0.003)
+    assert features.stv == pytest.approx(recording.fpd_short_term_variability_ms(), abs=2.0)
 
 
-def test_stv_is_blind_to_repolarization_variability():
-    """Documents the definition: FPD beat-to-beat instability does not move the `stv` endpoint."""
+def test_stv_tracks_repolarization_variability():
     steady = make_truth_recording(6, fpd_jitter_ms=0.0)
     unstable = make_truth_recording(6, fpd_jitter_ms=25.0)
+    steady_features = extract_electrode_features(steady.trace_uv, 1000.0)
+    unstable_features = extract_electrode_features(unstable.trace_uv, 1000.0)
     assert unstable.fpd_short_term_variability_ms() > 10.0
-    assert extract_electrode_features(unstable.trace_uv, 1000.0).stv == pytest.approx(
-        extract_electrode_features(steady.trace_uv, 1000.0).stv, abs=1e-6
-    )
+    assert unstable_features.stv > steady_features.stv + 5.0
 
 
-# --- known limitations (expected to fail until the extraction is changed) -----------------------------
+# --- regressions fixed before the validation freeze -----------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Repolarization search window ends at 450 ms, so longer FPDs return no FPD."
-)
-@pytest.mark.parametrize("true_fpd_ms", [500.0, 600.0])
-def test_fpd_beyond_450_ms_is_recovered(true_fpd_ms):
+@pytest.mark.parametrize("true_fpd_ms", [500.0, 600.0, 700.0])
+def test_fpd_beyond_previous_450_ms_limit_is_recovered(true_fpd_ms):
     recording = make_truth_recording(7, fpd_ms=true_fpd_ms)
     features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
     assert features.fpd_ms is not None and abs(features.fpd_ms - true_fpd_ms) < 5.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="estimate_noise_sd runs on the filtered trace and reads ~50x below true noise.",
-)
 def test_noise_estimate_is_within_a_factor_of_three_of_true_noise():
     recording = make_truth_recording(8, noise_sd_uv=20.0)
-    estimate = estimate_noise_sd(
-        filter_trace(recording.trace_uv, recording.fs_hz, FilterConfig()), recording.fs_hz
-    )
+    estimate = estimate_noise_sd(recording.trace_uv, recording.fs_hz)
     assert 20.0 / 3 <= estimate <= 20.0 * 3
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert 20.0 / 3 <= features.noise_sd_uv <= 20.0 * 3
 
 
-@pytest.mark.xfail(
-    strict=True, reason="beat_detection_rate is clipped at 1.0, so over-detection is not penalised."
-)
 def test_over_detection_lowers_beat_detection_rate():
     recording = make_truth_recording(9, noise_sd_uv=20.0)
     features = extract_electrode_features(
@@ -156,4 +144,4 @@ def test_over_detection_lowers_beat_detection_rate():
     assert (
         features.n_beats > 1.5 * recording.beat_times_s.size
     )  # the detector really is over-counting
-    assert features.beat_detection_rate < 0.9
+    assert features.beat_detection_rate < 0.7
