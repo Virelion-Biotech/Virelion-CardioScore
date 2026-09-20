@@ -433,3 +433,19 @@ def test_locked_stage_blocks_and_explains_an_unscoreable_reference_compound(tmp_
     )
     exclusions = pd.read_csv(results / "locked_exclusions.csv")
     assert list(exclusions["compound"]) == ["HIGH_A"]
+
+
+def test_stale_package_pin_blocks_cleanly_instead_of_crashing(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "virelion_cardioscore.validation.freeze":
+            raise ImportError("No module named 'virelion_cardioscore.validation.freeze'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    info, prereg = runner.verify_locked_freeze({}, None, "c" * 40)
+    assert info["verified"] is False and prereg is None
+    assert "Set PIN to a commit that contains" in info["problems"][0]
