@@ -26,7 +26,7 @@ class TruthRecording:
         return np.diff(self.beat_times_s)
 
     def ibi_variability(self) -> float:
-        """mean |delta IBI| / mean IBI - the definition CardioScore's ``stv`` implements."""
+        """Normalized IBI short-term variability retained as a diagnostic; CardioScore's ``stv`` is repolarization STV."""
         ibi = self.ibi_s
         if ibi.size < 2:
             return float("nan")
