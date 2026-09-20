@@ -33,10 +33,11 @@ class TruthRecording:
         return float(np.mean(np.abs(np.diff(ibi))) / np.mean(ibi))
 
     def fpd_short_term_variability_ms(self) -> float:
-        """Classical repolarization STV: sum |FPD(n+1)-FPD(n)| / (n * sqrt(2))."""
+        """Classical repolarization STV from adjacent FPD differences, divided by sqrt(2) per difference."""
         if self.fpd_ms.size < 2:
             return float("nan")
-        return float(np.sum(np.abs(np.diff(self.fpd_ms))) / (self.fpd_ms.size * np.sqrt(2)))
+        n_pairs = self.fpd_ms.size - 1
+        return float(np.sum(np.abs(np.diff(self.fpd_ms))) / (n_pairs * np.sqrt(2.0)))
 
 
 def make_truth_recording(
