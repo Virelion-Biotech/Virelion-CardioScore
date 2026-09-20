@@ -9,6 +9,7 @@
 - Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
 
 ### Added
+- Signal-level validation suite with exact synthetic ground truth, event-level precision/recall/F1, agreement metrics, deterministic rebuild checks, and a Multichannel Systems MC_Data adapter for Cardio PyMEA.
 - `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
 - Locked-stage primary analysis: AUROC with compound-level bootstrap CI and a pre-registered outcome rule, informative-dropout sensitivity analysis, exclusion reasons, and dropout/exclusion CSVs.
 - Optional exposure-response evidence contribution to CardioScore using only quality-passing 4PL fits.
@@ -33,6 +34,7 @@
 - Robustness-matrix runner that sweeps plate drift, treatment allocation, replicate count, and noise level and summarizes conventional-estimator bias and recovery rate.
 - Runtime-aligned external validation schema requiring QC fields, vehicle metadata, finite endpoint values, and valid concentration semantics.
 - Explicit vehicle-structure validation for locked external runs when vehicle normalization is enabled.
+- Signal extraction pre-freeze fixes: FPD search now extends to 900 ms while respecting the next detected beat, noise QC estimates broadband noise from the raw trace, beat-count QC penalizes both over- and under-detection, and stv now represents classical repolarization STV derived from consecutive per-beat FPD measurements.
 
 ### Fixed
 - Corrected Blinova event-label parsing so combined A-D labels such as `AC`/`ABC` count as arrhythmia-like, unresolved labels remain explicit audit flags, and non-blank event labels with `EAD != 1` fail closed.
