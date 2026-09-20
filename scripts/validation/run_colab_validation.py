@@ -51,6 +51,8 @@ ALLOWED_PUBLISH_NAMES = {
     "locked_external_validation.json",
     "locked_compound_validation.csv",
     "locked_failures_by_compound.csv",
+    "locked_dropout_by_concentration.csv",
+    "locked_exclusions.csv",
     "secondary_sensitivity.csv",
     "qc_log.csv",
     "qc_summary.json",
@@ -680,6 +682,76 @@ def run_raw_mea(path: Path, derived_dir: Path, results_dir: Path) -> dict:
     }
 
 
+FREEZE_REPO_PATHS = ("validation/preregistration.yaml", "validation/freeze_manifest.json")
+
+
+def _http_get(url: str) -> bytes:
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https GitHub URL
+        return response.read()
+
+
+def load_freeze_files(
+    environ=None, fetch=None, runner_revision: str | None = None
+) -> tuple[bytes, dict, str]:
+    """Return (pre-registration bytes, freeze manifest, source description).
+
+    Files come from the immutable GitHub commit the runner itself was fetched from, so the commit
+    history shows when the plan was frozen. ``CARDIOSCORE_FREEZE_DIR`` overrides this for offline
+    or test use and is recorded as a local override.
+    """
+    from virelion_cardioscore.validation.freeze import load_manifest
+
+    environ = os.environ if environ is None else environ
+    override = str(environ.get("CARDIOSCORE_FREEZE_DIR", "")).strip()
+    if override:
+        base = Path(override)
+        prereg_bytes = (base / "preregistration.yaml").read_bytes()
+        manifest = load_manifest((base / "freeze_manifest.json").read_bytes())
+        return prereg_bytes, manifest, f"local_override:{base}"
+    revision = RUNNER_REVISION if runner_revision is None else runner_revision
+    if revision == "unpinned-main":
+        raise RuntimeError(
+            "The runner is not SHA-pinned, so the freeze cannot be read from an immutable commit."
+        )
+    fetch = fetch or _http_get
+    base_url = f"https://raw.githubusercontent.com/{REPO}/{revision}/"
+    prereg_bytes = fetch(base_url + FREEZE_REPO_PATHS[0])
+    manifest = load_manifest(fetch(base_url + FREEZE_REPO_PATHS[1]))
+    return prereg_bytes, manifest, f"github:{REPO}@{revision}"
+
+
+def verify_locked_freeze(
+    environ=None, fetch=None, runner_revision: str | None = None, package_sha: str | None = None
+) -> tuple[dict, dict | None]:
+    """Verify the pre-registration/freeze; returns (audit info, parsed pre-registration or None)."""
+    import virelion_cardioscore
+    from virelion_cardioscore.validation.freeze import parse_preregistration, verify_freeze
+
+    try:
+        prereg_bytes, manifest, source = load_freeze_files(environ, fetch, runner_revision)
+    except Exception as exc:
+        return {"verified": False, "problems": [f"Freeze files unavailable: {exc}"]}, None
+    config_dir = Path(virelion_cardioscore.__file__).resolve().parent / "config"
+    problems = verify_freeze(
+        manifest,
+        prereg_bytes=prereg_bytes,
+        config_dir=config_dir,
+        package_sha=PIN if package_sha is None else package_sha,
+    )
+    info = {
+        "verified": not problems,
+        "problems": problems,
+        "source": source,
+        "validation_version": manifest.get("validation_version"),
+        "frozen_at_utc": manifest.get("frozen_at_utc"),
+        "package_sha": manifest.get("package_sha"),
+        "preregistration_sha256": manifest.get("preregistration_sha256"),
+    }
+    return info, (parse_preregistration(prereg_bytes) if not problems else None)
+
+
 def find_locked_assets(classified: dict, derived_dir: Path) -> dict[str, Path] | None:
     features = classified["feature_csv"]
     reference = classified["reference"]
@@ -781,6 +853,25 @@ def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: P
     )
 
     excluded = sorted(set(reference["compound"]) - set(joined["compound"]))
+    exclusion_reasons = {
+        str(row["compound"]): {"reason": str(row["reason"]), "detail": str(row["detail"])}
+        for _, row in result.exclusion_table.iterrows()
+    }
+    for compound in excluded:
+        exclusion_reasons.setdefault(
+            str(compound), {"reason": "absent_from_feature_table", "detail": ""}
+        )
+    summary = result.summary_table
+    informative = (
+        sorted(
+            set(summary.loc[summary["informative_dropout"].astype(bool), "compound"].astype(str))
+            & set(joined["compound"].astype(str))
+        )
+        if "informative_dropout" in summary.columns
+        else []
+    )
+    result.dropout_table.to_csv(results_dir / "locked_dropout_by_concentration.csv", index=False)
+    result.exclusion_table.to_csv(results_dir / "locked_exclusions.csv", index=False)
     payload = {
         "package_commit": PIN,
         "locked": True,
@@ -799,6 +890,27 @@ def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: P
         )
         failures = stratified_failures(joined, strata=("compound",))
         payload["metrics"] = metrics.to_dict()
+        if prereg is not None:
+            payload["primary_analysis"] = evaluate_primary_analysis(joined, prereg)
+            log("Primary analysis: " + json.dumps(payload["primary_analysis"], indent=2))
+            if informative:
+                assert (
+                    prereg["secondary_analyses"]["dropout_sensitivity"][
+                        "reclassify_informative_dropout_as"
+                    ]
+                    == "high"
+                ), "Only reclassification of informative-dropout compounds as 'high' is implemented."
+                sensitivity = joined.copy()
+                flagged = sensitivity["compound"].astype(str).isin(informative)
+                sensitivity.loc[flagged, "cardioscore"] = 1.0
+                sensitivity.loc[flagged, "observed_risk"] = "High"
+                payload["dropout_sensitivity"] = {
+                    "compounds_reclassified_as_high": informative,
+                    "primary_analysis": evaluate_primary_analysis(sensitivity, prereg),
+                    "three_class_metrics": locked_metrics(
+                        sensitivity["reference_risk"], sensitivity["observed_risk"]
+                    ).to_dict(),
+                }
         payload["compound_scores"] = joined.to_dict(orient="records")
         payload["failures"] = failures.to_dict(orient="records")
         joined.to_csv(results_dir / "locked_compound_validation.csv", index=False)
@@ -819,6 +931,9 @@ def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: P
         "n_reference": int(len(reference)),
         "n_scored": int(len(joined)),
         "n_excluded": int(len(excluded)),
+        "n_informative_dropout_compounds": int(len(informative)),
+        "primary_auroc": (payload["primary_analysis"] or {}).get("auroc"),
+        "primary_outcome": (payload["primary_analysis"] or {}).get("outcome"),
     }
 
 
