@@ -42,6 +42,23 @@ RUNTIME_ENDPOINT_COLUMNS = (
     "stv",
     "triangulation_proxy",
 )
+# QC rejection reasons that indicate loss of usable signal. A treated well lost this way at high
+# concentration may be a drug effect (cells stopped beating), not a bad well, so it is tracked
+# as potential informative dropout rather than silently discarded.
+SIGNAL_LOSS_QC_REASONS = frozenset({"too_few_electrodes", "low_beat_detection", "missing_endpoint"})
+QC_REJECTION_COLUMNS = ("row_position", "compound", "well", "concentration_uM", "vehicle", "reasons", "signal_loss")
+DROPOUT_COLUMNS = (
+    "compound",
+    "concentration_uM",
+    "n_wells_input",
+    "n_signal_loss",
+    "n_other_rejected",
+    "n_kept",
+    "dropout_fraction",
+    "vehicle_dropout_fraction",
+    "informative_dropout",
+)
+EXCLUSION_COLUMNS = ("compound", "reason", "detail")
 RUNTIME_HIERARCHY_COLUMNS = (
     "biological_replicate",
     "batch_id",
@@ -67,6 +84,9 @@ class PipelineResult:
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
     provenance: dict = field(default_factory=dict)
+    qc_rejections: pd.DataFrame = field(default_factory=pd.DataFrame)
+    dropout_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    exclusion_table: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def to_html(self, path: str | Path) -> None:
         from virelion_cardioscore.reporting.report_generator import write_html_report
@@ -91,6 +111,9 @@ class PipelineResult:
                 for compound, fits in self.dose_response_fits.items()
             },
             "provenance": self.provenance,
+            "qc_rejections": self.qc_rejections.to_dict(orient="records"),
+            "dropout": self.dropout_table.to_dict(orient="records"),
+            "exclusions": self.exclusion_table.to_dict(orient="records"),
         }
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
@@ -118,6 +141,7 @@ class CardioScorePipeline:
             moderate_threshold=scoring_cfg.get("moderate_threshold", 0.60),
         )
         self.qc_log: list[str] = []
+        self.qc_rejections = pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
 
     @classmethod
     def from_config(cls, path: str | Path) -> "CardioScorePipeline":
@@ -197,6 +221,12 @@ class CardioScorePipeline:
         for endpoint in available_endpoints:
             numeric = pd.to_numeric(df[endpoint], errors="coerce")
             endpoint_complete &= np.isfinite(numeric.to_numpy(dtype=float))
+        reason_flags = {
+            "too_few_electrodes": ~(df["n_electrodes"] >= min_elec),
+            "high_noise": ~(df["noise_sd_uv"] <= max_noise),
+            "low_beat_detection": ~(df["beat_detection_rate"] >= min_bdr),
+            "missing_endpoint": pd.Series(~endpoint_complete, index=df.index),
+        }
         mask = (
             (df["n_electrodes"] >= min_elec)
             & (df["noise_sd_uv"] <= max_noise)
@@ -204,6 +234,8 @@ class CardioScorePipeline:
             & endpoint_complete
         )
         if reject_irregular:
+            if irregularity_threshold is not None:
+                reason_flags["irregular"] = ~(df["stv"] <= float(irregularity_threshold))
             if irregularity_threshold is None:
                 self.qc_log.append(
                     "Warning: arrhythmia-proxy rejection is enabled, but quality_control.arrhythmia_proxy_max_stv is not configured; no irregularity rejection was applied. STV is treated only as an optional irregularity proxy, not an arrhythmia detector."
@@ -212,6 +244,7 @@ class CardioScorePipeline:
                 mask &= df["stv"] <= float(irregularity_threshold)
         rejected = df[~mask]
         kept = df[mask].copy()
+        self.qc_rejections = self._build_qc_rejections(df, ~np.asarray(mask, dtype=bool), reason_flags)
         if qc.get("log_rejections", True) and len(rejected) > 0:
             for _, row in rejected.iterrows():
                 details = (
@@ -229,6 +262,80 @@ class CardioScorePipeline:
                 self.qc_log.append(f"Rejected {row['compound']} {row['well']} ({details})")
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
+
+    @staticmethod
+    def _build_qc_rejections(df: pd.DataFrame, rejected_mask: np.ndarray, reason_flags: dict) -> pd.DataFrame:
+        """Structured record of every QC rejection (row position, well, and reason codes)."""
+        positions = np.flatnonzero(rejected_mask)
+        if positions.size == 0:
+            return pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
+        vehicle = coerce_bool_series(df["vehicle"], name="vehicle").to_numpy() if "vehicle" in df.columns else None
+        records = []
+        for position in positions:
+            reasons = [name for name, flag in reason_flags.items() if bool(np.asarray(flag)[position])]
+            records.append(
+                {
+                    "row_position": int(position),
+                    "compound": str(df["compound"].iloc[position]),
+                    "well": str(df["well"].iloc[position]),
+                    "concentration_uM": float(df["concentration_uM"].iloc[position]) if "concentration_uM" in df.columns else float("nan"),
+                    "vehicle": bool(vehicle[position]) if vehicle is not None else False,
+                    "reasons": ";".join(reasons),
+                    "signal_loss": any(reason in SIGNAL_LOSS_QC_REASONS for reason in reasons),
+                }
+            )
+        return pd.DataFrame(records, columns=list(QC_REJECTION_COLUMNS))
+
+    def compute_dropout_table(self, df_pre_qc: pd.DataFrame, rejections: pd.DataFrame) -> pd.DataFrame:
+        """Per compound x concentration accounting of wells lost to signal loss.
+
+        A concentration is flagged ``informative_dropout`` when a large share of its treated wells lost
+        signal (cells stopped beating, no reliable electrodes, endpoints not computable) and that
+        share clearly exceeds the same compound's vehicle-well loss. Such compounds must never be
+        read as "clean" just because their worst wells were removed by QC.
+        """
+        qc = self.config.get("quality_control", {})
+        min_fraction = float(qc.get("informative_dropout_min_fraction", 0.5))
+        min_excess = float(qc.get("informative_dropout_min_excess", 0.25))
+        frame = df_pre_qc.reset_index(drop=True)
+        vehicle = coerce_bool_series(frame["vehicle"], name="vehicle")
+        lost = np.zeros(len(frame), dtype=bool)
+        other = np.zeros(len(frame), dtype=bool)
+        if not rejections.empty:
+            signal = rejections["signal_loss"].to_numpy(dtype=bool)
+            positions = rejections["row_position"].to_numpy(dtype=int)
+            lost[positions[signal]] = True
+            other[positions[~signal]] = True
+        frame = frame.assign(_vehicle=vehicle.to_numpy(), _lost=lost, _other=other)
+        vehicle_rows = frame[frame["_vehicle"]]
+        overall_vehicle = float(vehicle_rows["_lost"].mean()) if len(vehicle_rows) else 0.0
+        vehicle_fraction = {
+            str(compound): float(group["_lost"].mean())
+            for compound, group in vehicle_rows.groupby("compound", sort=True)
+        }
+        rows = []
+        treated = frame[~frame["_vehicle"]]
+        for (compound, concentration), group in treated.groupby(["compound", "concentration_uM"], sort=True):
+            n_input = int(len(group))
+            n_lost = int(group["_lost"].sum())
+            n_other = int(group["_other"].sum())
+            fraction = n_lost / n_input if n_input else 0.0
+            vehicle_lost = vehicle_fraction.get(str(compound), overall_vehicle)
+            informative = bool(n_lost > 0 and fraction >= min_fraction and (fraction - vehicle_lost) >= min_excess)
+            rows.append(
+                {
+                    "compound": str(compound),
+                    "concentration_uM": float(concentration),
+                    "n_wells_input": n_input,
+                    "n_signal_loss": n_lost,
+                    "n_other_rejected": n_other,
+                    "n_kept": n_input - n_lost - n_other,
+                    "dropout_fraction": round(float(fraction), 6),
+                    "vehicle_dropout_fraction": round(float(vehicle_lost), 6),
+                    "informative_dropout": informative,
+                }
+            )
+        return pd.DataFrame(rows, columns=list(DROPOUT_COLUMNS))
 
     def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
         control_cfg = self.config.get("control_normalization", {})
@@ -516,7 +623,9 @@ class CardioScorePipeline:
             def aggregate_endpoint(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 if values.empty:
-                    return 0.0
+                    # Never fabricate "no effect": an endpoint with no finite value stays missing so the
+                    # scoring engine (which requires finite values) fails closed instead of scoring it clean.
+                    return float("nan")
                 endpoint = column.removesuffix("_mean")
                 direction = endpoint_directions.get(endpoint, "absolute")
                 if concentration_aggregation == "max_absolute_effect":
@@ -592,12 +701,82 @@ class CardioScorePipeline:
         total_weight = sum(weight for weight, _ in usable)
         return float(sum(weight * coverage for weight, coverage in usable) / total_weight)
 
+    @staticmethod
+    def _dropout_summary_by_compound(dropout_table: pd.DataFrame) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        if dropout_table.empty:
+            return out
+        for compound, group in dropout_table.groupby("compound", sort=False):
+            flagged = group[group["informative_dropout"]]
+            out[str(compound)] = {
+                "n_wells_input_treated": int(group["n_wells_input"].sum()),
+                "n_wells_rejected_signal_loss": int(group["n_signal_loss"].sum()),
+                "informative_dropout": bool(len(flagged) > 0),
+                "dropout_concentrations_uM": ";".join(f"{value:g}" for value in flagged["concentration_uM"]),
+                "max_dropout_fraction": float(group["dropout_fraction"].max()),
+            }
+        return out
+
+    @staticmethod
+    def _build_exclusion_table(
+        *,
+        df_pre_qc: pd.DataFrame,
+        df_post_qc: pd.DataFrame,
+        effects: pd.DataFrame,
+        concentration_summary: pd.DataFrame,
+        scorable_compounds: set[str],
+        scored: set[str],
+        dropout_table: pd.DataFrame,
+        min_concentrations: int,
+    ) -> pd.DataFrame:
+        """Every compound that was in the input but not scored, with an explicit reason."""
+        treated_input = set(map(str, df_pre_qc.loc[~df_pre_qc["vehicle"], "compound"].unique()))
+        treated_after_qc = set(map(str, df_post_qc.loc[~df_post_qc["vehicle"], "compound"].unique()))
+        with_effects = set(map(str, effects["compound"].unique())) if not effects.empty else set()
+        rows = []
+        for compound in sorted(treated_input - set(map(str, scored))):
+            detail = ""
+            if compound not in treated_after_qc:
+                reason = "all_treated_wells_rejected_by_qc"
+            elif compound not in with_effects:
+                reason = "no_matching_vehicle_control"
+            elif compound not in scorable_compounds:
+                reason = "insufficient_concentrations"
+                n_conc = 0
+                if not concentration_summary.empty:
+                    n_conc = int(
+                        concentration_summary.loc[
+                            concentration_summary["compound"].astype(str) == compound, "concentration_uM"
+                        ].nunique()
+                    )
+                detail = f"{n_conc} concentration(s) with usable wells; minimum {min_concentrations}"
+            else:
+                reason = "not_scored_other"
+            if not dropout_table.empty:
+                flagged = dropout_table[(dropout_table["compound"] == compound) & dropout_table["informative_dropout"]]
+                if len(flagged):
+                    detail = (detail + "; " if detail else "") + (
+                        "informative dropout at " + ";".join(f"{value:g}" for value in flagged["concentration_uM"]) + " uM"
+                    )
+            rows.append({"compound": compound, "reason": reason, "detail": detail})
+        return pd.DataFrame(rows, columns=list(EXCLUSION_COLUMNS))
+
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
         self.validate_runtime_feature_schema(df)
         df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
+        df_pre_qc = df.copy()
         df = self.apply_qc(df)
+        qc_rejections = self.qc_rejections
+        dropout_table = self.compute_dropout_table(df_pre_qc, qc_rejections)
+        for _, drop in dropout_table[dropout_table["informative_dropout"]].iterrows():
+            self.qc_log.append(
+                f"Warning: informative dropout for {drop['compound']} at {drop['concentration_uM']:g} uM: "
+                f"{int(drop['n_signal_loss'])}/{int(drop['n_wells_input'])} treated wells lost signal "
+                f"(vehicle loss {drop['vehicle_dropout_fraction']:.2f}). The score is computed from surviving "
+                "wells only and must not be read as a clean profile."
+            )
         variability_cfg = self.config.get("variability", {})
         variability_before, _ = self.run_variability_diagnostics(df)
         normalization_diagnostic: dict = {}
@@ -611,6 +790,9 @@ class CardioScorePipeline:
             scoring_effects,
             replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"),
         )
+        if concentration_summary.empty:
+            # e.g. every treated well was rejected by QC: report exclusions instead of raising KeyError.
+            concentration_summary = pd.DataFrame(columns=["compound", "concentration_uM"])
         min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
         require_min_concentrations = bool(concentration_cfg.get("require_min_concentrations_for_scoring", False))
         scorable_compounds: set[str] = set()
@@ -716,10 +898,29 @@ class CardioScorePipeline:
             summary_rows.append(row)
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
+            per_compound = self._dropout_summary_by_compound(dropout_table)
+            for column, default in (
+                ("n_wells_input_treated", 0),
+                ("n_wells_rejected_signal_loss", 0),
+                ("informative_dropout", False),
+                ("dropout_concentrations_uM", ""),
+                ("max_dropout_fraction", 0.0),
+            ):
+                summary[column] = summary["compound"].map(
+                    lambda name, column=column, default=default: per_compound.get(str(name), {}).get(column, default)
+                )
             summary = summary.sort_values("cardioscore", ascending=False)
-        excluded_compounds = sorted(
-            set(map(str, concentration_summary["compound"].unique())) - scorable_compounds
-        ) if not concentration_summary.empty else []
+        exclusion_table = self._build_exclusion_table(
+            df_pre_qc=df_pre_qc,
+            df_post_qc=df,
+            effects=effects,
+            concentration_summary=concentration_summary,
+            scorable_compounds=scorable_compounds,
+            scored={s.compound for s in scores},
+            dropout_table=dropout_table,
+            min_concentrations=min_concentrations,
+        )
+        excluded_compounds = sorted(set(exclusion_table["compound"].astype(str))) if not exclusion_table.empty else []
         provenance = build_provenance(
             input_frame=(dataset.features if isinstance(dataset, SyntheticMEADataset) else dataset),
             config=self.config,
@@ -743,4 +944,7 @@ class CardioScorePipeline:
             config=self.config,
             qc_log=self.qc_log,
             provenance=provenance,
+            qc_rejections=qc_rejections,
+            dropout_table=dropout_table,
+            exclusion_table=exclusion_table,
         )
