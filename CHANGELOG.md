@@ -9,6 +9,7 @@
 - Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
 
 ### Added
+- v5 signal validation hardening: prolonged FPD search through 900 ms, pre-filter noise estimation, over-detection penalty in beat-detection QC, and classical per-beat repolarization STV from consecutive FPDs.
 - Signal-level validation suite with exact synthetic ground truth, event-level precision/recall/F1, agreement metrics, deterministic rebuild checks, and a Multichannel Systems MC_Data adapter for Cardio PyMEA.
 - `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
 - Locked-stage primary analysis: AUROC with compound-level bootstrap CI and a pre-registered outcome rule, informative-dropout sensitivity analysis, exclusion reasons, and dropout/exclusion CSVs.
