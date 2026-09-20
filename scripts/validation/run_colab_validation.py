@@ -27,7 +27,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "Virelion-Biotech/Virelion-CardioScore"
-RUNNER_REVISION = "main"
+
+def resolve_runner_revision(environ=None) -> tuple[str, str | None]:
+    """Return (runner commit SHA or 'unpinned-main', runner-source SHA-256)."""
+    environ = os.environ if environ is None else environ
+    sha = str(environ.get("CARDIOSCORE_RUNNER_SHA", "")).strip().lower()
+    source_sha = str(environ.get("CARDIOSCORE_RUNNER_SOURCE_SHA256", "")).strip().lower() or None
+    hex_digits = set("0123456789abcdef")
+    if sha and not (len(sha) == 40 and set(sha) <= hex_digits):
+        raise ValueError("CARDIOSCORE_RUNNER_SHA must be a full 40-character commit SHA.")
+    if source_sha and not (len(source_sha) == 64 and set(source_sha) <= hex_digits):
+        raise ValueError("CARDIOSCORE_RUNNER_SOURCE_SHA256 must be a 64-character hex digest.")
+    return (sha or "unpinned-main", source_sha)
+
+
+RUNNER_REVISION, RUNNER_SOURCE_SHA256 = resolve_runner_revision()
 PIN = "869150cd5fb5ccf155fb066258404bd4df163ade"
 BRANCH = "main"
 ROOT = Path("/content/cardioscore_validation")
@@ -85,6 +99,11 @@ def file_inventory(path: Path) -> list[dict]:
 
 def install_pinned_package() -> str:
     log(f"Runner revision {RUNNER_REVISION}")
+    if RUNNER_REVISION == "unpinned-main":
+        log(
+            "WARNING: runner was fetched from a moving branch, so this run cannot identify "
+            "the runner code. Use the SHA-pinned launcher in VALIDATION_EXECUTION.md."
+        )
     log(f"Installing CardioScore at pinned revision {PIN}")
     subprocess.run(
         [
@@ -273,135 +292,304 @@ def make_source_receipt(source: Path, derived_dir: Path, source_id: str | None =
     return path
 
 
-def run_blinova(path: Path, derived_dir: Path) -> dict:
+# ---------------------------------------------------------------------------
+# Blinova 2018 workbook contract
+#
+# Structural problems stop the stage. Documented source quirks are retained as
+# explicit audit flags and never rewritten or relabeled.
+# ---------------------------------------------------------------------------
+BLINOVA_REQUIRED_COLUMNS = (
+    "Drug_Name", "Cell_type", "risk", "Platform", "Type_of_EADs",
+    "conc", "EAD", "ddFPDc", "site",
+)
+BLINOVA_PANEL_SIZE = 28
+BLINOVA_N_SITES = 10
+BLINOVA_NAME_ALIASES = {
+    "d,l sotalol": "sotalol",
+    "d,l,sotalol": "sotalol",
+}
+BLINOVA_RISK_MAP = {"l": "low", "m": "intermediate", "h": "high"}
+BLINOVA_DOCUMENTED_PLATFORMS = ("AXN", "CLY", "ECR", "AMD", "MCS")
+BLINOVA_ARRHYTHMIA_EVENT_TYPES = ("A", "B", "C", "D")
+BLINOVA_QUIESCENCE_EVENT_TYPE = "Q"
+BLINOVA_NO_EVENT_CLAIMS = ("terfenadine", "verapamil")
+BLINOVA_MAX_LISTED_ROWS = 25
+
+
+def _blinova_flag(code: str, severity: str, message: str, **detail) -> dict:
+    return {"code": code, "severity": severity, "message": message, **detail}
+
+
+def _excel_rows(index) -> list[int]:
+    return [int(i) + 2 for i in list(index)[:BLINOVA_MAX_LISTED_ROWS]]
+
+
+def _count_by(series) -> dict[str, int]:
+    return {str(k): int(v) for k, v in series.value_counts().sort_index().items()}
+
+
+def audit_blinova_frame(df, derived_dir: Path) -> dict:
     import pandas as pd
 
-    required = {
-        "Drug_Name",
-        "Cell_type",
-        "risk",
-        "Platform",
-        "Type_of_EADs",
-        "conc",
-        "EAD",
-        "ddFPDc",
-        "site",
-    }
-    df = pd.read_excel(path)
-    missing = sorted(required - set(df.columns))
-    if missing:
-        raise ValueError(f"Blinova source is missing required columns: {missing}")
+    missing_cols = sorted(set(BLINOVA_REQUIRED_COLUMNS) - set(df.columns))
+    if missing_cols:
+        raise ValueError(f"Blinova source is missing required columns: {missing_cols}")
+    if df.empty:
+        raise ValueError("Blinova source has no rows.")
 
-    # Canonicalize the known sotalol naming variants before counting compounds.
-    # Preserve the raw Drug_Name column for provenance; never broadly fuzzy-match names.
-    raw_names = df["Drug_Name"].astype(str).str.strip()
-    canonical_names = raw_names.str.lower().replace({
-        "d,l sotalol": "sotalol",
-        "d,l,sotalol": "sotalol",
-    })
-    raw_to_canonical = (
-        pd.DataFrame({"raw": raw_names, "canonical": canonical_names})
-        .drop_duplicates()
-        .sort_values(["canonical", "raw"])
-    )
-    canonical_n = canonical_names.nunique()
-    if canonical_n != 28:
+    frame = df.reset_index(drop=True).copy()
+    flags: list[dict] = []
+
+    # Compound identity
+    if frame["Drug_Name"].isna().any():
         raise ValueError(
-            f"Expected the released 28-drug panel after documented name normalization; "
-            f"found {canonical_n} canonical compounds. Raw aliases: "
-            f"{raw_to_canonical.to_dict(orient='records')}"
+            f"Blinova Drug_Name is missing in spreadsheet row(s) "
+            f"{_excel_rows(frame.index[frame['Drug_Name'].isna()])}."
         )
-    if df["site"].nunique() != 10:
-        raise ValueError(f"Expected 10 sites, found {df['site'].nunique()}.")
-    if not pd.to_numeric(df["conc"], errors="coerce").notna().all():
-        raise ValueError("Blinova conc contains non-numeric values.")
-    dd_numeric = pd.to_numeric(df["ddFPDc"], errors="coerce")
-    dd_malformed = df["ddFPDc"].notna() & dd_numeric.isna()
+    raw_names = frame["Drug_Name"].astype(str).str.strip()
+    frame["compound"] = raw_names.str.lower().replace(BLINOVA_NAME_ALIASES)
+    n_canonical = int(frame["compound"].nunique())
+    if n_canonical != BLINOVA_PANEL_SIZE:
+        mapping = (
+            pd.DataFrame({"raw": raw_names, "canonical": frame["compound"]})
+            .drop_duplicates()
+            .sort_values(["canonical", "raw"])
+        )
+        raise ValueError(
+            f"Expected the released {BLINOVA_PANEL_SIZE}-drug panel after documented name "
+            f"normalization; found {n_canonical} canonical compounds. "
+            f"Raw aliases: {mapping.to_dict(orient='records')}"
+        )
+
+    if frame["site"].isna().any():
+        raise ValueError(
+            f"Blinova site is missing in spreadsheet row(s) "
+            f"{_excel_rows(frame.index[frame['site'].isna()])}."
+        )
+    site = pd.to_numeric(frame["site"], errors="coerce")
+    if site.isna().any():
+        raise ValueError(
+            f"Blinova site contains missing or non-numeric values in spreadsheet row(s) "
+            f"{_excel_rows(frame.index[site.isna()])}."
+        )
+    if int(site.nunique()) != BLINOVA_N_SITES:
+        raise ValueError(f"Expected {BLINOVA_N_SITES} sites, found {int(site.nunique())}.")
+
+    # Numeric fields: conc/EAD are complete; ddFPDc may legitimately be missing.
+    conc = pd.to_numeric(frame["conc"], errors="coerce")
+    if conc.isna().any():
+        raise ValueError(
+            "Blinova conc contains missing or non-numeric values in spreadsheet row(s) "
+            f"{_excel_rows(frame.index[conc.isna()])}."
+        )
+    ead = pd.to_numeric(frame["EAD"], errors="coerce")
+    if ead.isna().any():
+        raise ValueError(
+            "Blinova EAD contains missing or non-numeric values in spreadsheet row(s) "
+            f"{_excel_rows(frame.index[ead.isna()])}."
+        )
+    dd = pd.to_numeric(frame["ddFPDc"], errors="coerce")
+    dd_malformed = frame["ddFPDc"].notna() & dd.isna()
     if dd_malformed.any():
-        examples = sorted({str(v) for v in df.loc[dd_malformed, "ddFPDc"].tolist()})[:10]
+        examples = sorted({str(v) for v in frame.loc[dd_malformed, "ddFPDc"]})[:10]
+        raise ValueError(f"Blinova ddFPDc contains malformed non-numeric value(s): {examples}")
+    n_dd_missing = int(dd.isna().sum())
+
+    # Risk: blanks are audit flags; labeled rows alone define the compound reference.
+    def _clean(value):
+        if pd.isna(value) or str(value).strip() == "":
+            return None
+        return str(value).strip().lower()
+
+    risk_text = frame["risk"].map(_clean)
+    risk_missing = risk_text.isna()
+    unknown_risk = risk_text.notna() & ~risk_text.isin(list(BLINOVA_RISK_MAP))
+    if unknown_risk.any():
         raise ValueError(
-            f"Blinova ddFPDc contains malformed non-numeric value(s): {examples}"
+            f"Unexpected Blinova risk label(s) {sorted(set(risk_text[unknown_risk]))}; "
+            "no mapping was invented."
         )
-    n_dd_missing = int(dd_numeric.isna().sum())
-
-    risk_map = {"l": "low", "m": "intermediate", "h": "high"}
-    frame = df.copy()
-    frame["compound"] = (
-        frame["Drug_Name"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .replace({
-            "d,l sotalol": "sotalol",
-            "d,l,sotalol": "sotalol",
-        })
-    )
-    frame["raw_Drug_Name"] = frame["Drug_Name"]
-    frame["reference_risk"] = (
-        frame["risk"].astype(str).str.strip().str.lower().map(risk_map)
-    )
-    if frame["reference_risk"].isna().any():
-        raise ValueError("Unexpected Blinova risk label; no mapping was invented.")
-
-    platforms = set(frame["Platform"].astype(str).str.strip())
-    allowed = {"AXN", "CLY", "ECR", "AMD", "MCS"}
-    unexpected = sorted(platforms - allowed)
-    if unexpected:
-        raise ValueError(
-            f"Unexpected Blinova platform code(s): {unexpected}. "
-            "Do not silently relabel them."
+    frame["reference_risk"] = risk_text.map(BLINOVA_RISK_MAP)
+    if risk_missing.any():
+        flags.append(
+            _blinova_flag(
+                "MISSING_RISK_ROWS",
+                "warning",
+                "Source rows have no risk label. Labels were NOT injected into these rows; "
+                "the compound reference uses only labeled rows of the same compound.",
+                n_rows=int(risk_missing.sum()),
+                spreadsheet_rows=_excel_rows(frame.index[risk_missing]),
+                rows_by_compound=_count_by(frame.loc[risk_missing, "compound"]),
+            )
         )
 
-    event = frame["Type_of_EADs"].astype(str).str.strip().str.upper()
-    broad = pd.to_numeric(frame["EAD"], errors="coerce")
-    if broad.isna().any():
-        raise ValueError("Blinova EAD contains non-numeric values.")
-    frame["is_abcd_arrhythmia"] = event.isin({"A", "B", "C", "D"})
-    frame["is_Q_quiescence"] = event.eq("Q")
-    if ((frame["is_abcd_arrhythmia"] | frame["is_Q_quiescence"]) & ~broad.eq(1)).any():
-        raise ValueError("Blinova event semantics are internally inconsistent.")
+    # Platform/cell type: preserve unexpected values, never silently relabel.
+    def _label(value):
+        if pd.isna(value) or str(value).strip() == "":
+            return "<missing>"
+        return str(value).strip()
 
-    for drug in ("verapamil", "terfenadine"):
-        mask = frame["compound"].eq(drug)
-        if mask.any() and int(frame.loc[mask, "is_abcd_arrhythmia"].sum()) != 0:
-            raise ValueError(f"{drug} contains an unexpected A-D event; inspect the source.")
+    platform = frame["Platform"].map(_label)
+    cell_type = frame["Cell_type"].map(_label)
+    documented_platform = platform.isin(list(BLINOVA_DOCUMENTED_PLATFORMS))
+    if (~documented_platform).any():
+        odd = platform[~documented_platform]
+        flags.append(
+            _blinova_flag(
+                "UNDOCUMENTED_PLATFORM_CODE",
+                "warning",
+                "Platform code(s) outside the paper's documented set. Codes were NOT relabeled.",
+                n_rows=int(len(odd)),
+                rows_by_code=_count_by(odd),
+                compounds_affected=sorted({str(c) for c in frame.loc[odd.index, "compound"]}),
+            )
+        )
+    if (cell_type == "<missing>").any():
+        flags.append(
+            _blinova_flag(
+                "MISSING_CELL_TYPE_ROWS",
+                "warning",
+                "Rows without Cell_type; preserved as '<missing>'.",
+                n_rows=int((cell_type == "<missing>").sum()),
+                spreadsheet_rows=_excel_rows(frame.index[cell_type == "<missing>"]),
+            )
+        )
 
-    reference = frame[["compound", "reference_risk"]].drop_duplicates()
-    if reference.groupby("compound").size().max() != 1:
-        raise ValueError("Blinova reference mapping is not one-to-one by compound.")
+    # Event semantics: Q is quiescence, not an A-D arrhythmia.
+    event = frame["Type_of_EADs"].map(
+        lambda v: "" if pd.isna(v) else str(v).strip().upper()
+    )
+    is_abcd = event.isin(list(BLINOVA_ARRHYTHMIA_EVENT_TYPES))
+    is_q = event.eq(BLINOVA_QUIESCENCE_EVENT_TYPE)
+    typed = is_abcd | is_q
+    inconsistent = typed & ~ead.eq(1)
+    if inconsistent.any():
+        raise ValueError(
+            "Blinova event semantics are internally inconsistent: "
+            f"{int(inconsistent.sum())} row(s) carry an A-D/Q event type but EAD != 1 "
+            f"(spreadsheet rows {_excel_rows(frame.index[inconsistent])})."
+        )
+    other_labels = event[~typed & event.ne("")]
+    if len(other_labels):
+        flags.append(
+            _blinova_flag(
+                "EVENT_TYPE_OTHER_LABELS",
+                "info",
+                "Type_of_EADs values other than A-D/Q are present; kept verbatim.",
+                counts=_count_by(other_labels),
+            )
+        )
+    ead1_untyped = ead.eq(1) & ~typed
+    if ead1_untyped.any():
+        flags.append(
+            _blinova_flag(
+                "EAD_FLAG_WITHOUT_EVENT_TYPE",
+                "info",
+                "EAD == 1 rows have no A-D/Q event type; semantics remain unresolved.",
+                n_rows=int(ead1_untyped.sum()),
+                rows_by_compound=_count_by(frame.loc[ead1_untyped, "compound"]),
+            )
+        )
+
+    # Published-claim cross-check: warning only.
+    dataset_key = frame["site"].astype(str) + "|" + cell_type
+    frame["_ead1"] = ead.eq(1)
+    for compound in BLINOVA_NO_EVENT_CLAIMS:
+        mask = frame["compound"].eq(compound)
+        if not mask.any():
+            continue
+        stats = {
+            "n_rows": int(mask.sum()),
+            "n_site_celltype_datasets": int(dataset_key[mask].nunique()),
+            "rows_abcd_events": int((mask & is_abcd).sum()),
+            "datasets_with_abcd_events": int(dataset_key[mask & is_abcd].nunique()),
+            "rows_Q_events": int((mask & is_q).sum()),
+            "rows_EAD_eq_1": int((mask & frame["_ead1"]).sum()),
+            "datasets_with_EAD_eq_1": int(dataset_key[mask & frame["_ead1"]].nunique()),
+        }
+        if stats["rows_abcd_events"] > 0:
+            flags.append(
+                _blinova_flag(
+                    "PUBLISHED_CLAIM_MISMATCH",
+                    "warning",
+                    f"Paper reports no arrhythmia-like events for {compound}; workbook has A-D typed events.",
+                    compound=compound,
+                    **stats,
+                )
+            )
+        elif stats["rows_EAD_eq_1"] > 0:
+            flags.append(
+                _blinova_flag(
+                    "EAD_FLAG_WITHOUT_ARRHYTHMIA_TYPE",
+                    "warning",
+                    f"Paper reports no arrhythmia-like events for {compound}; EAD == 1 rows exist but none are typed A-D.",
+                    compound=compound,
+                    **stats,
+                )
+            )
+    frame = frame.drop(columns="_ead1")
+
+    # Compound-level reference: only labeled rows, no imputation.
+    labeled = frame.loc[frame["reference_risk"].notna(), ["compound", "reference_risk"]].drop_duplicates()
+    conflicts = labeled.groupby("compound")["reference_risk"].nunique()
+    conflicts = conflicts[conflicts > 1]
+    if len(conflicts):
+        raise ValueError(
+            f"Blinova reference mapping is not one-to-one by compound: {sorted(conflicts.index)}"
+        )
+    unlabeled = sorted(set(frame["compound"]) - set(labeled["compound"]))
+    if unlabeled:
+        raise ValueError(
+            f"Compound(s) with no labeled risk row; no label was invented: {unlabeled}"
+        )
+    reference = labeled.sort_values("compound").reset_index(drop=True)
+
+    frame["platform_documented"] = documented_platform
+    frame["risk_missing"] = risk_missing
+    frame["is_abcd_arrhythmia"] = is_abcd
+    frame["is_Q_quiescence"] = is_q
 
     reference_path = derived_dir / "blinova_reference.csv"
     semantic_path = derived_dir / "blinova_semantic_summary.csv"
+    flags_path = derived_dir / "blinova_audit_flags.json"
     reference.to_csv(reference_path, index=False)
     frame[
         [
-            "compound",
-            "Drug_Name",
-            "risk",
-            "Platform",
-            "site",
-            "Cell_type",
-            "conc",
-            "ddFPDc",
-            "EAD",
-            "Type_of_EADs",
-            "is_abcd_arrhythmia",
-            "is_Q_quiescence",
+            "compound", "Drug_Name", "risk", "Platform", "site", "Cell_type",
+            "conc", "ddFPDc", "EAD", "Type_of_EADs",
+            "is_abcd_arrhythmia", "is_Q_quiescence",
+            "platform_documented", "risk_missing",
         ]
     ].to_csv(semantic_path, index=False)
+    write_json(
+        flags_path,
+        {
+            "n_rows": int(len(frame)),
+            "n_compounds": int(reference["compound"].nunique()),
+            "flags": flags,
+        },
+    )
 
     return {
         "status": "complete",
         "reference_path": str(reference_path),
         "semantic_summary_path": str(semantic_path),
+        "flags_path": str(flags_path),
         "n_rows": int(len(frame)),
         "n_compounds": int(reference["compound"].nunique()),
-        "n_sites": int(frame["site"].nunique()),
-        "n_abcd_events": int(frame["is_abcd_arrhythmia"].sum()),
-        "n_Q_events": int(frame["is_Q_quiescence"].sum()),
+        "n_sites": int(site.nunique()),
+        "n_abcd_events": int(is_abcd.sum()),
+        "n_Q_events": int(is_q.sum()),
         "n_ddFPDc_missing": n_dd_missing,
-        "ddFPDc_missing_fraction": float(n_dd_missing / len(frame)) if len(frame) else 0.0,
+        "ddFPDc_missing_fraction": float(n_dd_missing / len(frame)),
+        "n_flags": len(flags),
+        "flags": flags,
     }
+
+
+def run_blinova(path: Path, derived_dir: Path) -> dict:
+    import pandas as pd
+    return audit_blinova_frame(pd.read_excel(path), derived_dir)
 
 
 def dataframe_sha256(df) -> str:
@@ -884,6 +1072,8 @@ def main() -> None:
     run_manifest = {
         "run_label": RUN_LABEL,
         "package_pin": PIN,
+        "runner_revision": RUNNER_REVISION,
+        "runner_source_sha256": RUNNER_SOURCE_SHA256,
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_files": {
             p.name: {
@@ -913,9 +1103,13 @@ def main() -> None:
     # Stage 01: Blinova/CiPA semantic/component validation.
     if classified["blinova"] is not None:
         try:
-            run_manifest["stages"]["blinova_summary"] = run_blinova(
-                classified["blinova"], paths["derived"]
-            )
+            blinova = run_blinova(classified["blinova"], paths["derived"])
+            run_manifest["stages"]["blinova_summary"] = blinova
+            for flag in blinova["flags"]:
+                log(
+                    f"Blinova {flag['severity']} [{flag['code']}]: "
+                    f"{flag['message']}"
+                )
         except Exception as exc:
             run_manifest["stages"]["blinova_summary"] = {
                 "status": "failed",
@@ -949,7 +1143,7 @@ def main() -> None:
     if locked_assets is not None:
         try:
             run_manifest["stages"]["locked_external"] = run_locked_external(
-                locked_assets, paths["results"]
+                locked_assets, paths["results"], paths["input"]
             )
         except Exception as exc:
             run_manifest["stages"]["locked_external"] = {
@@ -997,7 +1191,8 @@ def main() -> None:
     # Surface a compact state report.
     print("\n=== CardioScore validation state ===")
     for stage, info in run_manifest["stages"].items():
-        print(f"{stage:20s} {info.get('status', 'unknown')}")
+        note = f"  ({info['n_flags']} flag(s), see run_manifest.json)" if info.get("n_flags") else ""
+        print(f"{stage:20s} {info.get('status', 'unknown')}{note}")
     print(f"Run workspace: {paths['run']}")
     print(f"Results:        {paths['results']}")
 
