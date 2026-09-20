@@ -1,0 +1,1803 @@
+diff -ruN a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md	2026-09-20 15:43:12.806310513 +0000
++++ b/CHANGELOG.md	2026-09-20 15:43:12.978930519 +0000
+@@ -2,7 +2,15 @@
+ 
+ ## Unreleased
+ 
++### Fixed
++- Compounds whose treated wells lost signal at high concentration (cells stopped beating) were silently scored from the surviving lower concentrations, e.g. a High-risk profile became Low, or the compound vanished from the summary. The pipeline now reports structured QC rejections, per-concentration dropout, an `informative_dropout` flag, and an exclusion table with reasons; a dataset where no treated well survives QC no longer raises a bare `KeyError`.
++- `aggregate_compound_effects` no longer turns an endpoint with no finite values into a zero effect; it returns NaN so the scoring engine fails closed.
++- The locked feature-schema check no longer forces missing endpoints to be fabricated for wells with no usable signal; missing endpoints remain an error on wells that have signal.
++- Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
++
+ ### Added
++- `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
++- Locked-stage primary analysis: AUROC with compound-level bootstrap CI and a pre-registered outcome rule, informative-dropout sensitivity analysis, exclusion reasons, and dropout/exclusion CSVs.
+ - Optional exposure-response evidence contribution to CardioScore using only quality-passing 4PL fits.
+ - Dose-response evidence is calculated from the tested log-concentration range above fitted EC50.
+ - Default dose-response scoring weight remains `0.0`, preserving the endpoint-only CardioScore unless explicitly enabled.
+diff -ruN a/docs/external_validation_runbook.md b/docs/external_validation_runbook.md
+--- a/docs/external_validation_runbook.md	2026-09-20 15:43:12.807150492 +0000
++++ b/docs/external_validation_runbook.md	2026-09-20 15:43:12.979623091 +0000
+@@ -20,3 +20,28 @@
+ 
+ ## Scientific validation gate
+ This engineering layer does not establish that an external dataset is scientifically authoritative. Issue #1 remains open until the official CiPA source archive is independently obtained, verified, inventoried, parsed, reconciled with the publication, and then evaluated without tuning on the validation set.
++
++## Informative dropout (signal loss is not "no effect")
++QC used to remove wells that lost signal (cells stopped beating, no usable electrodes, endpoints not computable) without any
++concentration-level accounting, so a genuinely proarrhythmic compound could drop from High to Low, or vanish, when its top
++concentrations collapsed. The pipeline now records every rejection with reason codes (`qc_rejections`), reports per
++compound x concentration signal loss (`dropout_table`), flags `informative_dropout` when at least
++`quality_control.informative_dropout_min_fraction` of treated wells lost signal and that exceeds the compound's vehicle loss by
++`informative_dropout_min_excess`, and lists every compound it could not score with a reason (`exclusion_table`). Missing
++endpoints are never aggregated to zero. In the locked feature table a well may carry missing endpoints only if it has no
++usable signal (`n_electrodes == 0` or `beat_detection_rate == 0`).
++
++## Freeze before scoring
++1. Commit the CardioScore code to be validated; note its commit SHA `A`.
++2. Set `PIN = A` in `scripts/validation/run_colab_validation.py`.
++3. Resolve every `null` in `validation/preregistration.yaml` (owner attestations, dataset DOI/URL, raw-data availability),
++   review the proposed numeric criteria, and set `status: frozen`.
++4. Run `python scripts/validation/make_freeze_manifest.py --package-sha A`. It refuses while anything is unresolved or
++   disagrees with the shipped configuration.
++5. Commit the pre-registration, the manifest and the `PIN` change as commit `B`, and run the Colab launcher with `RUNNER_SHA = B`.
++
++The locked stage reads both files from commit `B`, verifies their hashes against the installed package configuration, and
++produces no headline result if anything differs. The primary result is the pre-registered AUROC (positive class
++intermediate + high) with a compound-level bootstrap interval and a three-outcome rule; the report also contains the
++three-class metrics, the informative-dropout list, and a sensitivity analysis that reclassifies those compounds as High.
++The git history, not this code, is the evidence of when the plan was frozen.
+diff -ruN a/scripts/validation/make_freeze_manifest.py b/scripts/validation/make_freeze_manifest.py
+--- a/scripts/validation/make_freeze_manifest.py	1970-01-01 00:00:00.000000000 +0000
++++ b/scripts/validation/make_freeze_manifest.py	2026-09-20 15:43:12.980186094 +0000
+@@ -0,0 +1,41 @@
++#!/usr/bin/env python3
++"""Create validation/freeze_manifest.json from a fully resolved pre-registration.
++
++Refuses to write anything while the pre-registration has unresolved fields, is not marked
++``status: frozen``, or disagrees with the shipped scoring configuration.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[2]
++sys.path.insert(0, str(REPO_ROOT))
++
++from virelion_cardioscore.validation.freeze import FreezeError, build_freeze_manifest  # noqa: E402
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--package-sha", required=True, help="40-character commit SHA of the code being frozen")
++    parser.add_argument("--prereg", type=Path, default=REPO_ROOT / "validation" / "preregistration.yaml")
++    parser.add_argument("--config-dir", type=Path, default=REPO_ROOT / "virelion_cardioscore" / "config")
++    parser.add_argument("--out", type=Path, default=REPO_ROOT / "validation" / "freeze_manifest.json")
++    args = parser.parse_args(argv)
++    try:
++        manifest = build_freeze_manifest(
++            prereg_path=args.prereg, config_dir=args.config_dir, package_sha=args.package_sha
++        )
++    except FreezeError as exc:
++        print(exc, file=sys.stderr)
++        return 1
++    args.out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    print(f"Wrote {args.out}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN a/scripts/validation/run_colab_validation.py b/scripts/validation/run_colab_validation.py
+--- a/scripts/validation/run_colab_validation.py	2026-09-20 15:43:12.967718612 +0000
++++ b/scripts/validation/run_colab_validation.py	2026-09-20 15:43:12.980135226 +0000
+@@ -51,6 +51,8 @@
+     "locked_external_validation.json",
+     "locked_compound_validation.csv",
+     "locked_failures_by_compound.csv",
++    "locked_dropout_by_concentration.csv",
++    "locked_exclusions.csv",
+     "secondary_sensitivity.csv",
+     "qc_log.csv",
+     "qc_summary.json",
+@@ -447,6 +449,8 @@
+                 n_rows=int(len(odd)),
+                 rows_by_code=_count_by(odd),
+                 compounds_affected=sorted({str(c) for c in frame.loc[odd.index, "compound"]}),
++                site_celltype_datasets=sorted(str(k) for k in dataset_key[odd.index].unique()),
++                rows_by_dataset=_count_by(dataset_key[odd.index]),
+             )
+         )
+     if (cell_type == "<missing>").any():
+@@ -680,6 +684,76 @@
+     }
+ 
+ 
++FREEZE_REPO_PATHS = ("validation/preregistration.yaml", "validation/freeze_manifest.json")
++
++
++def _http_get(url: str) -> bytes:
++    import urllib.request
++
++    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https GitHub URL
++        return response.read()
++
++
++def load_freeze_files(
++    environ=None, fetch=None, runner_revision: str | None = None
++) -> tuple[bytes, dict, str]:
++    """Return (pre-registration bytes, freeze manifest, source description).
++
++    Files come from the immutable GitHub commit the runner itself was fetched from, so the commit
++    history shows when the plan was frozen. ``CARDIOSCORE_FREEZE_DIR`` overrides this for offline
++    or test use and is recorded as a local override.
++    """
++    from virelion_cardioscore.validation.freeze import load_manifest
++
++    environ = os.environ if environ is None else environ
++    override = str(environ.get("CARDIOSCORE_FREEZE_DIR", "")).strip()
++    if override:
++        base = Path(override)
++        prereg_bytes = (base / "preregistration.yaml").read_bytes()
++        manifest = load_manifest((base / "freeze_manifest.json").read_bytes())
++        return prereg_bytes, manifest, f"local_override:{base}"
++    revision = RUNNER_REVISION if runner_revision is None else runner_revision
++    if revision == "unpinned-main":
++        raise RuntimeError(
++            "The runner is not SHA-pinned, so the freeze cannot be read from an immutable commit."
++        )
++    fetch = fetch or _http_get
++    base_url = f"https://raw.githubusercontent.com/{REPO}/{revision}/"
++    prereg_bytes = fetch(base_url + FREEZE_REPO_PATHS[0])
++    manifest = load_manifest(fetch(base_url + FREEZE_REPO_PATHS[1]))
++    return prereg_bytes, manifest, f"github:{REPO}@{revision}"
++
++
++def verify_locked_freeze(
++    environ=None, fetch=None, runner_revision: str | None = None, package_sha: str | None = None
++) -> tuple[dict, dict | None]:
++    """Verify the pre-registration/freeze; returns (audit info, parsed pre-registration or None)."""
++    import virelion_cardioscore
++    from virelion_cardioscore.validation.freeze import parse_preregistration, verify_freeze
++
++    try:
++        prereg_bytes, manifest, source = load_freeze_files(environ, fetch, runner_revision)
++    except Exception as exc:
++        return {"verified": False, "problems": [f"Freeze files unavailable: {exc}"]}, None
++    config_dir = Path(virelion_cardioscore.__file__).resolve().parent / "config"
++    problems = verify_freeze(
++        manifest,
++        prereg_bytes=prereg_bytes,
++        config_dir=config_dir,
++        package_sha=PIN if package_sha is None else package_sha,
++    )
++    info = {
++        "verified": not problems,
++        "problems": problems,
++        "source": source,
++        "validation_version": manifest.get("validation_version"),
++        "frozen_at_utc": manifest.get("frozen_at_utc"),
++        "package_sha": manifest.get("package_sha"),
++        "preregistration_sha256": manifest.get("preregistration_sha256"),
++    }
++    return info, (parse_preregistration(prereg_bytes) if not problems else None)
++
++
+ def find_locked_assets(classified: dict, derived_dir: Path) -> dict[str, Path] | None:
+     features = classified["feature_csv"]
+     reference = classified["reference"]
+@@ -710,7 +784,39 @@
+     return sha256_file(cfg)
+ 
+ 
+-def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: Path) -> dict:
++def evaluate_primary_analysis(joined, prereg: dict, *, score_override=None) -> dict:
++    """Pre-registered primary analysis (AUROC + compound bootstrap CI + three-outcome rule)."""
++    from virelion_cardioscore.validation.metrics import (
++        RISK_ORDER,
++        binary_auroc_bootstrap,
++        primary_outcome,
++    )
++
++    spec = prereg["primary_analysis"]
++    positive_ordinals = {RISK_ORDER[str(name).strip().lower()] for name in spec["positive_class"]}
++    positive = [
++        RISK_ORDER[str(value).strip().lower()] in positive_ordinals for value in joined["reference_risk"]
++    ]
++    scores = joined["cardioscore"] if score_override is None else score_override
++    ci = spec["confidence_interval"]
++    result = binary_auroc_bootstrap(
++        positive,
++        scores,
++        n_bootstrap=int(ci["n_bootstrap"]),
++        seed=int(ci["seed"]),
++        confidence=float(ci["confidence"]),
++    )
++    result["outcome"] = primary_outcome(result, spec["outcome_rule"])
++    return result
++
++
++def run_locked_external(
++    assets: dict[str, Path],
++    results_dir: Path,
++    input_dir: Path,
++    prereg: dict | None = None,
++    freeze_info: dict | None = None,
++) -> dict:
+     import pandas as pd
+     import yaml
+ 
+@@ -781,6 +887,25 @@
+     )
+ 
+     excluded = sorted(set(reference["compound"]) - set(joined["compound"]))
++    exclusion_reasons = {
++        str(row["compound"]): {"reason": str(row["reason"]), "detail": str(row["detail"])}
++        for _, row in result.exclusion_table.iterrows()
++    }
++    for compound in excluded:
++        exclusion_reasons.setdefault(
++            str(compound), {"reason": "absent_from_feature_table", "detail": ""}
++        )
++    summary = result.summary_table
++    informative = (
++        sorted(
++            set(summary.loc[summary["informative_dropout"].astype(bool), "compound"].astype(str))
++            & set(joined["compound"].astype(str))
++        )
++        if "informative_dropout" in summary.columns
++        else []
++    )
++    result.dropout_table.to_csv(results_dir / "locked_dropout_by_concentration.csv", index=False)
++    result.exclusion_table.to_csv(results_dir / "locked_exclusions.csv", index=False)
+     payload = {
+         "package_commit": PIN,
+         "locked": True,
+@@ -789,6 +914,11 @@
+         "source_sha256": receipt.get("sha256"),
+         "derivation_manifest": derivation,
+         "excluded_or_unscoreable_compounds": excluded,
++        "exclusion_reasons": {compound: exclusion_reasons[compound] for compound in excluded},
++        "informative_dropout_compounds": informative,
++        "freeze": freeze_info,
++        "primary_analysis": None,
++        "dropout_sensitivity": None,
+         "qc_log": result.qc_log,
+     }
+ 
+@@ -799,6 +929,27 @@
+         )
+         failures = stratified_failures(joined, strata=("compound",))
+         payload["metrics"] = metrics.to_dict()
++        if prereg is not None:
++            payload["primary_analysis"] = evaluate_primary_analysis(joined, prereg)
++            log("Primary analysis: " + json.dumps(payload["primary_analysis"], indent=2))
++            if informative:
++                assert (
++                    prereg["secondary_analyses"]["dropout_sensitivity"][
++                        "reclassify_informative_dropout_as"
++                    ]
++                    == "high"
++                ), "Only reclassification of informative-dropout compounds as 'high' is implemented."
++                sensitivity = joined.copy()
++                flagged = sensitivity["compound"].astype(str).isin(informative)
++                sensitivity.loc[flagged, "cardioscore"] = 1.0
++                sensitivity.loc[flagged, "observed_risk"] = "High"
++                payload["dropout_sensitivity"] = {
++                    "compounds_reclassified_as_high": informative,
++                    "primary_analysis": evaluate_primary_analysis(sensitivity, prereg),
++                    "three_class_metrics": locked_metrics(
++                        sensitivity["reference_risk"], sensitivity["observed_risk"]
++                    ).to_dict(),
++                }
+         payload["compound_scores"] = joined.to_dict(orient="records")
+         payload["failures"] = failures.to_dict(orient="records")
+         joined.to_csv(results_dir / "locked_compound_validation.csv", index=False)
+@@ -811,6 +962,9 @@
+         joined.to_csv(results_dir / "locked_compound_validation.csv", index=False)
+         log("Headline external metrics BLOCKED because reference compounds were not scoreable.")
+         log("Excluded compounds: " + ", ".join(excluded))
++        for compound in excluded:
++            item = exclusion_reasons[compound]
++            log(f"  {compound}: {item['reason']} {item['detail']}".rstrip())
+ 
+     write_json(results_dir / "locked_external_validation.json", payload)
+     return {
+@@ -819,6 +973,9 @@
+         "n_reference": int(len(reference)),
+         "n_scored": int(len(joined)),
+         "n_excluded": int(len(excluded)),
++        "n_informative_dropout_compounds": int(len(informative)),
++        "primary_auroc": (payload["primary_analysis"] or {}).get("auroc"),
++        "primary_outcome": (payload["primary_analysis"] or {}).get("outcome"),
+     }
+ 
+ 
+@@ -1184,10 +1341,24 @@
+     locked_assets = find_locked_assets(classified, paths["derived"])
+ 
+     # Stage 03: locked external test only when explicit lineage is supplied.
++    freeze_info, prereg = (
++        verify_locked_freeze() if locked_assets is not None else ({"verified": False}, None)
++    )
+     if locked_assets is not None:
++        run_manifest["freeze"] = freeze_info
++    if locked_assets is not None and not freeze_info["verified"]:
++        run_manifest["stages"]["locked_external"] = {
++            "status": "blocked",
++            "reason": "Pre-registration/freeze manifest did not verify; no external result was produced.",
++            "problems": freeze_info.get("problems", []),
++        }
++        log("Locked external stage BLOCKED: freeze not verified.")
++        for problem in freeze_info.get("problems", []):
++            log(f"  - {problem}")
++    elif locked_assets is not None:
+         try:
+             run_manifest["stages"]["locked_external"] = run_locked_external(
+-                locked_assets, paths["results"], paths["input"]
++                locked_assets, paths["results"], paths["input"], prereg, freeze_info
+             )
+         except Exception as exc:
+             run_manifest["stages"]["locked_external"] = {
+diff -ruN a/tests/test_dropout_accounting.py b/tests/test_dropout_accounting.py
+--- a/tests/test_dropout_accounting.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_dropout_accounting.py	2026-09-20 15:43:12.983546383 +0000
+@@ -0,0 +1,250 @@
++"""Informative-dropout accounting and no-zero-fill regression tests.
++
++A compound whose cells stop beating at high concentration must never look cleaner because QC
++removed its worst wells, and an endpoint that cannot be computed must never be scored as "no effect".
++"""
++
++from __future__ import annotations
++
++import json
++
++import numpy as np
++import pandas as pd
++import pytest
++
++from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
++
++CONCENTRATIONS = [0.1, 1.0, 10.0, 100.0]
++EFFECT_BY_CONCENTRATION = [0.02, 0.10, 0.60, 1.50]  # strongly proarrhythmic at high concentration
++ENDPOINTS = ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]
++
++
++def make_frame(
++    n_dead_top_concentrations: int = 0,
++    *,
++    compound: str = "DRUG",
++    vehicle_dead: int = 0,
++    treated_per_concentration: int = 4,
++    dead_mode: str = "collapse",
++) -> pd.DataFrame:
++    """Vehicle plus four treated concentrations; the top N concentrations optionally lose signal.
++
++    dead_mode="collapse": endpoints NaN, no electrodes, no beat detection (cells stopped beating).
++    dead_mode="noise": wells stay measurable but are too noisy (a purely technical failure).
++    """
++    rng = np.random.default_rng(0)
++    rows = []
++    for i in range(6):
++        rows.append(
++            {
++                "compound": compound,
++                "well": f"V{i}",
++                "concentration_uM": 0.0,
++                "vehicle": True,
++                "site": "S1",
++                "cell_type": "C",
++                "concentration_index": 0,
++                "fpd_ms": 400 + rng.normal(0, 5),
++                "beat_rate_bpm": 60 + rng.normal(0, 1),
++                "amplitude_uv": 200 + rng.normal(0, 3),
++                "stv": 5 + rng.normal(0, 0.2),
++                "triangulation_proxy": 1.0 + rng.normal(0, 0.01),
++                "n_electrodes": 12,
++                "noise_sd_uv": 8.0,
++                "beat_detection_rate": 0.95,
++            }
++        )
++    for index, concentration in enumerate(CONCENTRATIONS):
++        effect = EFFECT_BY_CONCENTRATION[index]
++        for replicate in range(treated_per_concentration):
++            rows.append(
++                {
++                    "compound": compound,
++                    "well": f"T{index}{replicate}",
++                    "concentration_uM": concentration,
++                    "vehicle": False,
++                    "site": "S1",
++                    "cell_type": "C",
++                    "concentration_index": index + 1,
++                    "fpd_ms": 400 * (1 + effect) + rng.normal(0, 5),
++                    "beat_rate_bpm": 60 + rng.normal(0, 1),
++                    "amplitude_uv": 200 * (1 - 0.2 * effect),
++                    "stv": 5 * (1 + effect),
++                    "triangulation_proxy": 1.0 * (1 + effect),
++                    "n_electrodes": 12,
++                    "noise_sd_uv": 8.0,
++                    "beat_detection_rate": 0.95,
++                }
++            )
++    frame = pd.DataFrame(rows)
++    dead_concentrations = CONCENTRATIONS[len(CONCENTRATIONS) - n_dead_top_concentrations :]
++    dead = frame["concentration_uM"].isin(dead_concentrations) & ~frame["vehicle"]
++    if dead_mode == "collapse":
++        frame.loc[dead, ENDPOINTS] = np.nan
++        frame.loc[dead, "n_electrodes"] = 0
++        frame.loc[dead, "beat_detection_rate"] = 0.0
++    else:
++        frame.loc[dead, "noise_sd_uv"] = 99.0
++    if vehicle_dead:
++        vehicle_index = frame.index[frame["vehicle"]][:vehicle_dead]
++        frame.loc[vehicle_index, ENDPOINTS] = np.nan
++        frame.loc[vehicle_index, "n_electrodes"] = 0
++        frame.loc[vehicle_index, "beat_detection_rate"] = 0.0
++    return frame
++
++
++def run(frame: pd.DataFrame):
++    return CardioScorePipeline.from_defaults().run(frame)
++
++
++def test_clean_data_reports_no_dropout():
++    result = run(make_frame())
++    row = result.summary_table.iloc[0]
++    assert row["risk_class"] == "High"
++    assert not bool(row["informative_dropout"]) and row["dropout_concentrations_uM"] == ""
++    assert result.exclusion_table.empty and result.qc_rejections.empty
++    assert not result.dropout_table["informative_dropout"].any()
++
++
++def test_top_concentration_collapse_is_flagged_not_silent():
++    # Regression: the same proarrhythmic compound dropped from High to Low with only a log line.
++    result = run(make_frame(1))
++    row = result.summary_table.iloc[0]
++    assert bool(row["informative_dropout"])
++    assert row["dropout_concentrations_uM"] == "100"
++    assert row["n_wells_rejected_signal_loss"] == 4 and row["max_dropout_fraction"] == 1.0
++    assert (
++        row["concentrations_tested"] == 3
++    )  # surviving concentrations only, and now reported as such
++    top = result.dropout_table[result.dropout_table["concentration_uM"] == 100.0].iloc[0]
++    assert top["n_wells_input"] == 4 and top["n_signal_loss"] == 4 and top["n_kept"] == 0
++    assert any("informative dropout" in line for line in result.qc_log)
++
++
++def test_compound_that_loses_too_many_concentrations_stays_visible():
++    result = run(make_frame(2))
++    assert result.summary_table.empty
++    row = result.exclusion_table.iloc[0]
++    assert row["compound"] == "DRUG" and row["reason"] == "insufficient_concentrations"
++    assert "informative dropout at 10;100 uM" in row["detail"]
++    assert result.provenance["excluded_compounds"] == ["DRUG"]
++
++
++def test_compound_with_every_treated_well_rejected_is_reported():
++    frame = pd.concat(
++        [make_frame(0, compound="STABLE"), make_frame(4, compound="DEAD")], ignore_index=True
++    )
++    result = run(frame)
++    assert list(result.summary_table["compound"]) == ["STABLE"]
++    row = result.exclusion_table.set_index("compound").loc["DEAD"]
++    assert row["reason"] == "all_treated_wells_rejected_by_qc"
++    assert "informative dropout at 0.1;1;10;100 uM" in row["detail"]
++
++
++def test_dataset_where_no_treated_well_survives_reports_instead_of_crashing():
++    # Regression: this used to raise a bare KeyError('compound').
++    result = run(make_frame(4))
++    assert result.summary_table.empty
++    assert result.exclusion_table.iloc[0]["reason"] == "all_treated_wells_rejected_by_qc"
++
++
++def test_rejections_carry_reason_codes():
++    result = run(make_frame(1))
++    rejections = result.qc_rejections
++    assert len(rejections) == 4 and rejections["signal_loss"].all()
++    assert all(
++        "low_beat_detection" in reasons and "too_few_electrodes" in reasons
++        for reasons in rejections["reasons"]
++    )
++    assert set(rejections["compound"]) == {"DRUG"} and not rejections["vehicle"].any()
++
++
++def test_technical_noise_rejections_are_not_signal_loss():
++    result = run(make_frame(1, dead_mode="noise"))
++    assert set(result.qc_rejections["reasons"]) == {"high_noise"}
++    assert not result.qc_rejections["signal_loss"].any()
++    assert not result.dropout_table["informative_dropout"].any()
++    assert not bool(result.summary_table.iloc[0]["informative_dropout"])
++
++
++def test_dropout_shared_with_vehicle_wells_is_not_informative():
++    # Half of the vehicle wells fail as well, and half of the top-concentration wells fail: no excess.
++    frame = make_frame(vehicle_dead=3, treated_per_concentration=4)
++    top = frame.index[(frame["concentration_uM"] == 100.0) & ~frame["vehicle"]][:2]
++    frame.loc[top, ENDPOINTS] = np.nan
++    frame.loc[top, "n_electrodes"] = 0
++    frame.loc[top, "beat_detection_rate"] = 0.0
++    result = run(frame)
++    top_row = result.dropout_table[result.dropout_table["concentration_uM"] == 100.0].iloc[0]
++    assert top_row["dropout_fraction"] == 0.5 and top_row["vehicle_dropout_fraction"] == 0.5
++    assert not bool(top_row["informative_dropout"])
++
++
++def test_dropout_thresholds_are_configurable_and_validated():
++    pipeline = CardioScorePipeline.from_defaults()
++    pipeline.config["quality_control"]["informative_dropout_min_fraction"] = 1.01
++    with pytest.raises(Exception, match="informative_dropout_min_fraction"):
++        CardioScorePipeline(pipeline.config)
++    strict = CardioScorePipeline.from_defaults()
++    strict.config["quality_control"]["informative_dropout_min_fraction"] = 1.0
++    strict.config["quality_control"]["informative_dropout_min_excess"] = 1.0
++    frame = make_frame(1)
++    top = frame.index[(frame["concentration_uM"] == 100.0) & ~frame["vehicle"]][:3]  # 3 of 4 lost
++    frame = make_frame(0)
++    frame.loc[top, ENDPOINTS] = np.nan
++    frame.loc[top, "n_electrodes"] = 0
++    frame.loc[top, "beat_detection_rate"] = 0.0
++    assert not strict.run(frame).dropout_table["informative_dropout"].any()
++    assert (
++        run(frame).dropout_table["informative_dropout"].any()
++    )  # default rule: 0.75 >= 0.5 and excess
++
++
++def test_aggregation_never_zero_fills_a_missing_endpoint():
++    # Regression: an endpoint with no finite values used to aggregate to 0.0 ("no effect").
++    concentration_summary = pd.DataFrame(
++        {
++            "compound": ["X"] * 3,
++            "concentration_uM": [1.0, 3.0, 10.0],
++            "fpd_change_pct_mean": [5.0, 20.0, 40.0],
++            "beat_rate_change_pct_mean": [1.0, 2.0, 3.0],
++            "amplitude_change_pct_mean": [0.0, -5.0, -10.0],
++            "stv_increase_mean": [np.nan] * 3,
++            "triangulation_proxy_change_mean": [0.0, 0.1, 0.3],
++            "max_effect_pct_mean": [5.0, 20.0, 40.0],
++            "n_replicates": [3] * 3,
++        }
++    )
++    for mode in ("mean_harmful_effect", "max_absolute_effect"):
++        out = CardioScorePipeline.aggregate_compound_effects(
++            concentration_summary, concentration_aggregation=mode
++        )
++        assert np.isnan(out["stv_increase"].iloc[0])
++        assert np.isfinite(out["fpd_change_pct"].iloc[0])
++
++
++def test_uncomputable_endpoint_stops_the_run_loudly():
++    frame = make_frame()
++    # Vehicle FPD of exactly 0 makes the FPD effect undefined for every treated well of this compound.
++    frame.loc[frame["vehicle"], "fpd_ms"] = 0.0
++    with pytest.raises(ValueError, match="partial endpoint data are not allowed"):
++        run(frame)
++
++
++def test_multiple_compounds_only_the_dropout_one_is_flagged():
++    frame = pd.concat(
++        [make_frame(0, compound="STABLE"), make_frame(1, compound="COLLAPSING")], ignore_index=True
++    )
++    summary = run(frame).summary_table.set_index("compound")
++    assert not bool(summary.loc["STABLE", "informative_dropout"])
++    assert bool(summary.loc["COLLAPSING", "informative_dropout"])
++
++
++def test_json_export_contains_dropout_and_exclusions(tmp_path):
++    result = run(make_frame(2))
++    path = tmp_path / "result.json"
++    result.to_json(path)
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    assert payload["exclusions"][0]["reason"] == "insufficient_concentrations"
++    assert any(row["informative_dropout"] for row in payload["dropout"])
++    assert len(payload["qc_rejections"]) == 8
+diff -ruN a/tests/test_locked_freeze.py b/tests/test_locked_freeze.py
+--- a/tests/test_locked_freeze.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_locked_freeze.py	2026-09-20 15:43:12.985094991 +0000
+@@ -0,0 +1,435 @@
++"""Pre-registration, freeze verification and the locked external stage's primary analysis."""
++
++from __future__ import annotations
++
++import copy
++import importlib.util
++import json
++import shutil
++from pathlib import Path
++
++import numpy as np
++import pandas as pd
++import pytest
++import yaml
++
++from virelion_cardioscore.validation.freeze import (
++    FreezeError,
++    build_freeze_manifest,
++    consistency_problems,
++    parse_preregistration,
++    sha256_file,
++    unresolved_fields,
++    verify_freeze,
++)
++from virelion_cardioscore.validation.metrics import binary_auroc_bootstrap, primary_outcome
++
++ROOT = Path(__file__).resolve().parents[1]
++PREREG = ROOT / "validation" / "preregistration.yaml"
++CONFIG_DIR = ROOT / "virelion_cardioscore" / "config"
++PACKAGE_SHA = "a" * 40
++
++_spec = importlib.util.spec_from_file_location(
++    "cardioscore_colab_runner_locked", ROOT / "scripts" / "validation" / "run_colab_validation.py"
++)
++runner = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(runner)
++
++
++def resolved_prereg() -> dict:
++    prereg = parse_preregistration(PREREG.read_bytes())
++    prereg["status"] = "frozen"
++    prereg["declarations"]["development_history"].update(
++        confirmed_by="Test Owner", confirmed_on="2026-09-21"
++    )
++    prereg["declarations"]["label_blind_development"].update(
++        confirmed_by="Test Owner", confirmed_on="2026-09-21"
++    )
++    prereg["primary_dataset"].update(
++        doi="10.0000/example",
++        source_url="https://example.org/data",
++        raw_traces_publicly_available=True,
++    )
++    return prereg
++
++
++@pytest.fixture()
++def frozen(tmp_path):
++    """A resolved pre-registration, a copy of the shipped config, and the matching freeze manifest."""
++    config_dir = tmp_path / "config"
++    shutil.copytree(CONFIG_DIR, config_dir)
++    prereg_path = tmp_path / "preregistration.yaml"
++    prereg_path.write_text(yaml.safe_dump(resolved_prereg(), sort_keys=False), encoding="utf-8")
++    manifest = build_freeze_manifest(
++        prereg_path=prereg_path, config_dir=config_dir, package_sha=PACKAGE_SHA
++    )
++    return {
++        "dir": tmp_path,
++        "config_dir": config_dir,
++        "prereg_path": prereg_path,
++        "manifest": manifest,
++    }
++
++
++def verify(frozen, **overrides):
++    arguments = {
++        "prereg_bytes": frozen["prereg_path"].read_bytes(),
++        "config_dir": frozen["config_dir"],
++        "package_sha": PACKAGE_SHA,
++    }
++    arguments.update(overrides)
++    return verify_freeze(frozen["manifest"], **arguments)
++
++
++# --- the shipped draft ------------------------------------------------------------------------
++
++
++def test_shipped_draft_matches_the_shipped_configuration_but_cannot_be_frozen(tmp_path):
++    prereg = parse_preregistration(PREREG.read_bytes())
++    assert consistency_problems(prereg, CONFIG_DIR) == []
++    unresolved = unresolved_fields(prereg)
++    assert (
++        "primary_dataset.doi" in unresolved
++        and "declarations.development_history.confirmed_by" in unresolved
++    )
++    with pytest.raises(FreezeError, match="Unresolved field: primary_dataset.doi"):
++        build_freeze_manifest(prereg_path=PREREG, config_dir=CONFIG_DIR, package_sha=PACKAGE_SHA)
++
++
++def test_freeze_requires_status_frozen_and_a_full_sha(tmp_path):
++    prereg = resolved_prereg()
++    prereg["status"] = "draft"
++    path = tmp_path / "p.yaml"
++    path.write_text(yaml.safe_dump(prereg), encoding="utf-8")
++    with pytest.raises(FreezeError, match="status must be 'frozen'"):
++        build_freeze_manifest(prereg_path=path, config_dir=CONFIG_DIR, package_sha=PACKAGE_SHA)
++    prereg["status"] = "frozen"
++    path.write_text(yaml.safe_dump(prereg), encoding="utf-8")
++    with pytest.raises(FreezeError, match="40-character"):
++        build_freeze_manifest(prereg_path=path, config_dir=CONFIG_DIR, package_sha="main")
++
++
++def test_unresolved_fields_finds_nulls_and_placeholders():
++    assert unresolved_fields(
++        {"a": {"b": None, "c": "ok", "d": ["x", "REPLACE_ME"]}, "e": None}
++    ) == [
++        "a.b",
++        "a.d[1]",
++        "e",
++    ]
++
++
++# --- verification ------------------------------------------------------------------------------
++
++
++def test_a_resolved_freeze_verifies(frozen):
++    assert verify(frozen) == []
++    assert frozen["manifest"]["package_sha"] == PACKAGE_SHA
++
++
++def test_editing_the_preregistration_after_freezing_is_detected(frozen):
++    edited = yaml.safe_load(frozen["prereg_path"].read_text(encoding="utf-8"))
++    edited["primary_analysis"]["outcome_rule"]["success"]["auroc_min"] = 0.5
++    problems = verify(frozen, prereg_bytes=yaml.safe_dump(edited).encode("utf-8"))
++    assert any("Pre-registration changed after it was frozen" in problem for problem in problems)
++
++
++@pytest.mark.parametrize(
++    ("file_name", "old", "new"),
++    [
++        ("default.yaml", "  low_threshold: 0.30", "  low_threshold: 0.25"),
++        ("cipa_endpoints.yaml", "    weight: 0.30", "    weight: 0.35"),
++        (
++            "default.yaml",
++            "informative_dropout_min_fraction: 0.5",
++            "informative_dropout_min_fraction: 0.9",
++        ),
++    ],
++)
++def test_changed_scoring_configuration_breaks_the_freeze(frozen, file_name, old, new):
++    path = frozen["config_dir"] / file_name
++    text = path.read_text(encoding="utf-8")
++    assert old in text
++    path.write_text(text.replace(old, new, 1), encoding="utf-8")
++    problems = verify(frozen)
++    assert any(
++        f"{file_name} differs from the frozen configuration" in problem for problem in problems
++    )
++    assert any("scoring_commitments" in problem for problem in problems)
++
++
++def test_wrong_package_commit_and_unfrozen_manifest_are_rejected(frozen):
++    assert any("is for package" in problem for problem in verify(frozen, package_sha="b" * 40))
++    frozen["manifest"] = {**frozen["manifest"], "status": "draft"}
++    assert any("status is not 'frozen'" in problem for problem in verify(frozen))
++
++
++def test_unresolved_field_reintroduced_after_freezing_is_rejected(frozen):
++    prereg = yaml.safe_load(frozen["prereg_path"].read_text(encoding="utf-8"))
++    prereg["primary_dataset"]["doi"] = None
++    payload = yaml.safe_dump(prereg).encode("utf-8")
++    problems = verify(frozen, prereg_bytes=payload)
++    assert any("Unresolved field: primary_dataset.doi" in problem for problem in problems)
++
++
++# --- primary analysis helpers --------------------------------------------------------------------
++
++
++def test_auroc_bootstrap_is_deterministic_and_resamples_compounds():
++    positive = [True] * 6 + [False] * 4
++    scores = [0.9, 0.8, 0.7, 0.75, 0.6, 0.55, 0.5, 0.4, 0.3, 0.65]
++    first = binary_auroc_bootstrap(positive, scores, n_bootstrap=500, seed=7)
++    second = binary_auroc_bootstrap(positive, scores, n_bootstrap=500, seed=7)
++    assert first == second
++    assert (
++        first["n"] == 10
++        and first["n_positive"] == 6
++        and 0 <= first["ci_lower"] <= first["auroc"] <= first["ci_upper"] <= 1
++    )
++    perfect = binary_auroc_bootstrap(
++        [True, True, False, False], [0.9, 0.8, 0.2, 0.1], n_bootstrap=100, seed=1
++    )
++    assert perfect["auroc"] == 1.0
++
++
++def test_auroc_bootstrap_rejects_degenerate_input():
++    with pytest.raises(ValueError, match="both positive and negative"):
++        binary_auroc_bootstrap([True, True], [0.1, 0.2], n_bootstrap=10, seed=1)
++    with pytest.raises(ValueError, match="finite"):
++        binary_auroc_bootstrap([True, False], [np.nan, 0.2], n_bootstrap=10, seed=1)
++
++
++def test_primary_outcome_applies_the_preregistered_rule():
++    rule = resolved_prereg()["primary_analysis"]["outcome_rule"]
++    assert primary_outcome({"auroc": 0.85, "ci_lower": 0.65}, rule) == "success"
++    assert primary_outcome({"auroc": 0.85, "ci_lower": 0.55}, rule) == "inconclusive"
++    assert primary_outcome({"auroc": 0.75, "ci_lower": 0.52}, rule) == "inconclusive"
++    assert primary_outcome({"auroc": 0.65, "ci_lower": 0.30}, rule) == "failure"
++    assert primary_outcome({"auroc": 0.95, "ci_lower": 0.45}, rule) == "failure"
++
++
++# --- runner: locating and verifying the freeze ----------------------------------------------------
++
++
++def write_freeze_dir(frozen) -> Path:
++    directory = frozen["dir"] / "freeze"
++    directory.mkdir()
++    shutil.copy(frozen["prereg_path"], directory / "preregistration.yaml")
++    (directory / "freeze_manifest.json").write_text(
++        json.dumps(frozen["manifest"]), encoding="utf-8"
++    )
++    return directory
++
++
++def test_runner_fetches_freeze_files_from_the_pinned_commit(frozen):
++    requested = []
++    files = {
++        "validation/preregistration.yaml": frozen["prereg_path"].read_bytes(),
++        "validation/freeze_manifest.json": json.dumps(frozen["manifest"]).encode("utf-8"),
++    }
++
++    def fetch(url):
++        requested.append(url)
++        return files[url.split("/", 6)[-1]]
++
++    revision = "c" * 40
++    prereg_bytes, manifest, source = runner.load_freeze_files({}, fetch, revision)
++    assert (
++        manifest["package_sha"] == PACKAGE_SHA
++        and prereg_bytes == files["validation/preregistration.yaml"]
++    )
++    assert source == f"github:{runner.REPO}@{revision}"
++    assert all(f"/{revision}/validation/" in url for url in requested)
++
++
++def test_runner_refuses_to_locate_a_freeze_when_unpinned():
++    info, prereg = runner.verify_locked_freeze({}, None, "unpinned-main")
++    assert info["verified"] is False and prereg is None
++    assert "not SHA-pinned" in info["problems"][0]
++
++
++def test_runner_verifies_a_local_override_and_reports_problems(frozen, monkeypatch):
++    directory = write_freeze_dir(frozen)
++    environ = {"CARDIOSCORE_FREEZE_DIR": str(directory)}
++    # The runner verifies against the *installed* package configuration; make the freeze match it.
++    manifest = build_freeze_manifest(
++        prereg_path=frozen["prereg_path"], config_dir=CONFIG_DIR, package_sha=PACKAGE_SHA
++    )
++    (directory / "freeze_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
++    info, prereg = runner.verify_locked_freeze(environ, package_sha=PACKAGE_SHA)
++    assert info["verified"] is True and info["source"].startswith("local_override:")
++    assert prereg["primary_analysis"]["metric"] == "auroc"
++    info, prereg = runner.verify_locked_freeze(environ, package_sha="b" * 40)
++    assert info["verified"] is False and prereg is None
++    assert any("is for package" in problem for problem in info["problems"])
++
++
++def test_feature_schema_allows_missing_endpoints_only_on_no_signal_wells():
++    from virelion_cardioscore.validation.manifest import validate_feature_schema
++
++    frame = pd.DataFrame(compound_rows("X", 0.5, 0, dead_top=1))
++    validate_feature_schema(
++        frame
++    )  # dead wells (no electrodes, no beats) may carry missing endpoints
++    live = frame.index[(frame["concentration_uM"] == 1.0) & ~frame["vehicle"]][0]
++    broken = frame.copy()
++    broken.loc[live, "stv"] = np.nan
++    with pytest.raises(ValueError, match="stv must be numeric and finite"):
++        validate_feature_schema(broken)
++    infinite = frame.copy()
++    infinite.loc[frame.index[frame["n_electrodes"] == 0][0], "fpd_ms"] = np.inf
++    with pytest.raises(ValueError, match="fpd_ms must be numeric and finite"):
++        validate_feature_schema(infinite)
++
++
++# --- runner: the locked stage end to end ---------------------------------------------------------
++
++ENDPOINTS = ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]
++CONCENTRATIONS = [0.1, 1.0, 10.0, 100.0]
++# compound -> (reference risk, effect scale at the top concentration)
++COMPOUNDS = {
++    "LOW_A": ("low", 0.00),
++    "LOW_B": ("low", 0.03),
++    "INT_A": ("intermediate", 0.9),
++    "INT_B": ("intermediate", 1.3),
++    "HIGH_A": ("high", 3.0),
++    "HIGH_B": ("high", 4.0),
++}
++
++
++def compound_rows(name: str, top_effect: float, seed: int, *, dead_top: int = 0) -> list[dict]:
++    rng = np.random.default_rng(seed)
++    rows = []
++    for i in range(6):
++        rows.append(
++            {
++                "compound": name, "well": f"{name}-V{i}", "concentration_uM": 0.0, "vehicle": True,
++                "site": 1, "cell_type": "C", "concentration_index": 0,
++                "fpd_ms": 400 + rng.normal(0, 4), "beat_rate_bpm": 60 + rng.normal(0, 1),
++                "amplitude_uv": 200 + rng.normal(0, 3), "stv": 5 + rng.normal(0, 0.2),
++                "triangulation_proxy": 1.0 + rng.normal(0, 0.01),
++                "n_electrodes": 12, "noise_sd_uv": 8.0, "beat_detection_rate": 0.95,
++            }
++        )  # fmt: skip
++    for index, concentration in enumerate(CONCENTRATIONS):
++        effect = top_effect * (0.25, 0.5, 0.75, 1.0)[index]
++        dead = index >= len(CONCENTRATIONS) - dead_top
++        for replicate in range(4):
++            row = {
++                "compound": name, "well": f"{name}-T{index}{replicate}", "concentration_uM": concentration,
++                "vehicle": False, "site": 1, "cell_type": "C", "concentration_index": index + 1,
++                "fpd_ms": 400 * (1 + effect) + rng.normal(0, 4), "beat_rate_bpm": 60 + rng.normal(0, 1),
++                "amplitude_uv": 200 * (1 - 0.2 * effect), "stv": 5 * (1 + effect),
++                "triangulation_proxy": 1.0 * (1 + effect),
++                "n_electrodes": 12, "noise_sd_uv": 8.0, "beat_detection_rate": 0.95,
++            }  # fmt: skip
++            if dead:
++                row.update({column: np.nan for column in ENDPOINTS})
++                row.update(n_electrodes=0, beat_detection_rate=0.0)
++            rows.append(row)
++    return rows
++
++
++def build_locked_inputs(tmp_path: Path, *, dead: dict[str, int]) -> dict[str, Path]:
++    input_dir = tmp_path / "input"
++    input_dir.mkdir()
++    rows = []
++    for seed, (name, (_, top_effect)) in enumerate(COMPOUNDS.items()):
++        rows.extend(compound_rows(name, top_effect, seed, dead_top=dead.get(name, 0)))
++    features_path = tmp_path / "canonical_features.csv"
++    pd.DataFrame(rows).to_csv(features_path, index=False)
++    reference_path = tmp_path / "reference.csv"
++    pd.DataFrame(
++        {"compound": list(COMPOUNDS), "reference_risk": [risk for risk, _ in COMPOUNDS.values()]}
++    ).to_csv(reference_path, index=False)
++    source_path = input_dir / "source.bin"
++    source_path.write_bytes(b"synthetic source")
++    receipt_path = tmp_path / "source_receipt.json"
++    receipt_path.write_text(
++        json.dumps(
++            {
++                "sha256": sha256_file(source_path), "source_filename": "source.bin", "source_id": "synthetic",
++                "source_url": "https://example.org/synthetic",
++            }
++        ),
++        encoding="utf-8",
++    )  # fmt: skip
++    manifest_path = tmp_path / "derivation_manifest.json"
++    manifest_path.write_text(
++        json.dumps(
++            {
++                "verified_rebuild": True, "source_sha256": sha256_file(source_path),
++                "canonical_features_sha256": sha256_file(features_path),
++                "reference_sha256": sha256_file(reference_path), "config_sha256": runner.config_sha256(),
++                "reference_provenance": {"source_url": "https://example.org/ref", "source_id": "ref"},
++            }
++        ),
++        encoding="utf-8",
++    )  # fmt: skip
++    return {
++        "assets": {
++            "features": features_path, "reference": reference_path,
++            "receipt": receipt_path, "manifest": manifest_path,
++        },
++        "input_dir": input_dir,
++    }  # fmt: skip
++
++
++def small_prereg() -> dict:
++    prereg = copy.deepcopy(resolved_prereg())
++    prereg["primary_analysis"]["confidence_interval"]["n_bootstrap"] = 300
++    return prereg
++
++
++def run_locked(tmp_path, *, dead):
++    built = build_locked_inputs(tmp_path, dead=dead)
++    results = tmp_path / "results"
++    results.mkdir()
++    info = {"verified": True, "source": "test"}
++    stage = runner.run_locked_external(
++        built["assets"], results, built["input_dir"], small_prereg(), info
++    )
++    payload = json.loads((results / "locked_external_validation.json").read_text(encoding="utf-8"))
++    return stage, payload, results
++
++
++def test_locked_stage_reports_the_preregistered_primary_analysis(tmp_path):
++    stage, payload, results = run_locked(tmp_path, dead={})
++    assert stage["status"] == "complete" and stage["n_excluded"] == 0
++    primary = payload["primary_analysis"]
++    assert primary["auroc"] == 1.0 and primary["outcome"] in {"success", "inconclusive"}
++    assert stage["primary_auroc"] == 1.0 and payload["freeze"]["verified"] is True
++    assert payload["informative_dropout_compounds"] == [] and payload["dropout_sensitivity"] is None
++    assert (results / "locked_dropout_by_concentration.csv").is_file()
++    assert (results / "locked_exclusions.csv").is_file()
++    assert payload["metrics"]["n"] == 6
++
++
++def test_locked_stage_flags_informative_dropout_and_runs_the_sensitivity_analysis(tmp_path):
++    # HIGH_B loses its top concentration (cells stop beating) but is still scored from three concentrations.
++    stage, payload, results = run_locked(tmp_path, dead={"HIGH_B": 1})
++    assert stage["n_informative_dropout_compounds"] == 1
++    assert payload["informative_dropout_compounds"] == ["HIGH_B"]
++    sensitivity = payload["dropout_sensitivity"]
++    assert sensitivity["compounds_reclassified_as_high"] == ["HIGH_B"]
++    assert sensitivity["primary_analysis"]["auroc"] >= payload["primary_analysis"]["auroc"] - 1e-12
++    dropout = pd.read_csv(results / "locked_dropout_by_concentration.csv")
++    assert bool(
++        dropout.loc[
++            (dropout["compound"] == "HIGH_B") & (dropout["concentration_uM"] == 100.0),
++            "informative_dropout",
++        ].iloc[0]
++    )
++
++
++def test_locked_stage_blocks_and_explains_an_unscoreable_reference_compound(tmp_path):
++    stage, payload, results = run_locked(tmp_path, dead={"HIGH_A": 2})
++    assert stage["status"] == "blocked_by_exclusions" and stage["n_excluded"] == 1
++    assert payload["metrics"] is None and payload["primary_analysis"] is None
++    reason = payload["exclusion_reasons"]["HIGH_A"]
++    assert (
++        reason["reason"] == "insufficient_concentrations"
++        and "informative dropout" in reason["detail"]
++    )
++    exclusions = pd.read_csv(results / "locked_exclusions.csv")
++    assert list(exclusions["compound"]) == ["HIGH_A"]
+diff -ruN a/validation/preregistration.yaml b/validation/preregistration.yaml
+--- a/validation/preregistration.yaml	1970-01-01 00:00:00.000000000 +0000
++++ b/validation/preregistration.yaml	2026-09-20 15:43:12.989816021 +0000
+@@ -0,0 +1,115 @@
++# CardioScore locked external validation - pre-registration (DRAFT).
++#
++# HOW TO FREEZE
++#   1. Resolve every `null` below (each is marked REQUIRED). Change `status` to `frozen`.
++#   2. Run: python scripts/validation/make_freeze_manifest.py --package-sha <commit SHA of the
++#      CardioScore code that will be validated>
++#      It refuses to write validation/freeze_manifest.json while anything is unresolved or
++#      disagrees with the shipped configuration.
++#   3. Commit this file and the manifest. The commit history is the evidence of *when* the plan
++#      was frozen; the locked runner then verifies the hashes at run time.
++#   4. Any later change to this file, the scoring configuration or the package code means a new
++#      validation_version and a new freeze.
++#
++# Numeric criteria below are PROPOSALS for the study owner to accept or change before freezing.
++
++schema_version: 1
++status: draft
++validation_version: cardioscore-ext-v1
++
++purpose: >-
++  Evaluate the frozen CardioScore on one external dataset with one primary analysis, decided
++  before that dataset is scored.
++
++declarations:
++  development_history:
++    statement: >-
++      CardioScore endpoint weights, effect thresholds and risk thresholds are engineering choices
++      inspired by public CiPA literature (see the header of virelion_cardioscore/config/cipa_endpoints.yaml).
++      They were not fit to drug-level outcomes or risk labels from the dataset used in this validation.
++    confirmed_by: null   # REQUIRED: name of the person attesting the statement above
++    confirmed_on: null   # REQUIRED: YYYY-MM-DD
++  label_blind_development:
++    statement: >-
++      Source adapters, QC and feature derivation for the primary dataset are developed without computing
++      CardioScore risk classes for it or comparing any CardioScore output with reference labels. The first
++      scoring run of the primary dataset is the locked run.
++    confirmed_by: null   # REQUIRED
++    confirmed_on: null   # REQUIRED
++
++primary_dataset:
++  citation: >-
++    Patel D, Stohlman JM, Dang Q, Strauss DG, Blinova K. Assessment of proarrhythmic potential of drugs
++    in optogenetically paced induced pluripotent stem cell-derived cardiomyocytes. Toxicol Sci 2019;170(1):167-179.
++  doi: null                          # REQUIRED: DOI of the dataset or paper the data were obtained from
++  source_url: null                   # REQUIRED: archive or publisher URL of the raw or processed data
++  raw_traces_publicly_available: null  # REQUIRED: true or false. If false, this is at most a component validation.
++  arm: spontaneous
++  arm_rationale: >-
++    In optically paced arms the stimulus sets the beat rate, so the beat-rate endpoint carries no drug
++    information. Paced arms are secondary analyses and are reported separately.
++
++reference_labels:
++  source: >-
++    CiPA 28-drug TdP risk categories (low, intermediate, high) as encoded in derived/blinova_reference.csv
++    from the Blinova 2018 workbook.
++  reference_sha256: 40c8f80eea5ee05193768f6fffcb8d6c5ace2e04268d3cd54b5b033b28c3815a
++  category_map:
++    low: low
++    intermediate: moderate
++    high: high
++  note: Reference labels are literature categories, not outcomes measured in the primary dataset.
++
++primary_analysis:
++  population: All 28 reference compounds.
++  unscored_policy: block_headline   # any reference compound that cannot be scored blocks the headline result
++  positive_class: [intermediate, high]
++  negative_class: [low]
++  score: cardioscore
++  metric: auroc
++  confidence_interval:
++    method: compound_bootstrap_percentile
++    confidence: 0.95
++    n_bootstrap: 10000
++    seed: 42
++  outcome_rule:
++    success:
++      auroc_min: 0.80
++      ci_lower_min: 0.60
++    inconclusive:
++      auroc_min: 0.70
++      ci_lower_min: 0.50
++    otherwise: failure
++
++secondary_analyses:
++  three_class:
++    report: [confusion_matrix, accuracy, balanced_accuracy, macro_f1, cohen_kappa, ordinal_mae, spearman_rho]
++    criteria: none   # report-only; no pass/fail threshold
++  dropout_sensitivity:
++    reclassify_informative_dropout_as: high
++    criteria: none   # report-only; shows how much the result depends on compounds that lost signal
++  paced_arms:
++    criteria: none   # report-only; beat-rate endpoint is not interpretable under optical pacing
++
++scoring_commitments:
++  concentration_aggregation: mean_harmful_effect
++  min_concentrations: 3
++  require_min_concentrations_for_scoring: true
++  informative_dropout_min_fraction: 0.5
++  informative_dropout_min_excess: 0.25
++  low_threshold: 0.3
++  moderate_threshold: 0.6
++  normalize_by_vehicle: true
++  dose_response_weight: 0.0
++  endpoint_weights:
++    fpd_change_pct: 0.3
++    beat_rate_change_pct: 0.15
++    amplitude_change_pct: 0.15
++    stv_increase: 0.25
++    triangulation_proxy: 0.15
++
++known_limitations:
++  - The compound score averages harmful effects over the tested concentration grid; it is not normalized to clinical exposure (Cmax), so the same drug can score differently if a lab tests a different range.
++  - Exposure normalization is not implemented in the package; adding it is a scoring change and requires a new validation_version.
++  - All CiPA studies share the same 28 compounds and labels, so datasets are not independent in drug identity.
++  - With 9 low-risk and 19 intermediate or high-risk compounds, confidence intervals are wide.
+diff -ruN a/virelion_cardioscore/analysis/pipeline.py b/virelion_cardioscore/analysis/pipeline.py
+--- a/virelion_cardioscore/analysis/pipeline.py	2026-09-20 15:43:12.971992991 +0000
++++ b/virelion_cardioscore/analysis/pipeline.py	2026-09-20 15:43:12.986344447 +0000
+@@ -42,6 +42,23 @@
+     "stv",
+     "triangulation_proxy",
+ )
++# QC rejection reasons that indicate loss of usable signal. A treated well lost this way at high
++# concentration may be a drug effect (cells stopped beating), not a bad well, so it is tracked
++# as potential informative dropout rather than silently discarded.
++SIGNAL_LOSS_QC_REASONS = frozenset({"too_few_electrodes", "low_beat_detection", "missing_endpoint"})
++QC_REJECTION_COLUMNS = ("row_position", "compound", "well", "concentration_uM", "vehicle", "reasons", "signal_loss")
++DROPOUT_COLUMNS = (
++    "compound",
++    "concentration_uM",
++    "n_wells_input",
++    "n_signal_loss",
++    "n_other_rejected",
++    "n_kept",
++    "dropout_fraction",
++    "vehicle_dropout_fraction",
++    "informative_dropout",
++)
++EXCLUSION_COLUMNS = ("compound", "reason", "detail")
+ RUNTIME_HIERARCHY_COLUMNS = (
+     "biological_replicate",
+     "batch_id",
+@@ -67,6 +84,9 @@
+     config: dict = field(default_factory=dict)
+     qc_log: list[str] = field(default_factory=list)
+     provenance: dict = field(default_factory=dict)
++    qc_rejections: pd.DataFrame = field(default_factory=pd.DataFrame)
++    dropout_table: pd.DataFrame = field(default_factory=pd.DataFrame)
++    exclusion_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+ 
+     def to_html(self, path: str | Path) -> None:
+         from virelion_cardioscore.reporting.report_generator import write_html_report
+@@ -91,6 +111,9 @@
+                 for compound, fits in self.dose_response_fits.items()
+             },
+             "provenance": self.provenance,
++            "qc_rejections": self.qc_rejections.to_dict(orient="records"),
++            "dropout": self.dropout_table.to_dict(orient="records"),
++            "exclusions": self.exclusion_table.to_dict(orient="records"),
+         }
+         with open(path, "w", encoding="utf-8") as handle:
+             json.dump(payload, handle, indent=2)
+@@ -118,6 +141,7 @@
+             moderate_threshold=scoring_cfg.get("moderate_threshold", 0.60),
+         )
+         self.qc_log: list[str] = []
++        self.qc_rejections = pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
+ 
+     @classmethod
+     def from_config(cls, path: str | Path) -> "CardioScorePipeline":
+@@ -197,6 +221,12 @@
+         for endpoint in available_endpoints:
+             numeric = pd.to_numeric(df[endpoint], errors="coerce")
+             endpoint_complete &= np.isfinite(numeric.to_numpy(dtype=float))
++        reason_flags = {
++            "too_few_electrodes": ~(df["n_electrodes"] >= min_elec),
++            "high_noise": ~(df["noise_sd_uv"] <= max_noise),
++            "low_beat_detection": ~(df["beat_detection_rate"] >= min_bdr),
++            "missing_endpoint": pd.Series(~endpoint_complete, index=df.index),
++        }
+         mask = (
+             (df["n_electrodes"] >= min_elec)
+             & (df["noise_sd_uv"] <= max_noise)
+@@ -204,6 +234,8 @@
+             & endpoint_complete
+         )
+         if reject_irregular:
++            if irregularity_threshold is not None:
++                reason_flags["irregular"] = ~(df["stv"] <= float(irregularity_threshold))
+             if irregularity_threshold is None:
+                 self.qc_log.append(
+                     "Warning: arrhythmia-proxy rejection is enabled, but quality_control.arrhythmia_proxy_max_stv is not configured; no irregularity rejection was applied. STV is treated only as an optional irregularity proxy, not an arrhythmia detector."
+@@ -212,6 +244,7 @@
+                 mask &= df["stv"] <= float(irregularity_threshold)
+         rejected = df[~mask]
+         kept = df[mask].copy()
++        self.qc_rejections = self._build_qc_rejections(df, ~np.asarray(mask, dtype=bool), reason_flags)
+         if qc.get("log_rejections", True) and len(rejected) > 0:
+             for _, row in rejected.iterrows():
+                 details = (
+@@ -230,6 +263,80 @@
+         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
+         return kept
+ 
++    @staticmethod
++    def _build_qc_rejections(df: pd.DataFrame, rejected_mask: np.ndarray, reason_flags: dict) -> pd.DataFrame:
++        """Structured record of every QC rejection (row position, well, and reason codes)."""
++        positions = np.flatnonzero(rejected_mask)
++        if positions.size == 0:
++            return pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
++        vehicle = coerce_bool_series(df["vehicle"], name="vehicle").to_numpy() if "vehicle" in df.columns else None
++        records = []
++        for position in positions:
++            reasons = [name for name, flag in reason_flags.items() if bool(np.asarray(flag)[position])]
++            records.append(
++                {
++                    "row_position": int(position),
++                    "compound": str(df["compound"].iloc[position]),
++                    "well": str(df["well"].iloc[position]),
++                    "concentration_uM": float(df["concentration_uM"].iloc[position]) if "concentration_uM" in df.columns else float("nan"),
++                    "vehicle": bool(vehicle[position]) if vehicle is not None else False,
++                    "reasons": ";".join(reasons),
++                    "signal_loss": any(reason in SIGNAL_LOSS_QC_REASONS for reason in reasons),
++                }
++            )
++        return pd.DataFrame(records, columns=list(QC_REJECTION_COLUMNS))
++
++    def compute_dropout_table(self, df_pre_qc: pd.DataFrame, rejections: pd.DataFrame) -> pd.DataFrame:
++        """Per compound x concentration accounting of wells lost to signal loss.
++
++        A concentration is flagged ``informative_dropout`` when a large share of its treated wells lost
++        signal (cells stopped beating, no reliable electrodes, endpoints not computable) and that
++        share clearly exceeds the same compound's vehicle-well loss. Such compounds must never be
++        read as "clean" just because their worst wells were removed by QC.
++        """
++        qc = self.config.get("quality_control", {})
++        min_fraction = float(qc.get("informative_dropout_min_fraction", 0.5))
++        min_excess = float(qc.get("informative_dropout_min_excess", 0.25))
++        frame = df_pre_qc.reset_index(drop=True)
++        vehicle = coerce_bool_series(frame["vehicle"], name="vehicle")
++        lost = np.zeros(len(frame), dtype=bool)
++        other = np.zeros(len(frame), dtype=bool)
++        if not rejections.empty:
++            signal = rejections["signal_loss"].to_numpy(dtype=bool)
++            positions = rejections["row_position"].to_numpy(dtype=int)
++            lost[positions[signal]] = True
++            other[positions[~signal]] = True
++        frame = frame.assign(_vehicle=vehicle.to_numpy(), _lost=lost, _other=other)
++        vehicle_rows = frame[frame["_vehicle"]]
++        overall_vehicle = float(vehicle_rows["_lost"].mean()) if len(vehicle_rows) else 0.0
++        vehicle_fraction = {
++            str(compound): float(group["_lost"].mean())
++            for compound, group in vehicle_rows.groupby("compound", sort=True)
++        }
++        rows = []
++        treated = frame[~frame["_vehicle"]]
++        for (compound, concentration), group in treated.groupby(["compound", "concentration_uM"], sort=True):
++            n_input = int(len(group))
++            n_lost = int(group["_lost"].sum())
++            n_other = int(group["_other"].sum())
++            fraction = n_lost / n_input if n_input else 0.0
++            vehicle_lost = vehicle_fraction.get(str(compound), overall_vehicle)
++            informative = bool(n_lost > 0 and fraction >= min_fraction and (fraction - vehicle_lost) >= min_excess)
++            rows.append(
++                {
++                    "compound": str(compound),
++                    "concentration_uM": float(concentration),
++                    "n_wells_input": n_input,
++                    "n_signal_loss": n_lost,
++                    "n_other_rejected": n_other,
++                    "n_kept": n_input - n_lost - n_other,
++                    "dropout_fraction": round(float(fraction), 6),
++                    "vehicle_dropout_fraction": round(float(vehicle_lost), 6),
++                    "informative_dropout": informative,
++                }
++            )
++        return pd.DataFrame(rows, columns=list(DROPOUT_COLUMNS))
++
+     def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
+         control_cfg = self.config.get("control_normalization", {})
+         scope = control_cfg.get("scope", "auto")
+@@ -516,7 +623,9 @@
+             def aggregate_endpoint(column: str) -> float:
+                 values = pd.to_numeric(group[column], errors="coerce").dropna()
+                 if values.empty:
+-                    return 0.0
++                    # Never fabricate "no effect": an endpoint with no finite value stays missing so the
++                    # scoring engine (which requires finite values) fails closed instead of scoring it clean.
++                    return float("nan")
+                 endpoint = column.removesuffix("_mean")
+                 direction = endpoint_directions.get(endpoint, "absolute")
+                 if concentration_aggregation == "max_absolute_effect":
+@@ -592,12 +701,82 @@
+         total_weight = sum(weight for weight, _ in usable)
+         return float(sum(weight * coverage for weight, coverage in usable) / total_weight)
+ 
++    @staticmethod
++    def _dropout_summary_by_compound(dropout_table: pd.DataFrame) -> dict[str, dict]:
++        out: dict[str, dict] = {}
++        if dropout_table.empty:
++            return out
++        for compound, group in dropout_table.groupby("compound", sort=False):
++            flagged = group[group["informative_dropout"]]
++            out[str(compound)] = {
++                "n_wells_input_treated": int(group["n_wells_input"].sum()),
++                "n_wells_rejected_signal_loss": int(group["n_signal_loss"].sum()),
++                "informative_dropout": bool(len(flagged) > 0),
++                "dropout_concentrations_uM": ";".join(f"{value:g}" for value in flagged["concentration_uM"]),
++                "max_dropout_fraction": float(group["dropout_fraction"].max()),
++            }
++        return out
++
++    @staticmethod
++    def _build_exclusion_table(
++        *,
++        df_pre_qc: pd.DataFrame,
++        df_post_qc: pd.DataFrame,
++        effects: pd.DataFrame,
++        concentration_summary: pd.DataFrame,
++        scorable_compounds: set[str],
++        scored: set[str],
++        dropout_table: pd.DataFrame,
++        min_concentrations: int,
++    ) -> pd.DataFrame:
++        """Every compound that was in the input but not scored, with an explicit reason."""
++        treated_input = set(map(str, df_pre_qc.loc[~df_pre_qc["vehicle"], "compound"].unique()))
++        treated_after_qc = set(map(str, df_post_qc.loc[~df_post_qc["vehicle"], "compound"].unique()))
++        with_effects = set(map(str, effects["compound"].unique())) if not effects.empty else set()
++        rows = []
++        for compound in sorted(treated_input - set(map(str, scored))):
++            detail = ""
++            if compound not in treated_after_qc:
++                reason = "all_treated_wells_rejected_by_qc"
++            elif compound not in with_effects:
++                reason = "no_matching_vehicle_control"
++            elif compound not in scorable_compounds:
++                reason = "insufficient_concentrations"
++                n_conc = 0
++                if not concentration_summary.empty:
++                    n_conc = int(
++                        concentration_summary.loc[
++                            concentration_summary["compound"].astype(str) == compound, "concentration_uM"
++                        ].nunique()
++                    )
++                detail = f"{n_conc} concentration(s) with usable wells; minimum {min_concentrations}"
++            else:
++                reason = "not_scored_other"
++            if not dropout_table.empty:
++                flagged = dropout_table[(dropout_table["compound"] == compound) & dropout_table["informative_dropout"]]
++                if len(flagged):
++                    detail = (detail + "; " if detail else "") + (
++                        "informative dropout at " + ";".join(f"{value:g}" for value in flagged["concentration_uM"]) + " uM"
++                    )
++            rows.append({"compound": compound, "reason": reason, "detail": detail})
++        return pd.DataFrame(rows, columns=list(EXCLUSION_COLUMNS))
++
+     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
+         self.qc_log = []
+         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
+         self.validate_runtime_feature_schema(df)
+         df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
++        df_pre_qc = df.copy()
+         df = self.apply_qc(df)
++        qc_rejections = self.qc_rejections
++        dropout_table = self.compute_dropout_table(df_pre_qc, qc_rejections)
++        for _, drop in dropout_table[dropout_table["informative_dropout"]].iterrows():
++            self.qc_log.append(
++                f"Warning: informative dropout for {drop['compound']} at {drop['concentration_uM']:g} uM: "
++                f"{int(drop['n_signal_loss'])}/{int(drop['n_wells_input'])} treated wells lost signal "
++                f"(vehicle loss {drop['vehicle_dropout_fraction']:.2f}). The score is computed from surviving "
++                "wells only and must not be read as a clean profile."
++            )
+         variability_cfg = self.config.get("variability", {})
+         variability_before, _ = self.run_variability_diagnostics(df)
+         normalization_diagnostic: dict = {}
+@@ -611,6 +790,9 @@
+             scoring_effects,
+             replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"),
+         )
++        if concentration_summary.empty:
++            # e.g. every treated well was rejected by QC: report exclusions instead of raising KeyError.
++            concentration_summary = pd.DataFrame(columns=["compound", "concentration_uM"])
+         min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
+         require_min_concentrations = bool(concentration_cfg.get("require_min_concentrations_for_scoring", False))
+         scorable_compounds: set[str] = set()
+@@ -716,10 +898,29 @@
+             summary_rows.append(row)
+         summary = pd.DataFrame(summary_rows)
+         if not summary.empty:
++            per_compound = self._dropout_summary_by_compound(dropout_table)
++            for column, default in (
++                ("n_wells_input_treated", 0),
++                ("n_wells_rejected_signal_loss", 0),
++                ("informative_dropout", False),
++                ("dropout_concentrations_uM", ""),
++                ("max_dropout_fraction", 0.0),
++            ):
++                summary[column] = summary["compound"].map(
++                    lambda name, column=column, default=default: per_compound.get(str(name), {}).get(column, default)
++                )
+             summary = summary.sort_values("cardioscore", ascending=False)
+-        excluded_compounds = sorted(
+-            set(map(str, concentration_summary["compound"].unique())) - scorable_compounds
+-        ) if not concentration_summary.empty else []
++        exclusion_table = self._build_exclusion_table(
++            df_pre_qc=df_pre_qc,
++            df_post_qc=df,
++            effects=effects,
++            concentration_summary=concentration_summary,
++            scorable_compounds=scorable_compounds,
++            scored={s.compound for s in scores},
++            dropout_table=dropout_table,
++            min_concentrations=min_concentrations,
++        )
++        excluded_compounds = sorted(set(exclusion_table["compound"].astype(str))) if not exclusion_table.empty else []
+         provenance = build_provenance(
+             input_frame=(dataset.features if isinstance(dataset, SyntheticMEADataset) else dataset),
+             config=self.config,
+@@ -743,4 +944,7 @@
+             config=self.config,
+             qc_log=self.qc_log,
+             provenance=provenance,
++            qc_rejections=qc_rejections,
++            dropout_table=dropout_table,
++            exclusion_table=exclusion_table,
+         )
+diff -ruN a/virelion_cardioscore/config/default.yaml b/virelion_cardioscore/config/default.yaml
+--- a/virelion_cardioscore/config/default.yaml	2026-09-20 15:43:12.973877212 +0000
++++ b/virelion_cardioscore/config/default.yaml	2026-09-20 15:43:12.987325714 +0000
+@@ -12,6 +12,11 @@
+   reject_wells_with_arrhythmia_proxy: false
+   arrhythmia_proxy_max_stv: null
+   log_rejections: true
++  # Informative dropout: flag a concentration when >= min_fraction of its treated wells lost signal
++  # (cells stopped beating / no usable electrodes) AND that exceeds the compound's vehicle-well loss by
++  # >= min_excess. Flagged compounds are reported, never treated as clean.
++  informative_dropout_min_fraction: 0.5
++  informative_dropout_min_excess: 0.25
+ 
+ preprocessing:
+   highpass_hz: 0.5
+diff -ruN a/virelion_cardioscore/validation/config.py b/virelion_cardioscore/validation/config.py
+--- a/virelion_cardioscore/validation/config.py	2026-09-20 15:43:12.976486898 +0000
++++ b/virelion_cardioscore/validation/config.py	2026-09-20 15:43:12.989119552 +0000
+@@ -54,6 +54,8 @@
+     _require_integer(qc.get("min_electrodes_per_well", 4), "quality_control.min_electrodes_per_well", minimum=1)
+     _require_number(qc.get("max_noise_sd_uv", 25.0), "quality_control.max_noise_sd_uv", minimum=0)
+     _require_number(qc.get("min_beat_detection_rate", 0.7), "quality_control.min_beat_detection_rate", minimum=0, maximum=1)
++    _require_number(qc.get("informative_dropout_min_fraction", 0.5), "quality_control.informative_dropout_min_fraction", minimum=0, maximum=1)
++    _require_number(qc.get("informative_dropout_min_excess", 0.25), "quality_control.informative_dropout_min_excess", minimum=0, maximum=1)
+     stv_limit = qc.get("arrhythmia_proxy_max_stv")
+     if stv_limit is not None:
+         _require_number(stv_limit, "quality_control.arrhythmia_proxy_max_stv", minimum=0)
+diff -ruN a/virelion_cardioscore/validation/freeze.py b/virelion_cardioscore/validation/freeze.py
+--- a/virelion_cardioscore/validation/freeze.py	1970-01-01 00:00:00.000000000 +0000
++++ b/virelion_cardioscore/validation/freeze.py	2026-09-20 15:43:12.989351583 +0000
+@@ -0,0 +1,194 @@
++"""Pre-registration and freeze-manifest checks for locked external validation.
++
++A locked external result is only meaningful if the analysis plan and the scoring configuration were
++fixed *before* the external data were scored. This module makes that commitment explicit and
++auditable:
++
++* ``validation/preregistration.yaml`` states the primary analysis, success criteria and the
++  scoring choices being committed to. Every field that still needs a human decision is ``null`` or a
++  placeholder, and freezing is refused until none remain.
++* ``validation/freeze_manifest.json`` records the SHA-256 of the pre-registration and of the frozen
++  configuration files, plus the CardioScore package commit they belong to.
++* ``verify_freeze`` re-derives all of that at run time, so a changed weight, threshold, dropout rule
++  or analysis plan makes the locked stage refuse to produce a headline result.
++
++Both files are committed to git, so the commit history (not this code) is the evidence of *when* the
++plan was frozen. This module cannot prove that nobody looked at the external data earlier.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Mapping
++
++import yaml
++
++FREEZE_SCHEMA_VERSION = 1
++FROZEN_CONFIG_FILES = ("default.yaml", "cipa_endpoints.yaml")
++PLACEHOLDER_TOKENS = ("TODO", "REPLACE_ME", "TBD")
++_SHA1 = re.compile(r"^[0-9a-f]{40}$")
++
++
++class FreezeError(ValueError):
++    """Raised when a pre-registration cannot be frozen or a freeze cannot be verified."""
++
++
++def sha256_bytes(payload: bytes) -> str:
++    return hashlib.sha256(payload).hexdigest()
++
++
++def sha256_file(path: str | Path) -> str:
++    return sha256_bytes(Path(path).read_bytes())
++
++
++def parse_preregistration(payload: bytes | str) -> dict[str, Any]:
++    data = yaml.safe_load(payload) or {}
++    if not isinstance(data, dict):
++        raise FreezeError("Pre-registration must be a YAML mapping.")
++    return data
++
++
++def unresolved_fields(node: Any, prefix: str = "") -> list[str]:
++    """Dotted paths of values that are still ``null`` or contain a placeholder token."""
++    found: list[str] = []
++    if isinstance(node, Mapping):
++        for key, value in node.items():
++            found.extend(unresolved_fields(value, f"{prefix}.{key}" if prefix else str(key)))
++    elif isinstance(node, list):
++        for index, value in enumerate(node):
++            found.extend(unresolved_fields(value, f"{prefix}[{index}]"))
++    elif node is None or (isinstance(node, str) and any(token in node for token in PLACEHOLDER_TOKENS)):
++        found.append(prefix or "<root>")
++    return found
++
++
++def _config_commitments(prereg: Mapping[str, Any]) -> Mapping[str, Any]:
++    commitments = prereg.get("scoring_commitments")
++    if not isinstance(commitments, Mapping):
++        raise FreezeError("Pre-registration must contain a scoring_commitments mapping.")
++    return commitments
++
++
++def consistency_problems(prereg: Mapping[str, Any], config_dir: str | Path) -> list[str]:
++    """Compare the values the pre-registration commits to with the shipped configuration."""
++    config_dir = Path(config_dir)
++    default = yaml.safe_load((config_dir / "default.yaml").read_text(encoding="utf-8")) or {}
++    endpoints = yaml.safe_load((config_dir / "cipa_endpoints.yaml").read_text(encoding="utf-8")) or {}
++    commitments = _config_commitments(prereg)
++    qc = default.get("quality_control", {})
++    concentration = default.get("concentration_response", {})
++    scoring = default.get("scoring", {})
++    expected = {
++        "concentration_aggregation": concentration.get("concentration_aggregation"),
++        "min_concentrations": concentration.get("min_concentrations"),
++        "require_min_concentrations_for_scoring": concentration.get("require_min_concentrations_for_scoring"),
++        "informative_dropout_min_fraction": qc.get("informative_dropout_min_fraction"),
++        "informative_dropout_min_excess": qc.get("informative_dropout_min_excess"),
++        "low_threshold": scoring.get("low_threshold"),
++        "moderate_threshold": scoring.get("moderate_threshold"),
++        "normalize_by_vehicle": scoring.get("normalize_by_vehicle"),
++        "dose_response_weight": scoring.get("dose_response_weight"),
++    }
++    problems = []
++    for key, actual in expected.items():
++        if key not in commitments:
++            problems.append(f"scoring_commitments.{key} is missing (configuration has {actual!r}).")
++        elif commitments[key] != actual:
++            problems.append(
++                f"scoring_commitments.{key}={commitments[key]!r} but the frozen configuration has {actual!r}."
++            )
++    weights = commitments.get("endpoint_weights")
++    actual_weights = {name: meta.get("weight") for name, meta in (endpoints.get("endpoints") or {}).items()}
++    if weights != actual_weights:
++        problems.append(f"scoring_commitments.endpoint_weights={weights!r} but cipa_endpoints.yaml has {actual_weights!r}.")
++    return problems
++
++
++def _sha1_ok(value: Any) -> bool:
++    return isinstance(value, str) and bool(_SHA1.match(value))
++
++
++def build_freeze_manifest(
++    *,
++    prereg_path: str | Path,
++    config_dir: str | Path,
++    package_sha: str,
++    frozen_at_utc: str | None = None,
++) -> dict[str, Any]:
++    """Create the freeze manifest, refusing while anything is unresolved or inconsistent."""
++    prereg_path = Path(prereg_path)
++    config_dir = Path(config_dir)
++    prereg = parse_preregistration(prereg_path.read_bytes())
++    problems: list[str] = []
++    if prereg.get("status") != "frozen":
++        problems.append("Pre-registration status must be 'frozen' (currently " f"{prereg.get('status')!r}).")
++    problems.extend(f"Unresolved field: {path}" for path in unresolved_fields(prereg))
++    problems.extend(consistency_problems(prereg, config_dir))
++    if not _sha1_ok(package_sha):
++        problems.append("package_sha must be a full 40-character lowercase commit SHA.")
++    if problems:
++        raise FreezeError("Cannot freeze:\n- " + "\n- ".join(problems))
++    return {
++        "schema_version": FREEZE_SCHEMA_VERSION,
++        "status": "frozen",
++        "validation_version": prereg["validation_version"],
++        "frozen_at_utc": frozen_at_utc or datetime.now(timezone.utc).isoformat(),
++        "package_sha": package_sha,
++        "preregistration_sha256": sha256_file(prereg_path),
++        "config_sha256": {name: sha256_file(config_dir / name) for name in FROZEN_CONFIG_FILES},
++    }
++
++
++def verify_freeze(
++    manifest: Mapping[str, Any],
++    *,
++    prereg_bytes: bytes,
++    config_dir: str | Path,
++    package_sha: str,
++) -> list[str]:
++    """Return every reason the freeze does not hold (an empty list means it verified)."""
++    config_dir = Path(config_dir)
++    problems: list[str] = []
++    if manifest.get("schema_version") != FREEZE_SCHEMA_VERSION:
++        problems.append(f"Unsupported freeze schema_version {manifest.get('schema_version')!r}.")
++    if manifest.get("status") != "frozen":
++        problems.append("Freeze manifest status is not 'frozen'.")
++    if manifest.get("package_sha") != package_sha:
++        problems.append(
++            f"Freeze manifest is for package {manifest.get('package_sha')!r}, but this run uses {package_sha!r}."
++        )
++    if manifest.get("preregistration_sha256") != sha256_bytes(prereg_bytes):
++        problems.append("Pre-registration changed after it was frozen (SHA-256 mismatch).")
++    frozen_hashes = manifest.get("config_sha256")
++    if not isinstance(frozen_hashes, Mapping):
++        problems.append("Freeze manifest has no config_sha256 mapping.")
++        frozen_hashes = {}
++    for name in FROZEN_CONFIG_FILES:
++        path = config_dir / name
++        if not path.is_file():
++            problems.append(f"Installed package has no {name}.")
++        elif frozen_hashes.get(name) != sha256_file(path):
++            problems.append(f"{name} differs from the frozen configuration (SHA-256 mismatch).")
++    try:
++        prereg = parse_preregistration(prereg_bytes)
++    except (FreezeError, yaml.YAMLError) as exc:
++        return [*problems, f"Pre-registration cannot be parsed: {exc}"]
++    if prereg.get("status") != "frozen":
++        problems.append("Pre-registration status is not 'frozen'.")
++    problems.extend(f"Unresolved field: {path}" for path in unresolved_fields(prereg))
++    try:
++        problems.extend(consistency_problems(prereg, config_dir))
++    except (FreezeError, OSError, yaml.YAMLError) as exc:
++        problems.append(f"Consistency check failed: {exc}")
++    return problems
++
++
++def load_manifest(payload: bytes | str) -> dict[str, Any]:
++    data = json.loads(payload)
++    if not isinstance(data, dict):
++        raise FreezeError("Freeze manifest must be a JSON object.")
++    return data
+diff -ruN a/virelion_cardioscore/validation/manifest.py b/virelion_cardioscore/validation/manifest.py
+--- a/virelion_cardioscore/validation/manifest.py	2026-09-20 15:43:12.976572005 +0000
++++ b/virelion_cardioscore/validation/manifest.py	2026-09-20 15:43:12.989191370 +0000
+@@ -116,20 +116,24 @@
+     if site_values.isna().any() or not np.isfinite(site_values.to_numpy()).all():
+         raise ValueError("site must be numeric and finite")
+ 
+-    numeric_runtime_columns = (
+-        "fpd_ms",
+-        "beat_rate_bpm",
+-        "amplitude_uv",
+-        "stv",
+-        "triangulation_proxy",
+-        "n_electrodes",
+-        "noise_sd_uv",
+-        "beat_detection_rate",
+-    )
+-    for column in numeric_runtime_columns:
++    endpoint_columns = ("fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy")
++    qc_columns = ("n_electrodes", "noise_sd_uv", "beat_detection_rate")
++    for column in qc_columns:
+         values = pd.to_numeric(frame[column], errors="coerce")
+         if values.isna().any() or not np.isfinite(values.to_numpy()).all():
+             raise ValueError(f"{column} must be numeric and finite")
++    # A well that lost all usable signal (no electrodes or no detected beats) legitimately has no
++    # computable endpoints. Such wells must stay in the table, as missing values, so the pipeline
++    # can account for them as dropout; a missing endpoint on any other well is still an error.
++    no_signal = (pd.to_numeric(frame["n_electrodes"]) == 0) | (pd.to_numeric(frame["beat_detection_rate"]) == 0)
++    for column in endpoint_columns:
++        values = pd.to_numeric(frame[column], errors="coerce")
++        if (values.notna() & ~np.isfinite(values.to_numpy(dtype=float))).any():
++            raise ValueError(f"{column} must be numeric and finite")
++        if (frame[column].notna() & values.isna()).any():
++            raise ValueError(f"{column} must be numeric and finite")
++        if (values.isna() & ~no_signal).any():
++            raise ValueError(f"{column} must be numeric and finite (missing values are only allowed on no-signal wells)")
+ 
+     electrode_values = pd.to_numeric(frame["n_electrodes"], errors="coerce")
+     if (electrode_values < 0).any() or not np.isclose(electrode_values, np.round(electrode_values)).all():
+diff -ruN a/virelion_cardioscore/validation/metrics.py b/virelion_cardioscore/validation/metrics.py
+--- a/virelion_cardioscore/validation/metrics.py	2026-09-20 15:43:12.976617344 +0000
++++ b/virelion_cardioscore/validation/metrics.py	2026-09-20 15:43:12.989206818 +0000
+@@ -168,3 +168,65 @@
+         )
+         .reset_index()
+     )
++
++
++def binary_auroc_bootstrap(
++    positive: Iterable[bool],
++    scores: Iterable[float],
++    *,
++    n_bootstrap: int,
++    seed: int,
++    confidence: float = 0.95,
++) -> dict[str, Any]:
++    """AUROC with a percentile bootstrap CI that resamples *compounds* (the independent unit).
++
++    Resamples that contain only one class are skipped and counted; nothing is fitted or tuned.
++    """
++    from sklearn.metrics import roc_auc_score
++
++    y = np.asarray(list(positive), dtype=bool)
++    x = np.asarray(list(scores), dtype=float)
++    if y.shape != x.shape or y.size == 0:
++        raise ValueError("positive and scores must have equal, non-zero length")
++    if not np.isfinite(x).all():
++        raise ValueError("scores must be finite")
++    if y.all() or (~y).all():
++        raise ValueError("AUROC requires both positive and negative compounds")
++    if not 0.0 < confidence < 1.0 or n_bootstrap < 1:
++        raise ValueError("confidence must be in (0, 1) and n_bootstrap must be >= 1")
++    auroc = float(roc_auc_score(y, x))
++    rng = np.random.default_rng(int(seed))
++    draws: list[float] = []
++    for _ in range(int(n_bootstrap)):
++        index = rng.integers(0, y.size, y.size)
++        if y[index].all() or (~y[index]).all():
++            continue
++        draws.append(float(roc_auc_score(y[index], x[index])))
++    if not draws:
++        raise ValueError("No valid bootstrap resamples contained both classes")
++    lower_q = (1.0 - confidence) / 2.0
++    lower, upper = np.quantile(draws, [lower_q, 1.0 - lower_q])
++    return {
++        "auroc": auroc,
++        "ci_lower": float(lower),
++        "ci_upper": float(upper),
++        "confidence": float(confidence),
++        "n": int(y.size),
++        "n_positive": int(y.sum()),
++        "n_negative": int((~y).sum()),
++        "n_bootstrap_requested": int(n_bootstrap),
++        "n_bootstrap_valid": len(draws),
++        "seed": int(seed),
++    }
++
++
++def primary_outcome(result: dict[str, Any], rule: dict[str, Any]) -> str:
++    """Apply the pre-registered three-outcome rule: 'success', 'inconclusive' or 'failure'."""
++    for outcome in ("success", "inconclusive"):
++        thresholds = rule[outcome]
++        if (
++            result["auroc"] >= float(thresholds["auroc_min"])
++            and result["ci_lower"] >= float(thresholds["ci_lower_min"])
++        ):
++            return outcome
++    return "failure"

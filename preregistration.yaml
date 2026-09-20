@@ -1,0 +1,115 @@
+# CardioScore locked external validation - pre-registration (DRAFT).
+#
+# HOW TO FREEZE
+#   1. Resolve every `null` below (each is marked REQUIRED). Change `status` to `frozen`.
+#   2. Run: python scripts/validation/make_freeze_manifest.py --package-sha <commit SHA of the
+#      CardioScore code that will be validated>
+#      It refuses to write validation/freeze_manifest.json while anything is unresolved or
+#      disagrees with the shipped configuration.
+#   3. Commit this file and the manifest. The commit history is the evidence of *when* the plan
+#      was frozen; the locked runner then verifies the hashes at run time.
+#   4. Any later change to this file, the scoring configuration or the package code means a new
+#      validation_version and a new freeze.
+#
+# Numeric criteria below are PROPOSALS for the study owner to accept or change before freezing.
+
+schema_version: 1
+status: draft
+validation_version: cardioscore-ext-v1
+
+purpose: >-
+  Evaluate the frozen CardioScore on one external dataset with one primary analysis, decided
+  before that dataset is scored.
+
+declarations:
+  development_history:
+    statement: >-
+      CardioScore endpoint weights, effect thresholds and risk thresholds are engineering choices
+      inspired by public CiPA literature (see the header of virelion_cardioscore/config/cipa_endpoints.yaml).
+      They were not fit to drug-level outcomes or risk labels from the dataset used in this validation.
+    confirmed_by: null   # REQUIRED: name of the person attesting the statement above
+    confirmed_on: null   # REQUIRED: YYYY-MM-DD
+  label_blind_development:
+    statement: >-
+      Source adapters, QC and feature derivation for the primary dataset are developed without computing
+      CardioScore risk classes for it or comparing any CardioScore output with reference labels. The first
+      scoring run of the primary dataset is the locked run.
+    confirmed_by: null   # REQUIRED
+    confirmed_on: null   # REQUIRED
+
+primary_dataset:
+  citation: >-
+    Patel D, Stohlman JM, Dang Q, Strauss DG, Blinova K. Assessment of proarrhythmic potential of drugs
+    in optogenetically paced induced pluripotent stem cell-derived cardiomyocytes. Toxicol Sci 2019;170(1):167-179.
+  doi: null                          # REQUIRED: DOI of the dataset or paper the data were obtained from
+  source_url: null                   # REQUIRED: archive or publisher URL of the raw or processed data
+  raw_traces_publicly_available: null  # REQUIRED: true or false. If false, this is at most a component validation.
+  arm: spontaneous
+  arm_rationale: >-
+    In optically paced arms the stimulus sets the beat rate, so the beat-rate endpoint carries no drug
+    information. Paced arms are secondary analyses and are reported separately.
+
+reference_labels:
+  source: >-
+    CiPA 28-drug TdP risk categories (low, intermediate, high) as encoded in derived/blinova_reference.csv
+    from the Blinova 2018 workbook.
+  reference_sha256: 40c8f80eea5ee05193768f6fffcb8d6c5ace2e04268d3cd54b5b033b28c3815a
+  category_map:
+    low: low
+    intermediate: moderate
+    high: high
+  note: Reference labels are literature categories, not outcomes measured in the primary dataset.
+
+primary_analysis:
+  population: All 28 reference compounds.
+  unscored_policy: block_headline   # any reference compound that cannot be scored blocks the headline result
+  positive_class: [intermediate, high]
+  negative_class: [low]
+  score: cardioscore
+  metric: auroc
+  confidence_interval:
+    method: compound_bootstrap_percentile
+    confidence: 0.95
+    n_bootstrap: 10000
+    seed: 42
+  outcome_rule:
+    success:
+      auroc_min: 0.80
+      ci_lower_min: 0.60
+    inconclusive:
+      auroc_min: 0.70
+      ci_lower_min: 0.50
+    otherwise: failure
+
+secondary_analyses:
+  three_class:
+    report: [confusion_matrix, accuracy, balanced_accuracy, macro_f1, cohen_kappa, ordinal_mae, spearman_rho]
+    criteria: none   # report-only; no pass/fail threshold
+  dropout_sensitivity:
+    reclassify_informative_dropout_as: high
+    criteria: none   # report-only; shows how much the result depends on compounds that lost signal
+  paced_arms:
+    criteria: none   # report-only; beat-rate endpoint is not interpretable under optical pacing
+
+scoring_commitments:
+  concentration_aggregation: mean_harmful_effect
+  min_concentrations: 3
+  require_min_concentrations_for_scoring: true
+  informative_dropout_min_fraction: 0.5
+  informative_dropout_min_excess: 0.25
+  low_threshold: 0.3
+  moderate_threshold: 0.6
+  normalize_by_vehicle: true
+  dose_response_weight: 0.0
+  endpoint_weights:
+    fpd_change_pct: 0.3
+    beat_rate_change_pct: 0.15
+    amplitude_change_pct: 0.15
+    stv_increase: 0.25
+    triangulation_proxy: 0.15
+
+known_limitations:
+  - The compound score averages harmful effects over the tested concentration grid; it is not normalized to clinical exposure (Cmax), so the same drug can score differently if a lab tests a different range.
+  - Exposure normalization is not implemented in the package; adding it is a scoring change and requires a new validation_version.
+  - All CiPA studies share the same 28 compounds and labels, so datasets are not independent in drug identity.
+  - With 9 low-risk and 19 intermediate or high-risk compounds, confidence intervals are wide.
