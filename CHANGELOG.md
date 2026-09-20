@@ -27,6 +27,10 @@
 - Explicit vehicle-structure validation for locked external runs when vehicle normalization is enabled.
 
 ### Fixed
+- Colab validation runner (Blinova stage): known workbook quirks (blank `risk`, undocumented platform code `ACA`, missing `ddFPDc`, and event-field discrepancies for terfenadine/verapamil) are recorded as audit flags instead of stopping the stage; structural errors still fail closed. Compound-level reference labels come only from labeled rows, with no label or platform relabeling.
+- Colab validation runner: the locked external stage passes `input_dir` to `run_locked_external`, preventing a runtime `TypeError` when verified assets are supplied.
+- Colab validation runner: the run manifest records the runner revision and source SHA-256 from the SHA-pinned launcher; unpinned launches warn explicitly.
+- Added `tests/test_colab_runner_blinova.py` covering the audited workbook quirks and internal call-arity regression.
 - Restored the actual `preprocessing.beat_detection` implementation after a module collision had replaced it with endpoint-extraction code.
 - Removed invalid bootstrap p-values that were derived from an observed-effect bootstrap distribution; profile comparisons now report confidence intervals only.
 - Made endpoint direction semantics consistent, including correct handling of decrease-only endpoints and feature-table scoring.
