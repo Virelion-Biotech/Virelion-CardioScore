@@ -15,7 +15,7 @@
 
 schema_version: 1
 status: draft
-validation_version: cardioscore-ext-v2
+validation_version: cardioscore-ext-v3
 
 purpose: >-
   Evaluate the frozen CardioScore on one external dataset with one primary analysis, decided
