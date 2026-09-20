@@ -54,6 +54,8 @@ def validate_pipeline_config(config: Mapping) -> None:
     _require_integer(qc.get("min_electrodes_per_well", 4), "quality_control.min_electrodes_per_well", minimum=1)
     _require_number(qc.get("max_noise_sd_uv", 25.0), "quality_control.max_noise_sd_uv", minimum=0)
     _require_number(qc.get("min_beat_detection_rate", 0.7), "quality_control.min_beat_detection_rate", minimum=0, maximum=1)
+    _require_number(qc.get("informative_dropout_min_fraction", 0.5), "quality_control.informative_dropout_min_fraction", minimum=0, maximum=1)
+    _require_number(qc.get("informative_dropout_min_excess", 0.25), "quality_control.informative_dropout_min_excess", minimum=0, maximum=1)
     stv_limit = qc.get("arrhythmia_proxy_max_stv")
     if stv_limit is not None:
         _require_number(stv_limit, "quality_control.arrhythmia_proxy_max_stv", minimum=0)
