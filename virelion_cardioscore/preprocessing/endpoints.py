@@ -149,7 +149,7 @@ def _repolarization_stv_ms(fpd_by_beat: list[Optional[float]]) -> float:
     """
     pairs = [
         (float(previous), float(current))
-        for previous, current in zip(fpd_by_beat, fpd_by_beat[1:], strict=True)
+        for previous, current in zip(fpd_by_beat[:-1], fpd_by_beat[1:], strict=True)
         if previous is not None and current is not None
     ]
     if not pairs:
