@@ -448,6 +448,8 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
                 "Platform code(s) outside the paper's documented set. Codes were NOT relabeled.",
                 n_rows=int(len(odd)),
                 rows_by_code=_count_by(odd),
+                rows_by_dataset=_count_by(dataset_key[odd.index]),
+                site_celltype_datasets=sorted(set(dataset_key[odd.index])),
                 compounds_affected=sorted({str(c) for c in frame.loc[odd.index, "compound"]}),
             )
         )
@@ -920,7 +922,12 @@ def run_locked_external(
         "source_id": receipt.get("source_id"),
         "source_sha256": receipt.get("sha256"),
         "derivation_manifest": derivation,
+        "freeze": freeze_info,
         "excluded_or_unscoreable_compounds": excluded,
+        "exclusion_reasons": exclusion_reasons,
+        "informative_dropout_compounds": informative,
+        "primary_analysis": None,
+        "dropout_sensitivity": None,
         "qc_log": result.qc_log,
     }
 

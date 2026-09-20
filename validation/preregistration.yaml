@@ -15,7 +15,7 @@
 
 schema_version: 1
 status: draft
-validation_version: cardioscore-ext-v1
+validation_version: cardioscore-ext-v3
 
 purpose: >-
   Evaluate the frozen CardioScore on one external dataset with one primary analysis, decided
@@ -101,6 +101,7 @@ scoring_commitments:
   moderate_threshold: 0.6
   normalize_by_vehicle: true
   dose_response_weight: 0.0
+  stv_definition: classical_repolarization_stv_from_consecutive_fpd_ms
   endpoint_weights:
     fpd_change_pct: 0.3
     beat_rate_change_pct: 0.15

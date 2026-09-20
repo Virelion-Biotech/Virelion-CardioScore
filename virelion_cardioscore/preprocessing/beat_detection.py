@@ -3,9 +3,9 @@ Beat detection on filtered MEA field-potential traces.
 
 Finds beat onsets (spike peaks) in a single-electrode trace using prominence-
 based peak detection, per the `beat_detection:` block in config/default.yaml.
-Downstream feature extraction (features/endpoints.py) consumes the beat
-indices this module returns to compute FPD, beat rate, amplitude, STV, and
-triangulation proxy.
+Downstream feature extraction consumes the beat indices returned here to compute
+FPD, beat rate, and amplitude. Repolarization STV is computed from consecutive
+per-beat FPD measurements in endpoints.py.
 """
 
 from __future__ import annotations
@@ -72,7 +72,9 @@ class BeatDetectionResult:
             return 0.0
         if self.expected_beat_count is None or self.expected_beat_count <= 0:
             return 0.0
-        return float(np.clip(self.n_beats / self.expected_beat_count, 0.0, 1.0))
+        ratio = self.n_beats / self.expected_beat_count
+        # Symmetric count agreement penalizes both under- and over-detection.
+        return float(np.clip(min(ratio, 1.0 / ratio), 0.0, 1.0))
 
     @property
     def beat_rate_bpm(self) -> float:
@@ -90,8 +92,8 @@ class BeatDetectionResult:
         return float(np.mean(np.abs(self.amplitudes_uv)))
 
     @property
-    def stv(self) -> float:
-        """Short-term variability of consecutive inter-beat intervals."""
+    def ibi_variability(self) -> float:
+        """Normalized short-term variability of consecutive inter-beat intervals."""
         if len(self.inter_beat_intervals_s) < 2:
             return 0.0
         diffs = np.abs(np.diff(self.inter_beat_intervals_s))
@@ -99,6 +101,11 @@ class BeatDetectionResult:
         if mean_ibi <= 0:
             return 0.0
         return float(np.mean(diffs) / mean_ibi)
+
+    @property
+    def stv(self) -> float:
+        """Deprecated compatibility alias for IBI variability; not repolarization STV."""
+        return self.ibi_variability
 
 
 def _estimate_expected_beat_count(

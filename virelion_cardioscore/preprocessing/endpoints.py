@@ -4,8 +4,8 @@ Feature extraction from beat-detected MEA field-potential traces.
 Turns per-electrode filtered traces + detected depolarization beats
 (preprocessing.beat_detection) into the well-level feature row that
 analysis.pipeline.CardioScorePipeline expects: fpd_ms, beat_rate_bpm,
-amplitude_uv, stv, triangulation_proxy, noise_sd_uv, n_electrodes,
-beat_detection_rate.
+amplitude_uv, repolarization STV, triangulation_proxy, noise_sd_uv,
+n_electrodes, beat_detection_rate.
 
 FPD (field potential duration) and the triangulation proxy require finding
 the repolarization deflection that follows each depolarization spike, which
@@ -32,7 +32,7 @@ from virelion_cardioscore.preprocessing.filtering import (
     filter_trace,
 )
 
-DEFAULT_REPOL_SEARCH_MS = (80.0, 450.0)
+DEFAULT_REPOL_SEARCH_MS = (80.0, 900.0)
 
 
 @dataclass
@@ -141,6 +141,25 @@ def _find_repolarization_peak(
     return repol_idx, repol_width_ms
 
 
+def _repolarization_stv_ms(fpd_by_beat: list[Optional[float]]) -> float:
+    """Compute classical short-term variability of repolarization from consecutive FPDs.
+
+    Only truly consecutive beats contribute a pair. Missing FPDs break a pair rather than
+    bridging over an unmeasured beat. The result is in milliseconds.
+    """
+    pairs = [
+        (float(previous), float(current))
+        for previous, current in zip(fpd_by_beat[:-1], fpd_by_beat[1:], strict=True)
+        if previous is not None and current is not None
+    ]
+    if not pairs:
+        return float("nan")
+    return float(
+        np.sum([abs(current - previous) for previous, current in pairs])
+        / (len(pairs) * np.sqrt(2.0))
+    )
+
+
 def extract_electrode_features(
     raw_trace: np.ndarray,
     fs_hz: float,
@@ -152,11 +171,13 @@ def extract_electrode_features(
     filter_config = filter_config or FilterConfig()
     beat_config = beat_config or BeatDetectionConfig()
 
+    # Estimate noise before filtering so removed broadband energy is still visible to QC.
+    noise_sd = estimate_noise_sd(raw_trace, fs_hz)
     filtered = filter_trace(raw_trace, fs_hz, filter_config)
-    noise_sd = estimate_noise_sd(filtered, fs_hz)
     beats: BeatDetectionResult = detect_beats(filtered, fs_hz, beat_config)
 
     fpd_values: list[float] = []
+    fpd_by_beat: list[Optional[float]] = []
     triangulation_values: list[float] = []
     for beat_pos, (idx, amp) in enumerate(zip(beats.beat_indices, beats.amplitudes_uv, strict=True)):
         next_depol_idx = (
@@ -176,13 +197,16 @@ def extract_electrode_features(
         if repol_idx is not None:
             fpd_ms = (repol_idx - idx) / fs_hz * 1000.0
             fpd_values.append(fpd_ms)
+            fpd_by_beat.append(fpd_ms)
             if repol_width_ms is not None and fpd_ms > 0:
                 triangulation_values.append(repol_width_ms / fpd_ms)
+        else:
+            fpd_by_beat.append(None)
 
     return ElectrodeFeatures(
         beat_rate_bpm=beats.beat_rate_bpm,
         amplitude_uv=beats.mean_amplitude_uv,
-        stv=beats.stv,
+        stv=_repolarization_stv_ms(fpd_by_beat),
         fpd_ms=float(np.mean(fpd_values)) if fpd_values else None,
         triangulation_proxy=float(np.mean(triangulation_values)) if triangulation_values else None,
         noise_sd_uv=noise_sd,
@@ -238,7 +262,11 @@ def extract_well_features(
         fpd_ms=float(np.mean(fpd_vals)) if fpd_vals else float("nan"),
         beat_rate_bpm=float(np.mean([f.beat_rate_bpm for f in reliable.values()])),
         amplitude_uv=float(np.mean([abs(f.amplitude_uv) for f in reliable.values()])),
-        stv=float(np.mean([f.stv for f in reliable.values()])),
+        stv=(
+            float(np.mean(stv_vals))
+            if (stv_vals := [f.stv for f in reliable.values() if np.isfinite(f.stv)])
+            else float("nan")
+        ),
         triangulation_proxy=float(np.mean(tri_vals)) if tri_vals else float("nan"),
         noise_sd_uv=float(np.mean([f.noise_sd_uv for f in per_electrode.values()])),
         n_electrodes=len(electrode_traces),
