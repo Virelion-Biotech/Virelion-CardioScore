@@ -1,8 +1,7 @@
 """Signal-level validation against exact ground truth, plus documented known limitations.
 
-Passing tests state what the extraction recovers. ``xfail(strict=True)`` tests describe behaviour the
-extraction does NOT yet have (found by this benchmark); they turn red the moment a fix lands so the
-expectation can be promoted to a normal test and the validation version bumped.
+Passing tests state what the extraction recovers. These regression tests are part of the pre-freeze
+software validation contract; algorithm changes require a new validation version.
 """
 
 from __future__ import annotations
