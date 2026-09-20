@@ -47,6 +47,7 @@ def evaluate(recording, *, notch_hz: float | None = 50.0) -> dict:
     )
 
     fpd_pairs: list[tuple[float, float]] = []
+    fpd_by_beat: list[float | None] = []
     n_no_repol = 0
     for position, (index, amplitude) in enumerate(
         zip(beats.beat_indices, beats.amplitudes_uv, strict=True)
@@ -63,11 +64,15 @@ def evaluate(recording, *, notch_hz: float | None = 50.0) -> dict:
         distances = np.abs(recording.beat_times_s - beats.beat_times_s[position])
         nearest = int(np.argmin(distances))
         if distances[nearest] > BEAT_TOLERANCE_S:
+            fpd_by_beat.append(None)
             continue
         if repol_idx is None:
+            fpd_by_beat.append(None)
             n_no_repol += 1
             continue
-        fpd_pairs.append((float(recording.fpd_ms[nearest]), (repol_idx - index) / fs * 1000.0))
+        measured = (repol_idx - index) / fs * 1000.0
+        fpd_pairs.append((float(recording.fpd_ms[nearest]), measured))
+        fpd_by_beat.append(measured)
     truth_fpd, measured_fpd = (
         (np.array(x) for x in zip(*fpd_pairs, strict=True))
         if fpd_pairs
@@ -75,6 +80,18 @@ def evaluate(recording, *, notch_hz: float | None = 50.0) -> dict:
     )
     fpd = (
         agreement_metrics(truth_fpd, measured_fpd) if len(fpd_pairs) >= 2 else {"n": len(fpd_pairs)}
+    )
+    stv_pairs = [
+        (previous, current)
+        for previous, current in zip(fpd_by_beat, fpd_by_beat[1:], strict=True)
+        if previous is not None and current is not None
+    ]
+    stv_measured = (
+        float(
+            np.sum([abs(current - previous) for previous, current in stv_pairs])
+            / (len(stv_pairs) * np.sqrt(2.0))
+        )
+        if stv_pairs else float("nan")
     )
     rate_truth = 60.0 / np.mean(recording.ibi_s) if recording.ibi_s.size else float("nan")
     return {
@@ -91,9 +108,13 @@ def evaluate(recording, *, notch_hz: float | None = 50.0) -> dict:
         "fpd_rmse_ms": fpd.get("rmse"),
         "beat_rate_truth_bpm": float(rate_truth),
         "beat_rate_measured_bpm": float(beats.beat_rate_bpm),
-        "stv_measured": float(beats.stv),
+        "stv_measured": stv_measured,
         "ibi_variability_truth": recording.ibi_variability(),
         "fpd_stv_truth_ms": recording.fpd_short_term_variability_ms(),
+        "fpd_stv_abs_error_ms": (
+            abs(stv_measured - recording.fpd_short_term_variability_ms())
+            if np.isfinite(stv_measured) else float("nan")
+        ),
     }
 
 
