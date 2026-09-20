@@ -276,3 +276,82 @@ def test_internal_call_arities_match_signatures():
             if not required <= given <= total:
                 problems.append((node.func.id, node.lineno, given, required, total))
     assert not problems, problems
+
+
+def _label_rows(df: pd.DataFrame, drug: str, labels: list[str], ead: int = 1) -> pd.DataFrame:
+    """Give the first len(labels) rows of drug the given Type_of_EADs labels."""
+    for i, label in zip(df.index[df["Drug_Name"] == drug], labels, strict=False):
+        df.loc[i, "Type_of_EADs"] = label
+        df.loc[i, "EAD"] = ead
+    return df
+
+
+def test_combination_labels_count_as_arrhythmia_like(tmp_path):
+    df = _label_rows(make_frame(), "Quinidine", ["AC", "ABC", "AD", "A"])
+    result = audit(df, tmp_path)
+    assert result["n_abcd_events"] == 4 and result["n_Q_events"] == 0
+    assert result["event_label_counts"] == {"A": 1, "ABC": 1, "AC": 1, "AD": 1}
+    assert "EVENT_LABEL_UNRESOLVED" not in codes(result)
+    semantic = pd.read_csv(result["semantic_summary_path"])
+    assert int(semantic["is_abcd_arrhythmia"].sum()) == 4
+
+
+def test_label_mixing_arrhythmia_and_quiescence_counts_in_both(tmp_path):
+    result = audit(_label_rows(make_frame(), "Cisapride", ["AQ", "Q"]), tmp_path)
+    assert result["n_abcd_events"] == 1 and result["n_Q_events"] == 2
+    assert "EVENT_LABEL_UNRESOLVED" not in codes(result)
+
+
+def test_unresolved_labels_are_flagged_and_never_interpreted(tmp_path):
+    df = _label_rows(make_frame(), "Astemizole", ["T", "1AP", "BCT", "B"])
+    result = audit(df, tmp_path)
+    flag = next(f for f in result["flags"] if f["code"] == "EVENT_LABEL_UNRESOLVED")
+    assert flag["n_rows"] == 3 and flag["counts"] == {"1AP": 1, "BCT": 1, "T": 1}
+    assert result["n_abcd_events"] == 2 and result["n_unresolved_event_label_rows"] == 3
+    semantic = pd.read_csv(result["semantic_summary_path"])
+    assert semantic["event_label_unresolved"].sum() == 3
+    assert set(semantic["Type_of_EADs"].dropna()) == {"T", "1AP", "BCT", "B"}
+
+
+def test_any_event_label_with_ead_zero_fails(tmp_path):
+    df = _label_rows(make_frame(), "Quinidine", ["AC"], ead=0)
+    with pytest.raises(ValueError, match="internally inconsistent"):
+        audit(df, tmp_path)
+    df = _label_rows(make_frame(), "Quinidine", ["T"], ead=0)
+    with pytest.raises(ValueError, match="internally inconsistent"):
+        audit(df, tmp_path)
+
+
+def test_quiescence_only_ead_is_explained_for_no_event_compounds(tmp_path):
+    df = _label_rows(make_frame(), "Terfenadine", ["Q", "Q", "Q"])
+    result = audit(df, tmp_path)
+    flag = next(f for f in result["flags"] if f["code"] == "EAD_EXPLAINED_BY_QUIESCENCE")
+    assert flag["severity"] == "info" and flag["compound"] == "terfenadine"
+    assert flag["rows_Q_only"] == flag["rows_EAD_eq_1"] == 3
+    assert not {"PUBLISHED_CLAIM_MISMATCH", "EAD_FLAG_WITHOUT_ARRHYTHMIA_TYPE"} & codes(result)
+
+
+def test_combination_in_no_event_compound_is_a_claim_mismatch(tmp_path):
+    result = audit(_label_rows(make_frame(), "Verapamil", ["BC"]), tmp_path)
+    flag = next(f for f in result["flags"] if f["code"] == "PUBLISHED_CLAIM_MISMATCH")
+    assert flag["compound"] == "verapamil" and flag["rows_abcd_events"] == 1
+
+
+def test_ead_equals_any_event_label_is_reported_only_when_it_holds(tmp_path):
+    consistent = audit(_label_rows(make_frame(), "Quinidine", ["A", "Q"]), tmp_path)
+    assert "EAD_EQUALS_ANY_EVENT_LABEL" in codes(consistent)
+    df = _label_rows(make_frame(), "Quinidine", ["A", "Q"])
+    df.loc[df.index[df["Drug_Name"] == "Metoprolol"][0], "EAD"] = 1
+    broken = audit(df, tmp_path)
+    assert "EAD_EQUALS_ANY_EVENT_LABEL" not in codes(broken)
+    assert "EAD_FLAG_WITHOUT_EVENT_TYPE" in codes(broken)
+
+
+def test_undocumented_platform_flag_identifies_the_affected_dataset(tmp_path):
+    flag = next(
+        f
+        for f in audit(make_messy_frame(), tmp_path)["flags"]
+        if f["code"] == "UNDOCUMENTED_PLATFORM_CODE"
+    )
+    assert flag["site_celltype_datasets"] == ["6|CDI"]
+    assert flag["rows_by_dataset"] == {"6|CDI": 1}

@@ -312,6 +312,10 @@ BLINOVA_RISK_MAP = {"l": "low", "m": "intermediate", "h": "high"}
 BLINOVA_DOCUMENTED_PLATFORMS = ("AXN", "CLY", "ECR", "AMD", "MCS")
 BLINOVA_ARRHYTHMIA_EVENT_TYPES = ("A", "B", "C", "D")
 BLINOVA_QUIESCENCE_EVENT_TYPE = "Q"
+# Type_of_EADs may combine letters (e.g. AC, ABC). A-D are the paper's four arrhythmia-like event
+# types and Q is quiescence; any other letter or non-letter character is preserved and flagged,
+# never interpreted.
+BLINOVA_KNOWN_EVENT_LETTERS = frozenset("ABCDQ")
 BLINOVA_NO_EVENT_CLAIMS = ("terfenadine", "verapamil")
 BLINOVA_MAX_LISTED_ROWS = 25
 
@@ -431,6 +435,7 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
 
     platform = frame["Platform"].map(_label)
     cell_type = frame["Cell_type"].map(_label)
+    dataset_key = frame["site"].astype(str) + "|" + cell_type  # site x cell-type dataset
     documented_platform = platform.isin(list(BLINOVA_DOCUMENTED_PLATFORMS))
     if (~documented_platform).any():
         odd = platform[~documented_platform]
@@ -455,45 +460,66 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
             )
         )
 
-    # Event semantics: Q is quiescence, not an A-D arrhythmia.
+    # Event semantics. Labels are parsed as letter sets: A-D = arrhythmia-like types (combinations
+    # such as AC or ABC are several types in one well), Q = quiescence. Anything else is kept
+    # verbatim and flagged as unresolved.
+    known = BLINOVA_KNOWN_EVENT_LETTERS
+    abcd = frozenset(BLINOVA_ARRHYTHMIA_EVENT_TYPES)
     event = frame["Type_of_EADs"].map(
         lambda v: "" if pd.isna(v) else str(v).strip().upper()
     )
-    is_abcd = event.isin(list(BLINOVA_ARRHYTHMIA_EVENT_TYPES))
-    is_q = event.eq(BLINOVA_QUIESCENCE_EVENT_TYPE)
-    typed = is_abcd | is_q
-    inconsistent = typed & ~ead.eq(1)
+    has_label = event.ne("")
+    letters = event.map(lambda v: frozenset(v) if v.isalpha() else frozenset())
+    is_abcd = letters.map(lambda ls: bool(ls & abcd))
+    is_q = letters.map(lambda ls: BLINOVA_QUIESCENCE_EVENT_TYPE in ls)
+    unresolved = has_label & (~event.map(str.isalpha) | letters.map(lambda ls: bool(ls - known)))
+    inconsistent = has_label & ~ead.eq(1)
     if inconsistent.any():
         raise ValueError(
             "Blinova event semantics are internally inconsistent: "
-            f"{int(inconsistent.sum())} row(s) carry an A-D/Q event type but EAD != 1 "
+            f"{int(inconsistent.sum())} row(s) carry a Type_of_EADs label but EAD != 1 "
             f"(spreadsheet rows {_excel_rows(frame.index[inconsistent])})."
         )
-    other_labels = event[~typed & event.ne("")]
-    if len(other_labels):
+    if unresolved.any():
         flags.append(
             _blinova_flag(
-                "EVENT_TYPE_OTHER_LABELS",
-                "info",
-                "Type_of_EADs values other than A-D/Q are present; kept verbatim.",
-                counts=_count_by(other_labels),
+                "EVENT_LABEL_UNRESOLVED",
+                "warning",
+                "Type_of_EADs labels with letters other than A-D/Q or non-letter characters "
+                "are kept verbatim and NOT interpreted. Confirm their meaning in the paper's "
+                "Data S1 legend before using them.",
+                n_rows=int(unresolved.sum()),
+                counts=_count_by(event[unresolved]),
+                rows_by_compound=_count_by(frame.loc[unresolved, "compound"]),
             )
         )
-    ead1_untyped = ead.eq(1) & ~typed
-    if ead1_untyped.any():
+    ead1_unlabeled = ead.eq(1) & ~has_label
+    if ead1_unlabeled.any():
         flags.append(
             _blinova_flag(
                 "EAD_FLAG_WITHOUT_EVENT_TYPE",
+                "warning",
+                "EAD == 1 rows with no Type_of_EADs label; EAD semantics remain unresolved.",
+                n_rows=int(ead1_unlabeled.sum()),
+                rows_by_compound=_count_by(frame.loc[ead1_unlabeled, "compound"]),
+            )
+        )
+    elif has_label.any() and ead.eq(1).equals(has_label):
+        flags.append(
+            _blinova_flag(
+                "EAD_EQUALS_ANY_EVENT_LABEL",
                 "info",
-                "EAD == 1 rows have no A-D/Q event type; semantics remain unresolved.",
-                n_rows=int(ead1_untyped.sum()),
-                rows_by_compound=_count_by(frame.loc[ead1_untyped, "compound"]),
+                "EAD == 1 exactly when Type_of_EADs is non-blank (Q quiescence included), so EAD "
+                "means 'any event label', not 'arrhythmia'. Use the A-D letters for "
+                "arrhythmia-like events.",
+                n_rows=int(has_label.sum()),
             )
         )
 
     # Published-claim cross-check: warning only.
-    dataset_key = frame["site"].astype(str) + "|" + cell_type
+    dataset_key = frame["site"].astype(str) + "|" + cell_type  # site x cell-type dataset
     frame["_ead1"] = ead.eq(1)
+    q_only = is_q & ~is_abcd & ~unresolved
     for compound in BLINOVA_NO_EVENT_CLAIMS:
         mask = frame["compound"].eq(compound)
         if not mask.any():
@@ -504,6 +530,7 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
             "rows_abcd_events": int((mask & is_abcd).sum()),
             "datasets_with_abcd_events": int(dataset_key[mask & is_abcd].nunique()),
             "rows_Q_events": int((mask & is_q).sum()),
+            "rows_Q_only": int((mask & q_only).sum()),
             "rows_EAD_eq_1": int((mask & frame["_ead1"]).sum()),
             "datasets_with_EAD_eq_1": int(dataset_key[mask & frame["_ead1"]].nunique()),
         }
@@ -512,7 +539,19 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
                 _blinova_flag(
                     "PUBLISHED_CLAIM_MISMATCH",
                     "warning",
-                    f"Paper reports no arrhythmia-like events for {compound}; workbook has A-D typed events.",
+                    f"Paper reports no arrhythmia-like events for {compound}; workbook has A-D labels "
+                    "(including combinations).",
+                    compound=compound,
+                    **stats,
+                )
+            )
+        elif stats["rows_EAD_eq_1"] > 0 and stats["rows_EAD_eq_1"] == stats["rows_Q_only"]:
+            flags.append(
+                _blinova_flag(
+                    "EAD_EXPLAINED_BY_QUIESCENCE",
+                    "info",
+                    f"Paper reports no arrhythmia-like events for {compound}; every EAD == 1 "
+                    "row is a Q (quiescence) label, so the workbook is consistent with that claim.",
                     compound=compound,
                     **stats,
                 )
@@ -522,7 +561,8 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
                 _blinova_flag(
                     "EAD_FLAG_WITHOUT_ARRHYTHMIA_TYPE",
                     "warning",
-                    f"Paper reports no arrhythmia-like events for {compound}; EAD == 1 rows exist but none are typed A-D.",
+                    f"Paper reports no arrhythmia-like events for {compound}; EAD == 1 rows "
+                    "exist that are neither A-D nor solely Q labels.",
                     compound=compound,
                     **stats,
                 )
@@ -548,6 +588,7 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
     frame["risk_missing"] = risk_missing
     frame["is_abcd_arrhythmia"] = is_abcd
     frame["is_Q_quiescence"] = is_q
+    frame["event_label_unresolved"] = unresolved
 
     reference_path = derived_dir / "blinova_reference.csv"
     semantic_path = derived_dir / "blinova_semantic_summary.csv"
@@ -557,7 +598,7 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
         [
             "compound", "Drug_Name", "risk", "Platform", "site", "Cell_type",
             "conc", "ddFPDc", "EAD", "Type_of_EADs",
-            "is_abcd_arrhythmia", "is_Q_quiescence",
+            "is_abcd_arrhythmia", "is_Q_quiescence", "event_label_unresolved",
             "platform_documented", "risk_missing",
         ]
     ].to_csv(semantic_path, index=False)
@@ -578,8 +619,11 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
         "n_rows": int(len(frame)),
         "n_compounds": int(reference["compound"].nunique()),
         "n_sites": int(site.nunique()),
+        # Rows carrying any A-D letter (combinations such as AC/ABC included) / any Q label.
         "n_abcd_events": int(is_abcd.sum()),
         "n_Q_events": int(is_q.sum()),
+        "n_unresolved_event_label_rows": int(unresolved.sum()),
+        "event_label_counts": _count_by(event[has_label]),
         "n_ddFPDc_missing": n_dd_missing,
         "ddFPDc_missing_fraction": float(n_dd_missing / len(frame)),
         "n_flags": len(flags),
