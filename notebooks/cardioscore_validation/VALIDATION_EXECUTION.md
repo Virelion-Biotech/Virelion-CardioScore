@@ -34,16 +34,28 @@ The runner writes its handoff artifacts directly into that workspace, so a later
 
 ### Single Colab cell
 
-Paste this into a fresh Colab cell:
+Paste this into a fresh Colab cell. Fetch the runner by **commit SHA**, not `main`, so the run
+manifest identifies exactly which runner code produced the results:
 
 ```python
+import hashlib
+import os
 import urllib.request
 
-RUNNER = "https://raw.githubusercontent.com/Virelion-Biotech/Virelion-CardioScore/main/scripts/validation/run_colab_validation.py"
-exec(compile(urllib.request.urlopen(RUNNER).read(), "run_colab_validation.py", "exec"))
+RUNNER_SHA = "bc2511c0df47a4140c31d791510538188b0b80f0"
+RUNNER_URL = (
+    "https://raw.githubusercontent.com/Virelion-Biotech/Virelion-CardioScore/"
+    f"{RUNNER_SHA}/scripts/validation/run_colab_validation.py"
+)
+source = urllib.request.urlopen(RUNNER_URL).read()
+os.environ["CARDIOSCORE_RUNNER_SHA"] = RUNNER_SHA
+os.environ["CARDIOSCORE_RUNNER_SOURCE_SHA256"] = hashlib.sha256(source).hexdigest()
+exec(compile(source, "run_colab_validation.py", "exec"))
 ```
 
 The runner will prompt for a run label and then open one upload dialog. Upload all assets needed for that validation run together.
+
+`run_manifest.json` records `runner_revision` and `runner_source_sha256`. An unpinned launch remains fail-soft for convenience but records `unpinned-main` and warns that the runner code is moving; use the SHA-pinned launcher for auditable runs.
 
 Optional environment controls can be set before the fetch:
 
@@ -79,3 +91,18 @@ The released CiPA workbook is a component/semantic validation source, not a five
 ## Legacy modular notebooks
 
 The numbered notebooks remain in the repository as inspectable modular examples. They are no longer required for routine execution; the single runner above is the preferred Colab workflow.
+
+
+## Blinova stage: hard stops vs. flags
+
+Structural problems stop the stage: missing columns, missing/non-numeric `conc`/`EAD`/`site`,
+malformed present-but-non-numeric `ddFPDc`, a canonical panel other than 28 compounds, an
+unrecognized risk label, contradictory risk labels within a compound, a compound with no labeled
+row, or an A-D/Q event type on a row with `EAD != 1`.
+
+Documented data-quality findings are **flagged, not fatal**, and are never rewritten in the source
+rows: blank `risk` cells, platform codes outside `AXN/CLY/ECR/AMD/MCS` (for example `ACA`),
+missing `ddFPDc`, and EAD/A-D findings in compounds the paper reports as event-free
+(terfenadine, verapamil). Flags are logged, stored in the run manifest, and written to
+`derived/blinova_audit_flags.json`. A run with flags is a component/semantic check only; resolve
+the flagged provenance questions before quoting any Blinova-derived number.
