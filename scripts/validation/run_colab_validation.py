@@ -782,7 +782,39 @@ def config_sha256() -> str:
     return sha256_file(cfg)
 
 
-def run_locked_external(assets: dict[str, Path], results_dir: Path, input_dir: Path) -> dict:
+def evaluate_primary_analysis(joined, prereg: dict, *, score_override=None) -> dict:
+    """Pre-registered primary analysis (AUROC + compound bootstrap CI + three-outcome rule)."""
+    from virelion_cardioscore.validation.metrics import (
+        RISK_ORDER,
+        binary_auroc_bootstrap,
+        primary_outcome,
+    )
+
+    spec = prereg["primary_analysis"]
+    positive_ordinals = {RISK_ORDER[str(name).strip().lower()] for name in spec["positive_class"]}
+    positive = [
+        RISK_ORDER[str(value).strip().lower()] in positive_ordinals for value in joined["reference_risk"]
+    ]
+    scores = joined["cardioscore"] if score_override is None else score_override
+    ci = spec["confidence_interval"]
+    result = binary_auroc_bootstrap(
+        positive,
+        scores,
+        n_bootstrap=int(ci["n_bootstrap"]),
+        seed=int(ci["seed"]),
+        confidence=float(ci["confidence"]),
+    )
+    result["outcome"] = primary_outcome(result, spec["outcome_rule"])
+    return result
+
+
+def run_locked_external(
+    assets: dict[str, Path],
+    results_dir: Path,
+    input_dir: Path,
+    prereg: dict | None = None,
+    freeze_info: dict | None = None,
+) -> dict:
     import pandas as pd
     import yaml
 
