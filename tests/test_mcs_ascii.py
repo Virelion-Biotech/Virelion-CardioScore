@@ -125,3 +125,123 @@ def test_adapter_records_hashes_and_a_verified_rebuild(tmp_path):
     assert "compound" not in json.dumps(
         lineage
     )  # untreated data: no treatment metadata is invented
+
+
+# --- the real Cardio PyMEA layout: title, blank line, names row, units row, fixed-width latin-1 ------
+
+REAL_ELECTRODES = ["El F7", "El F8", "El F12", "El E9"]
+
+
+def write_real_layout(
+    path: Path, *, n: int = 4000, newline: str = "\r\n", units=None, widen_after: int | None = None
+):
+    rng = np.random.default_rng(1)
+    units = units or ["[ms]", *["[µV]"] * len(REAL_ELECTRODES)]
+    pad = lambda text: f"{text:<12}"  # noqa: E731 - mirrors the fixed 12-character fields of MC_DataTool
+    lines = [
+        "MC_DataTool ASCII conversion",
+        "",
+        "\t".join(pad(name) for name in ["t", *REAL_ELECTRODES]),
+        "\t".join(pad(unit) for unit in units),
+    ]
+    for i in range(n):
+        ragged = (
+            widen_after is not None and i >= widen_after
+        )  # padding stops: record length now varies
+        cell = (lambda text: text) if ragged else pad
+        values = [cell(f"{rng.normal(0, 10.0):.2f}") for _ in REAL_ELECTRODES]
+        lines.append("\t".join([cell(f"{i * 1.0:.3f}"), *values]))
+    path.write_bytes((newline.join(lines) + newline).encode("latin-1"))
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\n"])
+def test_real_layout_is_read_unmodified_including_units_row(tmp_path, newline):
+    source = tmp_path / "Day9.txt"
+    write_real_layout(source, newline=newline)
+    before = source.read_bytes()
+    layout = sniff_layout(source)
+    assert layout.header_lines == 4 and layout.units == ("[ms]", *["[µV]"] * 4)
+    assert layout.columns == ("t", *REAL_ELECTRODES) and layout.fs_hz == pytest.approx(1000.0)
+    assert layout.record_bytes is not None and layout.header_bytes > 0
+    read_window(source, layout, electrodes=["El F8"], start_s=0.0, duration_s=1.0)
+    assert (
+        source.read_bytes() == before
+    )  # no preprocessing, no sed: the source hash stays the archive's hash
+
+
+def test_seek_path_matches_streaming_path_and_is_really_used(tmp_path):
+    source = tmp_path / "Day9.txt"
+    write_real_layout(source)
+    layout = sniff_layout(source)
+    from virelion_cardioscore.io import mcs_ascii
+
+    usecols = [0, 1, 3]
+    assert mcs_ascii._seek_frame(source, layout, usecols, 2.0, 1.0) is not None
+    for electrodes in (["El F7", "El F12"], ["El F12", "El F7"]):
+        fast = read_window(source, layout, electrodes=electrodes, start_s=2.0, duration_s=1.0)
+        slow = read_window(
+            source, layout, electrodes=electrodes, start_s=2.0, duration_s=1.0, allow_seek=False
+        )
+        assert np.array_equal(fast[0], slow[0]) and np.array_equal(fast[1], slow[1])
+        assert fast[0][0] == pytest.approx(2.0) and fast[1].shape == (1000, 2)
+
+
+def test_seek_falls_back_to_streaming_when_the_file_is_not_really_fixed_width(tmp_path):
+    source = tmp_path / "Day9.txt"
+    write_real_layout(
+        source, widen_after=1000
+    )  # padded (fixed-width) at the top, ragged afterwards
+    layout = sniff_layout(source)
+    from virelion_cardioscore.io import mcs_ascii
+
+    assert layout.record_bytes is not None
+    assert (
+        mcs_ascii._seek_frame(source, layout, [0, 1], 2.0, 1.0) is None
+    )  # position check catches it
+    fast = read_window(source, layout, electrodes=["El F7"], start_s=2.0, duration_s=1.0)
+    slow = read_window(
+        source, layout, electrodes=["El F7"], start_s=2.0, duration_s=1.0, allow_seek=False
+    )
+    assert np.array_equal(fast[1], slow[1]) and fast[0][0] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    ("units", "message"),
+    [
+        (["[s]", "[µV]", "[µV]", "[µV]", "[µV]"], "only \\[ms\\]"),
+        (["[ms]", "[µV]", "[mV]", "[µV]", "[µV]"], "Unrecognized voltage unit"),
+        (["[ms]", "[µV]", "[µV]"], "Units row has 3 entries"),
+    ],
+)
+def test_unexpected_units_are_rejected_not_assumed(tmp_path, units, message):
+    source = tmp_path / "Day9.txt"
+    write_real_layout(source, units=units)
+    with pytest.raises(SourceFormatError, match=message):
+        sniff_layout(source)
+
+
+def test_adapter_hashes_the_original_file_and_verifies_the_rebuild(tmp_path):
+    source = tmp_path / "Day9.txt"
+    write_real_layout(source)
+    out = tmp_path / "out"
+    code = adapter.main(
+        [
+            str(source),
+            "--electrodes",
+            "El F7",
+            "El F8",
+            "--start-s",
+            "1",
+            "--duration-s",
+            "2",
+            "--out-dir",
+            str(out),
+        ]
+    )
+    lineage = json.loads((out / "lineage.json").read_text(encoding="utf-8"))
+    assert code == 0 and lineage["verified_rebuild"] is True
+    assert lineage["source_sha256"] == adapter.file_sha256(source)
+    assert (
+        lineage["layout"]["units"] == ["[ms]", *["[µV]"] * 4]
+        and lineage["layout"]["seek_capable"] is True
+    )
