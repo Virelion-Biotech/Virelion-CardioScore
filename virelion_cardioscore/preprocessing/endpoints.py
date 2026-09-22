@@ -4,7 +4,7 @@ Feature extraction from beat-detected MEA field-potential traces.
 Turns per-electrode filtered traces + detected depolarization beats
 (preprocessing.beat_detection) into the well-level feature row that
 analysis.pipeline.CardioScorePipeline expects: fpd_ms, beat_rate_bpm,
-amplitude_uv, repolarization STV, triangulation_proxy, noise_sd_uv,
+amplitude_uv, IBI variability, triangulation_proxy, noise_sd_uv, fpd_stv_ms (report-only),
 n_electrodes, beat_detection_rate.
 
 FPD (field potential duration) and the triangulation proxy require finding
@@ -32,7 +32,7 @@ from virelion_cardioscore.preprocessing.filtering import (
     filter_trace,
 )
 
-DEFAULT_REPOL_SEARCH_MS = (80.0, 900.0)
+DEFAULT_REPOL_SEARCH_MS = (80.0, 1200.0)
 
 
 @dataclass
@@ -60,6 +60,7 @@ class ElectrodeFeatures:
     beat_detection_rate: float
     n_beats: int
     n_beats_with_fpd: int
+    fpd_stv_ms: Optional[float] = None
 
 
 @dataclass
@@ -190,7 +191,11 @@ def extract_electrode_features(
             depol_idx=int(idx),
             fs_hz=fs_hz,
             depol_amplitude_uv=float(amp),
-            min_prominence_uv=beat_config.min_prominence_uv,
+            min_prominence_uv=(
+                beats.effective_prominence_uv
+                if beats.effective_prominence_uv is not None
+                else beat_config.min_prominence_uv
+            ),
             search_window_ms=repol_search_ms,
             next_depol_idx=next_depol_idx,
         )
@@ -203,16 +208,24 @@ def extract_electrode_features(
         else:
             fpd_by_beat.append(None)
 
+    consecutive = [
+        abs(b - a)
+        for a, b in zip(fpd_by_beat, fpd_by_beat[1:], strict=False)
+        if a is not None and b is not None
+    ]
+    fpd_stv_ms = float(np.sum(consecutive) / (len(consecutive) * np.sqrt(2.0))) if consecutive else None
+
     return ElectrodeFeatures(
         beat_rate_bpm=beats.beat_rate_bpm,
         amplitude_uv=beats.mean_amplitude_uv,
-        stv=_repolarization_stv_ms(fpd_by_beat),
+        stv=beats.stv,
         fpd_ms=float(np.mean(fpd_values)) if fpd_values else None,
         triangulation_proxy=float(np.mean(triangulation_values)) if triangulation_values else None,
         noise_sd_uv=noise_sd,
         beat_detection_rate=beats.beat_detection_rate,
         n_beats=beats.n_beats,
         n_beats_with_fpd=len(fpd_values),
+        fpd_stv_ms=fpd_stv_ms,
     )
 
 

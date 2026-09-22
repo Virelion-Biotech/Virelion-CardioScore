@@ -30,6 +30,7 @@ beat_detection:
   min_prominence_uv: 20.0
   min_distance_ms: 250.0
   refractory_ms: 200.0
+  noise_prominence_multiplier: 10.0
 
 features:
   compute_fpd: true
