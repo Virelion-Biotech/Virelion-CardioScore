@@ -61,6 +61,7 @@ def make_sheet(
     window_s: float,
     seed: int,
     duration_s: float | None,
+    exclude: list[tuple[str, float, float]] | None = None,
 ) -> dict:
     layout = sniff_layout(source)
     if duration_s is None:
@@ -71,19 +72,29 @@ def make_sheet(
         ) / layout.fs_hz
     if duration_s < window_s:
         raise SystemExit("Recording is shorter than one window.")
+    exclusions = list(exclude or [])
     rng = np.random.default_rng(seed)
     windows = []
-    for index in range(n_windows):
+    max_attempts = max(1000, n_windows * 1000)
+    attempts = 0
+    while len(windows) < n_windows:
+        attempts += 1
+        if attempts > max_attempts:
+            raise SystemExit(
+                "Unable to sample the requested number of windows outside excluded regions; "
+                "reduce exclusions or n_windows."
+            )
         electrode = layout.electrodes[int(rng.integers(0, len(layout.electrodes)))]
         start_s = float(int(rng.uniform(0, duration_s - window_s)))
-        windows.append(
-            {
-                "window_id": f"w{index:02d}",
-                "electrode": electrode,
-                "start_s": start_s,
-                "window_s": window_s,
-            }
-        )
+        candidate = {
+            "window_id": f"w{len(windows):02d}",
+            "electrode": electrode,
+            "start_s": start_s,
+            "window_s": window_s,
+        }
+        if _overlaps(candidate, exclusions):
+            continue
+        windows.append(candidate)
     (out_dir / "windows").mkdir(parents=True, exist_ok=True)
     (out_dir / "plots").mkdir(exist_ok=True)
     import matplotlib
@@ -143,12 +154,39 @@ def make_sheet(
         "window_s": window_s,
         "fs_hz": layout.fs_hz,
         "instructions": "Set done=1 for every window you annotate (blank beat_times_s with done=1 means NO beats). Separate times with ';'.",
+        "excluded_regions": [list(item) for item in exclusions],
         "windows": windows,
     }
     (out_dir / "sheet_manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
     return manifest
+
+
+def parse_exclusion(text: str) -> tuple[str, float, float]:
+    """Parse an exclusion as 'electrode:start_s:end_s'."""
+    try:
+        electrode, start_text, end_text = text.rsplit(":", 2)
+        start_s = float(start_text)
+        end_s = float(end_text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid exclusion {text!r}; expected 'Electrode:start_s:end_s'"
+        ) from exc
+    if not electrode or start_s < 0 or end_s <= start_s:
+        raise ValueError(f"Invalid exclusion {text!r}: require 0 <= start < end")
+    return electrode, start_s, end_s
+
+
+def _overlaps(window: dict, exclusions: list[tuple[str, float, float]]) -> bool:
+    """Return whether a sampled window overlaps an excluded electrode/time region."""
+    start = float(window["start_s"])
+    end = start + float(window["window_s"])
+    electrode = window["electrode"]
+    return any(
+        electrode == ex_electrode and start < ex_end and end > ex_start
+        for ex_electrode, ex_start, ex_end in exclusions
+    )
 
 
 def read_annotations(path: Path, manifest: dict) -> dict[str, dict]:
@@ -248,6 +286,56 @@ def score(
         result["n_unsure_windows_excluded"] = len(annotation) - len(usable)
         result["beat_rate_agreement_bpm"] = agreement_metrics(reference_rates, detected_rates)
         results["vs_annotator"][path.name] = result
+    # Report per-window QC on the same raw voltage used for annotation. This is diagnostic;
+    # it does not alter the blinded annotation metrics.
+    qc_cfg = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "virelion_cardioscore" / "config" / "default.yaml").read_text(
+            encoding="utf-8"
+        )
+    )["quality_control"]
+    from virelion_cardioscore.preprocessing.endpoints import extract_electrode_features
+
+    first_annotations = annotations[0]
+    qc_windows = []
+    false_rejections: list[str] = []
+    admitted_with_poor_detection: list[str] = []
+    for window in manifest["windows"]:
+        array = np.load(sheet_dir / "windows" / f"{window['window_id']}.npy")
+        features = extract_electrode_features(array[:, 1], fs_hz)
+        noise_bad = features.noise_sd_uv > float(qc_cfg["max_noise_sd_uv"])
+        detection_bad = features.beat_detection_rate < float(qc_cfg["min_beat_detection_rate"])
+        reasons = []
+        if noise_bad:
+            reasons.append("noise_sd_uv")
+        if detection_bad:
+            reasons.append("beat_detection_rate")
+        qc_rejected = bool(reasons)
+        human = first_annotations[window["window_id"]]
+        human_beating = bool(human["beats"]) and not human["unsure"]
+        if human_beating and qc_rejected:
+            false_rejections.append(window["window_id"])
+        if human_beating and not qc_rejected and detection_bad:
+            admitted_with_poor_detection.append(window["window_id"])
+        qc_windows.append(
+            {
+                "window_id": window["window_id"],
+                "electrode": window["electrode"],
+                "noise_sd_uv": float(features.noise_sd_uv),
+                "beat_detection_rate": float(features.beat_detection_rate),
+                "qc_rejected": qc_rejected,
+                "rejection_reasons": reasons,
+            }
+        )
+    results["qc"] = {
+        "n_windows": len(qc_windows),
+        "limits": {
+            "max_noise_sd_uv": float(qc_cfg["max_noise_sd_uv"]),
+            "min_beat_detection_rate": float(qc_cfg["min_beat_detection_rate"]),
+        },
+        "false_rejections_of_beating_windows": false_rejections,
+        "admitted_with_poor_detection": admitted_with_poor_detection,
+        "windows": qc_windows,
+    }
     if len(annotations) >= 2:
         a, b = annotations[0], annotations[1]
         shared = {
@@ -284,6 +372,13 @@ def main(argv: list[str] | None = None) -> int:
     sheet.add_argument("--window-s", type=float, default=10.0)
     sheet.add_argument("--seed", type=int, default=20260921)
     sheet.add_argument("--duration-s", type=float, default=None)
+    sheet.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="ELECTRODE:START:END",
+        help="exclude an electrode/time region; repeat for multiple regions",
+    )
     scoring = sub.add_parser("score")
     scoring.add_argument("--sheet-dir", type=Path, required=True)
     scoring.add_argument("--annotations", type=Path, action="append", required=True)
@@ -305,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
             window_s=args.window_s,
             seed=args.seed,
             duration_s=args.duration_s,
+            exclude=[parse_exclusion(item) for item in args.exclude],
         )
         print(
             f"Wrote {args.n_windows} windows to {args.out_dir}; annotate annotation_sheet.csv using the PNGs. seed={manifest['seed']}"
