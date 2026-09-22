@@ -9,6 +9,7 @@
 - Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
 
 ### Added
+- Cardio PyMEA real layout: `io.mcs_ascii` now reads the original MC_DataTool export unmodified (title line, blank line, names row, units row in latin-1; units verified), records units/header size in the lineage, and jumps to windows by byte offset in fixed-width files (position verified, streaming fallback). `scripts/validation/pymea_beat_validation.py` builds a blinded, seeded annotation sheet (raw-voltage plots only) and scores CardioScore's beat detector against one or two human annotators; `validation/signal_validation_criteria.yaml` holds draft acceptance criteria.
 - v5 signal validation hardening: prolonged FPD search through 900 ms, pre-filter noise estimation, over-detection penalty in beat-detection QC, and classical per-beat repolarization STV from consecutive FPDs.
 - Signal-level validation suite with exact synthetic ground truth, event-level precision/recall/F1, agreement metrics, deterministic rebuild checks, and a Multichannel Systems MC_Data adapter for Cardio PyMEA.
 - `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
