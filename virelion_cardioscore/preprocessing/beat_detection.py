@@ -17,6 +17,15 @@ import numpy as np
 from scipy import signal
 
 
+RHYTHM_PERIOD_RANGE_S = (0.5, 4.0)
+
+
+def robust_noise_scale(trace: np.ndarray) -> float:
+    """1.4826 * MAD of the trace: a spike-insensitive estimate of its typical fluctuation (uV)."""
+    x = np.asarray(trace, dtype=float)
+    return float(1.4826 * np.median(np.abs(x - np.median(x)))) if x.size else 0.0
+
+
 @dataclass
 class BeatDetectionConfig:
     """Configuration for single-electrode beat detection."""
@@ -25,6 +34,7 @@ class BeatDetectionConfig:
     min_prominence_uv: float = 20.0
     min_distance_ms: float = 250.0
     refractory_ms: float = 200.0
+    noise_prominence_multiplier: float = 10.0
 
     @classmethod
     def from_dict(cls, cfg: dict[str, Any]) -> "BeatDetectionConfig":
@@ -33,6 +43,7 @@ class BeatDetectionConfig:
             min_prominence_uv=float(cfg.get("min_prominence_uv", 20.0)),
             min_distance_ms=float(cfg.get("min_distance_ms", 250.0)),
             refractory_ms=float(cfg.get("refractory_ms", 200.0)),
+            noise_prominence_multiplier=float(cfg.get("noise_prominence_multiplier", 10.0)),
         )
 
 
@@ -47,6 +58,7 @@ class BeatDetectionResult:
     duration_s: float
     candidate_beat_indices: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))
     expected_beat_count: float | None = None
+    effective_prominence_uv: float | None = None
     n_beats: int = field(init=False)
     inter_beat_intervals_s: np.ndarray = field(init=False)
     beat_detection_rate: float = field(init=False)
@@ -108,20 +120,46 @@ class BeatDetectionResult:
         return self.ibi_variability
 
 
+def _period_from_autocorrelation(
+    autocorr: np.ndarray, fs_hz: float, lo_s: float, hi_s: float
+) -> float | None:
+    """Find the fundamental rhythm period from autocorrelation, allowing a genuine subharmonic."""
+    min_lag = max(1, int(round(lo_s * fs_hz)))
+    max_lag = min(len(autocorr) - 1, int(round(hi_s * fs_hz)))
+    if max_lag <= min_lag:
+        return None
+    region = autocorr[min_lag : max_lag + 1]
+    if not np.any(np.isfinite(region)):
+        return None
+    peak_indices, _ = signal.find_peaks(region, prominence=0.02)
+    if len(peak_indices) == 0:
+        best_offset = int(np.nanargmax(region))
+        best_value = float(region[best_offset])
+        if not np.isfinite(best_value) or best_value < 0.10:
+            return None
+        return (min_lag + best_offset) / float(fs_hz)
+    best = int(peak_indices[int(np.nanargmax(region[peak_indices]))])
+    period_samples = min_lag + best
+    while True:
+        half = period_samples / 2.0
+        near = [
+            int(i)
+            for i in peak_indices
+            if abs((min_lag + int(i)) - half) <= 0.08 * half
+            and region[int(i)] >= 0.05
+        ]
+        if not near or half < min_lag * (1.0 - 0.08):
+            break
+        period_samples = min_lag + max(near, key=lambda i: region[i])
+    return period_samples / float(fs_hz)
+
+
 def _estimate_expected_beat_count(
     trace: np.ndarray,
     fs_hz: float,
     duration_s: float,
 ) -> float | None:
-    """Estimate expected beat count from waveform autocorrelation.
-
-    The search is restricted to a broad cardiac rhythm band of 0.5-2.0 s per
-    beat (30-120 bpm). The dominant non-zero autocorrelation peak is used as
-    the rhythm period, then converted to an expected number of beats over the
-    recording duration. This estimate is independent of the detector's
-    prominence threshold and can therefore reveal regular under-counting such
-    as detecting every other beat.
-    """
+    """Estimate expected beat count over 15-120 bpm from autocorrelation."""
     if duration_s <= 0 or len(trace) < max(32, int(fs_hz * 1.0)):
         return 1.0 if len(trace) > 0 else None
 
@@ -133,37 +171,8 @@ def _estimate_expected_beat_count(
 
     autocorr = signal.fftconvolve(x, x[::-1], mode="full")[len(x) - 1 :]
     autocorr = autocorr / variance
-
-    min_lag = max(1, int(round(0.5 * fs_hz)))
-    max_lag = min(len(autocorr) - 1, int(round(2.0 * fs_hz)))
-    if max_lag <= min_lag:
-        return None
-
-    region = autocorr[min_lag : max_lag + 1]
-    if not np.any(np.isfinite(region)):
-        return None
-    peak_indices, properties = signal.find_peaks(
-        region,
-        prominence=0.02,
-    )
-    if len(peak_indices) == 0:
-        # A broad autocorrelation maximum can occur without a sharp local
-        # peak. In that case use the largest positive value only when it is
-        # meaningfully correlated with itself at a non-zero lag.
-        best_offset = int(np.nanargmax(region))
-        best_value = float(region[best_offset])
-        if not np.isfinite(best_value) or best_value < 0.10:
-            return None
-        lag_samples = min_lag + best_offset
-    else:
-        peak_values = region[peak_indices]
-        best = int(peak_indices[int(np.nanargmax(peak_values))])
-        lag_samples = min_lag + best
-
-    period_s = lag_samples / float(fs_hz)
-    if not 0.5 <= period_s <= 2.0:
-        return None
-    return float(duration_s / period_s)
+    period_s = _period_from_autocorrelation(autocorr, fs_hz, *RHYTHM_PERIOD_RANGE_S)
+    return float(duration_s / period_s) if period_s else None
 
 
 def _detect_polarity_peaks(
@@ -228,14 +237,19 @@ def detect_beats(
         raise ValueError(f"Unsupported beat detection method: {config.method!r}")
     if config.min_prominence_uv < 0 or config.min_distance_ms <= 0 or config.refractory_ms <= 0:
         raise ValueError("Beat detection thresholds and distances must be positive")
+    if config.noise_prominence_multiplier < 0:
+        raise ValueError("noise_prominence_multiplier must be non-negative")
 
     duration_s = len(trace) / fs_hz
     min_distance_samples = max(1, int(round(config.min_distance_ms / 1000.0 * fs_hz)))
     refractory_samples = max(1, int(round(config.refractory_ms / 1000.0 * fs_hz)))
 
+    effective_prominence_uv = max(
+        config.min_prominence_uv, config.noise_prominence_multiplier * robust_noise_scale(trace)
+    )
     pos_indices, neg_indices = _detect_polarity_peaks(
         trace,
-        prominence_uv=config.min_prominence_uv,
+        prominence_uv=effective_prominence_uv,
         min_distance_samples=min_distance_samples,
         refractory_samples=refractory_samples,
     )
@@ -268,4 +282,5 @@ def detect_beats(
         duration_s=float(duration_s),
         candidate_beat_indices=candidate_indices,
         expected_beat_count=expected_beat_count,
+        effective_prominence_uv=float(effective_prominence_uv),
     )
