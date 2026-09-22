@@ -54,6 +54,7 @@ def make_truth_recording(
     noise_sd_uv: float = 3.5,
     polarity: int = 1,
     mains_hz: float | None = 50.0,
+    clutter_sd_uv: float = 0.0,
 ) -> TruthRecording:
     rng = np.random.default_rng(seed)
     t = np.arange(0, duration_s, 1 / fs_hz)
@@ -80,6 +81,12 @@ def make_truth_recording(
     if mains_hz:
         trace += 4 * np.sin(2 * np.pi * mains_hz * t)
     trace += rng.normal(0, noise_sd_uv, size=t.shape)
+    if clutter_sd_uv > 0:
+        from scipy import signal as _signal
+
+        sos = _signal.butter(4, 40.0, btype="low", fs=fs_hz, output="sos")
+        clutter = _signal.sosfiltfilt(sos, rng.normal(0, 1.0, size=t.shape))
+        trace += clutter * (clutter_sd_uv / float(np.std(clutter)))
     return TruthRecording(
         trace_uv=trace,
         fs_hz=fs_hz,
@@ -90,6 +97,7 @@ def make_truth_recording(
             "bpm": bpm,
             "fpd_ms": fpd_ms,
             "noise_sd_uv": noise_sd_uv,
+            "clutter_sd_uv": clutter_sd_uv,
             "fs_hz": fs_hz,
             "polarity": polarity,
         },
