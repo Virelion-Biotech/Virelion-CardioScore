@@ -194,3 +194,35 @@ def test_cli_round_trip(recording, capsys):
         == 0
     )
     assert "vs_annotator" in json.loads((out / "results.json").read_text(encoding="utf-8"))
+
+
+
+def test_algorithm_development_regions_are_never_sampled(recording):
+    exclusions = [("El A1", 0.0, 60.0), ("El B1", 0.0, 60.0)]
+    out = recording["dir"] / "excl"
+    manifest = tool.make_sheet(
+        recording["source"],
+        out,
+        n_windows=8,
+        window_s=10.0,
+        seed=7,
+        duration_s=None,
+        exclude=exclusions,
+    )
+    assert manifest["excluded_regions"] == [list(item) for item in exclusions]
+    assert all(not tool._overlaps(w, exclusions) for w in manifest["windows"])
+    assert tool.parse_exclusion("El F7:0:30") == ("El F7", 0.0, 30.0)
+
+
+def test_qc_block_reports_false_rejections_and_bad_admissions(recording):
+    out, manifest = make(recording, "s8")
+    annotations = annotate_from_truth(recording, out, manifest, out / "A.csv")
+    qc = tool.score(out, [annotations], 0.05, None, tool.FilterConfig())["qc"]
+    assert qc["n_windows"] == 8 and set(qc["limits"]) == {
+        "max_noise_sd_uv",
+        "min_beat_detection_rate",
+    }
+    assert (
+        qc["false_rejections_of_beating_windows"] == [] and qc["admitted_with_poor_detection"] == []
+    )
+    assert all("noise_sd_uv" in row and "beat_detection_rate" in row for row in qc["windows"])
