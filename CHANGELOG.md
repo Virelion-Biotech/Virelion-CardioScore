@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed (algorithm - requires a new validation version if frozen earlier)
+- Beat detection: effective prominence is max(`min_prominence_uv`, `noise_prominence_multiplier` × robust noise scale of the trace), default multiplier 10.
+- `beat_detection_rate` is two-sided so both over-detection and under-detection lower the QC value; rhythm estimation covers 15–120 bpm.
+- Noise is estimated from the raw trace so broadband filtering cannot hide excessive noise.
+- Repolarization search extends to 1200 ms while remaining bounded by the next depolarization.
+- Scored `stv` remains inter-beat-interval variability; `fpd_stv_ms` is reported separately as classical repolarization STV.
+
 ### Fixed
 - Compounds whose treated wells lost signal at high concentration (cells stopped beating) were silently scored from the surviving lower concentrations, e.g. a High-risk profile became Low, or the compound vanished from the summary. The pipeline now reports structured QC rejections, per-concentration dropout, an `informative_dropout` flag, and an exclusion table with reasons; a dataset where no treated well survives QC no longer raises a bare `KeyError`.
 - `aggregate_compound_effects` no longer turns an endpoint with no finite values into a zero effect; it returns NaN so the scoring engine fails closed.
