@@ -106,11 +106,10 @@ def filter_trace(
 
 def estimate_noise_sd(trace: np.ndarray, fs_hz: float) -> float:
     """
-    Estimate baseline noise standard deviation (uV) from a raw trace.
+    Estimate baseline noise standard deviation (uV) from an UNFILTERED trace.
 
-    The caller should pass the pre-filter trace. Estimating from the filtered
-    trace would systematically under-read broadband noise removed by the
-    low-pass/notch stages and can make the QC threshold ineffective.
+    Pass the raw recording: the standard filter chain removes much of the broadband
+    noise energy, so post-filter estimates can systematically under-read the QC noise level.
 
     Uses the median absolute deviation of the high-frequency residual
     (trace minus a heavily-smoothed version of itself) as a robust noise
