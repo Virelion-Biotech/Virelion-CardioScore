@@ -81,8 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         "layout": {
             "delimiter": layout.delimiter,
             "header_lines": layout.header_lines,
+            "header_bytes": layout.header_bytes,
             "fs_hz": layout.fs_hz,
             "n_columns": len(layout.columns),
+            "units": list(layout.units) if layout.units else None,
+            "seek_capable": layout.record_bytes is not None,
         },
         "selection": {
             "electrodes": args.electrodes,
