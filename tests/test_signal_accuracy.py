@@ -6,6 +6,8 @@ software validation contract; algorithm changes require a new validation version
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -100,47 +102,132 @@ def test_fpd_is_recovered_within_two_ms_up_to_400_ms(true_fpd_ms):
     assert features.fpd_ms is not None and abs(features.fpd_ms - true_fpd_ms) < 2.0
 
 
-def test_beat_rate_and_repolarization_stv_match_truth():
+def test_beat_rate_and_variability_definitions_match_truth():
     recording = make_truth_recording(5, ibi_jitter_ms=20.0, fpd_jitter_ms=10.0)
     features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
     true_rate = 60.0 / np.mean(recording.ibi_s)
     assert abs(features.beat_rate_bpm - true_rate) < 0.5
-    assert features.stv == pytest.approx(recording.fpd_short_term_variability_ms(), abs=2.0)
+    assert features.stv == pytest.approx(recording.ibi_variability(), abs=0.01)
+    assert features.fpd_stv_ms == pytest.approx(recording.fpd_short_term_variability_ms(), abs=2.0)
 
 
-def test_stv_tracks_repolarization_variability():
-    steady = make_truth_recording(6, fpd_jitter_ms=0.0)
-    unstable = make_truth_recording(6, fpd_jitter_ms=25.0)
+def test_repolarization_stv_tracks_fpd_jitter():
+    steady = make_truth_recording(6, fpd_jitter_ms=0.0, duration_s=60.0)
+    unstable = make_truth_recording(6, fpd_jitter_ms=25.0, duration_s=60.0)
     steady_features = extract_electrode_features(steady.trace_uv, 1000.0)
     unstable_features = extract_electrode_features(unstable.trace_uv, 1000.0)
     assert unstable.fpd_short_term_variability_ms() > 10.0
-    assert unstable_features.stv > steady_features.stv + 5.0
+    assert unstable_features.fpd_stv_ms > steady_features.fpd_stv_ms + 5.0
 
 
-# --- regressions fixed before the validation freeze -----------------------------
+# --- limits found by the benchmark, now fixed (each was a strict xfail before) ------------------------
 
 
-@pytest.mark.parametrize("true_fpd_ms", [500.0, 600.0, 700.0])
-def test_fpd_beyond_previous_450_ms_limit_is_recovered(true_fpd_ms):
+@pytest.mark.parametrize("true_fpd_ms", [450.0, 500.0, 600.0, 700.0])
+def test_fpd_beyond_the_old_450_ms_ceiling_is_recovered(true_fpd_ms):
     recording = make_truth_recording(7, fpd_ms=true_fpd_ms)
     features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
-    assert features.fpd_ms is not None and abs(features.fpd_ms - true_fpd_ms) < 5.0
+    assert features.fpd_ms is not None and abs(features.fpd_ms - true_fpd_ms) < 2.0
 
 
-def test_noise_estimate_is_within_a_factor_of_three_of_true_noise():
-    recording = make_truth_recording(8, noise_sd_uv=20.0)
-    estimate = estimate_noise_sd(recording.trace_uv, recording.fs_hz)
-    assert 20.0 / 3 <= estimate <= 20.0 * 3
+def test_fpd_search_is_still_bounded_by_the_next_beat():
+    # At 110 bpm (545 ms) a 600 ms "FPD" cannot exist; the search must not run into the next beat.
+    recording = make_truth_recording(7, fpd_ms=300.0, bpm=110.0)
     features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
-    assert 20.0 / 3 <= features.noise_sd_uv <= 20.0 * 3
+    assert features.fpd_ms is not None and abs(features.fpd_ms - 300.0) < 2.0
 
 
-def test_over_detection_lowers_beat_detection_rate():
-    recording = make_truth_recording(9, noise_sd_uv=20.0)
-    features = extract_electrode_features(
-        recording.trace_uv, recording.fs_hz, beat_config=BeatDetectionConfig()
+@pytest.mark.parametrize("true_noise_uv", [5.0, 20.0, 40.0])
+def test_noise_estimate_tracks_true_noise_on_the_raw_trace(true_noise_uv):
+    recording = make_truth_recording(8, noise_sd_uv=true_noise_uv)
+    assert estimate_noise_sd(recording.trace_uv, recording.fs_hz) == pytest.approx(
+        true_noise_uv, rel=0.15
     )
-    assert (
-        features.n_beats > 1.5 * recording.beat_times_s.size
-    )  # the detector really is over-counting
-    assert features.beat_detection_rate < 0.7
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert features.noise_sd_uv == pytest.approx(true_noise_uv, rel=0.15)
+
+
+def test_noise_no_longer_creates_beats_and_the_detection_rate_is_honest():
+    recording = make_truth_recording(9, noise_sd_uv=20.0)
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert features.n_beats <= 1.1 * recording.beat_times_s.size
+    assert abs(features.beat_rate_bpm - 60.0 / np.mean(recording.ibi_s)) < 1.0
+    assert features.beat_detection_rate >= 0.9
+
+
+def test_default_qc_rejects_recordings_the_detector_cannot_handle():
+    import yaml
+
+    qc = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[1] / "virelion_cardioscore/config/default.yaml"
+        ).read_text()
+    )["quality_control"]
+    for noise in (40.0, 60.0):
+        features = extract_electrode_features(
+            make_truth_recording(9, noise_sd_uv=noise).trace_uv, 1000.0
+        )
+        assert (
+            features.noise_sd_uv > qc["max_noise_sd_uv"]
+            or features.beat_detection_rate < qc["min_beat_detection_rate"]
+        )
+
+
+def test_over_detection_is_penalised_by_the_detection_rate():
+    from virelion_cardioscore.preprocessing.beat_detection import BeatDetectionResult
+
+    def result(n_beats, expected):
+        idx = np.arange(n_beats) * 100
+        return BeatDetectionResult(
+            idx, idx / 1000.0, np.ones(n_beats), 1000.0, 30.0, expected_beat_count=expected
+        )
+
+    assert result(24, 24.0).beat_detection_rate == 1.0
+    assert result(72, 24.0).beat_detection_rate == pytest.approx(1 / 3)
+    assert result(12, 24.0).beat_detection_rate == pytest.approx(0.5)
+
+
+def test_adaptive_prominence_scales_with_the_trace_and_can_be_disabled():
+    recording = make_truth_recording(10, noise_sd_uv=20.0)
+    filtered = filter_trace(recording.trace_uv, recording.fs_hz, FilterConfig())
+    adaptive = detect_beats(filtered, recording.fs_hz)
+    assert adaptive.effective_prominence_uv > 20.0
+    fixed = detect_beats(
+        filtered, recording.fs_hz, BeatDetectionConfig(noise_prominence_multiplier=0.0)
+    )
+    assert fixed.effective_prominence_uv == 20.0 and fixed.n_beats > 1.5 * adaptive.n_beats
+    with pytest.raises(ValueError, match="noise_prominence_multiplier"):
+        detect_beats(
+            filtered, recording.fs_hz, BeatDetectionConfig(noise_prominence_multiplier=-1.0)
+        )
+
+
+@pytest.mark.parametrize("bpm", [20.0, 29.0, 50.0])
+def test_slow_and_normal_rhythms_are_scored_as_reliable(bpm):
+    recording = make_truth_recording(11, bpm=bpm, duration_s=60.0)
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert features.beat_detection_rate >= 0.9 and abs(features.beat_rate_bpm - bpm) < 0.5
+
+
+def test_large_slow_events_in_background_clutter_are_not_over_detected():
+    recording = make_truth_recording(
+        12, bpm=29.0, amplitude_uv=500.0, clutter_sd_uv=12.0, duration_s=60.0
+    )
+    beats = detect_beats(
+        filter_trace(recording.trace_uv, recording.fs_hz, FilterConfig()), recording.fs_hz
+    )
+    metrics = event_detection_metrics(recording.beat_times_s, beats.beat_times_s, 0.020)
+    assert metrics["recall"] == 1.0 and metrics["precision"] >= 0.95
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert abs(features.beat_rate_bpm - 29.0) < 0.5 and features.stv < 0.02
+
+
+def test_repolarization_stv_is_reported_and_tracks_truth():
+    recording = make_truth_recording(13, fpd_jitter_ms=15.0, duration_s=60.0)
+    features = extract_electrode_features(recording.trace_uv, recording.fs_hz)
+    assert features.fpd_stv_ms == pytest.approx(recording.fpd_short_term_variability_ms(), abs=1.5)
+    steady = extract_electrode_features(
+        make_truth_recording(13, duration_s=60.0).trace_uv, 1000.0
+    )
+    assert steady.fpd_stv_ms < 2.0
+
