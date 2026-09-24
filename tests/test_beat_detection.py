@@ -8,6 +8,7 @@ import pytest
 from tests.conftest import make_electrode_trace
 from virelion_cardioscore.preprocessing.beat_detection import (
     BeatDetectionConfig,
+    _suppress_companions,
     detect_beats,
 )
 from virelion_cardioscore.preprocessing.filtering import filter_trace
