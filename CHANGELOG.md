@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed (algorithm - requires a new validation version if frozen earlier)
+- Beat detection: a repolarization deflection that is itself prominent enough to register as a peak (observed on 6 of 20 blinded real Cardio PyMEA windows: 25-357 bpm doubled to correct ~29 bpm, precision as low as 0.24) is now folded into the preceding beat instead of counted as a second one, when it follows within `companion_max_gap_fraction_of_period` (default half) of the trace's own estimated beat period and its amplitude is at most `companion_max_amplitude_ratio` (default 0.6) of the beat it follows. `BeatDetectionResult.has_companion` marks which beats had a folded companion, for future arrhythmia-adjacent analysis. This is a same-polarity amplitude/timing heuristic: a genuine early afterdepolarization at a similar latency and amplitude would also be folded in.
 - Beat detection: effective prominence is max(`min_prominence_uv`, `noise_prominence_multiplier` × robust noise scale of the trace), default multiplier 10.
 - `beat_detection_rate` is two-sided so both over-detection and under-detection lower the QC value; rhythm estimation covers 15–120 bpm.
 - Noise is estimated from the raw trace so broadband filtering cannot hide excessive noise.
