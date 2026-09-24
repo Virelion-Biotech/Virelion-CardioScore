@@ -31,6 +31,8 @@ beat_detection:
   min_distance_ms: 250.0
   refractory_ms: 200.0
   noise_prominence_multiplier: 10.0
+  companion_max_amplitude_ratio: 0.6
+  companion_max_gap_fraction_of_period: 0.5
 
 features:
   compute_fpd: true
