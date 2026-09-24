@@ -122,6 +122,8 @@ def test_beat_detection_config_from_dict():
     assert cfg.min_prominence_uv == 15.0
     assert cfg.min_distance_ms == 300.0
     assert cfg.refractory_ms == 250.0
+    assert cfg.companion_max_amplitude_ratio == 0.6
+    assert cfg.companion_max_gap_fraction_of_period == 0.5
 
 
 def test_stv_zero_for_perfectly_regular_beats():
