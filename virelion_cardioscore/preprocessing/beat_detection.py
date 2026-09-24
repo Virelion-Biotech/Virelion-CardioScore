@@ -35,6 +35,8 @@ class BeatDetectionConfig:
     min_distance_ms: float = 250.0
     refractory_ms: float = 200.0
     noise_prominence_multiplier: float = 10.0
+    companion_max_amplitude_ratio: float = 0.6
+    companion_max_gap_fraction_of_period: float = 0.5
 
     @classmethod
     def from_dict(cls, cfg: dict[str, Any]) -> "BeatDetectionConfig":
