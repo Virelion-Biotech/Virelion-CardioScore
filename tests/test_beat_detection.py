@@ -134,3 +134,114 @@ def test_stv_zero_for_perfectly_regular_beats():
 
     result = detect_beats(trace, fs_hz=fs)
     assert result.stv < 0.01
+
+
+# --- companion (repolarization-artifact) suppression -----------------------------------------------
+
+
+def _spike_companion_trace(
+    fs_hz: float,
+    n_beats: int,
+    period_s: float,
+    companion_gap_s: float | None,
+    primary_amp: float,
+    companion_amp: float = 0.0,
+    noise_sd: float = 0.5,
+    seed: int = 0,
+    lead_in_s: float = 0.5,
+) -> np.ndarray:
+    """A hand-built filtered-style trace with optional smaller companion deflections."""
+    rng = np.random.default_rng(seed)
+    duration_s = lead_in_s + n_beats * period_s + 1.0
+    t = np.arange(0, duration_s, 1 / fs_hz)
+    trace = np.zeros_like(t)
+    for i in range(n_beats):
+        beat_t = lead_in_s + i * period_s
+        trace += primary_amp * np.exp(-((t - beat_t) ** 2) / (2 * 0.003**2))
+        if companion_gap_s is not None and companion_amp:
+            trace += companion_amp * np.exp(
+                -((t - (beat_t + companion_gap_s)) ** 2) / (2 * 0.015**2)
+            )
+    return trace + rng.normal(0, noise_sd, size=t.shape)
+
+
+def test_suppress_companions_folds_a_close_smaller_peak():
+    indices = np.array([0, 270, 2050, 2320, 4100])
+    amplitudes = np.array([200.0, 90.0, 205.0, 88.0, 198.0])
+    kept_idx, kept_amp, has_companion = _suppress_companions(
+        indices, amplitudes, fs_hz=1000.0, max_amplitude_ratio=0.6,
+        max_gap_fraction_of_period=0.5, expected_period_s=2.05,
+    )
+    assert kept_idx.tolist() == [0, 2050, 4100]
+    assert kept_amp.tolist() == [200.0, 205.0, 198.0]
+    assert has_companion.tolist() == [True, True, False]
+
+
+def test_suppress_companions_keeps_a_similar_amplitude_peak():
+    indices = np.array([0, 270])
+    amplitudes = np.array([200.0, 180.0])
+    kept_idx, _, has_companion = _suppress_companions(
+        indices, amplitudes, fs_hz=1000.0, max_amplitude_ratio=0.6,
+        max_gap_fraction_of_period=0.5, expected_period_s=2.05,
+    )
+    assert kept_idx.tolist() == [0, 270] and not has_companion.any()
+
+
+def test_suppress_companions_keeps_a_far_away_smaller_peak():
+    indices = np.array([0, 1200])
+    amplitudes = np.array([200.0, 40.0])
+    kept_idx, _, _ = _suppress_companions(
+        indices, amplitudes, fs_hz=1000.0, max_amplitude_ratio=0.6,
+        max_gap_fraction_of_period=0.5, expected_period_s=2.05,
+    )
+    assert kept_idx.tolist() == [0, 1200]
+
+
+def test_suppress_companions_without_a_period_estimate_is_a_no_op():
+    indices = np.array([0, 270, 2050])
+    amplitudes = np.array([200.0, 90.0, 205.0])
+    for period in (None, 0.0, -1.0):
+        kept_idx, kept_amp, has_companion = _suppress_companions(
+            indices, amplitudes, fs_hz=1000.0, max_amplitude_ratio=0.6,
+            max_gap_fraction_of_period=0.5, expected_period_s=period,
+        )
+        assert kept_idx.tolist() == indices.tolist() and not has_companion.any()
+
+
+def test_suppress_companions_ratio_zero_disables_folding():
+    indices = np.array([0, 270, 2050])
+    amplitudes = np.array([200.0, 90.0, 205.0])
+    kept_idx, _, has_companion = _suppress_companions(
+        indices, amplitudes, fs_hz=1000.0, max_amplitude_ratio=0.0,
+        max_gap_fraction_of_period=0.5, expected_period_s=2.05,
+    )
+    assert kept_idx.tolist() == indices.tolist() and not has_companion.any()
+
+
+def test_detect_beats_end_to_end_folds_a_realistic_repolarization_companion():
+    trace = _spike_companion_trace(
+        fs_hz=1000.0, n_beats=6, period_s=2.05, companion_gap_s=0.27,
+        primary_amp=200.0, companion_amp=85.0,
+    )
+    result = detect_beats(trace, 1000.0)
+    assert result.n_beats == 6
+    assert result.has_companion.tolist() == [True] * 6
+    assert result.beat_detection_rate >= 0.7
+
+
+def test_detect_beats_does_not_fold_two_genuinely_close_full_beats():
+    trace = _spike_companion_trace(
+        fs_hz=1000.0, n_beats=6, period_s=1.0, companion_gap_s=0.3,
+        primary_amp=200.0, companion_amp=180.0,
+    )
+    result = detect_beats(trace, 1000.0)
+    assert result.n_beats == 12
+    assert not result.has_companion.any()
+
+
+def test_detect_beats_without_companion_is_unaffected():
+    trace = _spike_companion_trace(
+        fs_hz=1000.0, n_beats=8, period_s=1.2, companion_gap_s=None, primary_amp=200.0
+    )
+    result = detect_beats(trace, 1000.0)
+    assert result.n_beats == 8 and not result.has_companion.any()
