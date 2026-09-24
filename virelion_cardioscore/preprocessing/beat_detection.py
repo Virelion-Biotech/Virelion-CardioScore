@@ -44,6 +44,8 @@ class BeatDetectionConfig:
             min_distance_ms=float(cfg.get("min_distance_ms", 250.0)),
             refractory_ms=float(cfg.get("refractory_ms", 200.0)),
             noise_prominence_multiplier=float(cfg.get("noise_prominence_multiplier", 10.0)),
+            companion_max_amplitude_ratio=float(cfg.get("companion_max_amplitude_ratio", 0.6)),
+            companion_max_gap_fraction_of_period=float(cfg.get("companion_max_gap_fraction_of_period", 0.5)),
         )
 
 
@@ -59,12 +61,15 @@ class BeatDetectionResult:
     candidate_beat_indices: np.ndarray = field(default_factory=lambda: np.array([], dtype=int))
     expected_beat_count: float | None = None
     effective_prominence_uv: float | None = None
+    has_companion: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
     n_beats: int = field(init=False)
     inter_beat_intervals_s: np.ndarray = field(init=False)
     beat_detection_rate: float = field(init=False)
 
     def __post_init__(self) -> None:
         self.n_beats = len(self.beat_indices)
+        if len(self.has_companion) != self.n_beats:
+            self.has_companion = np.zeros(self.n_beats, dtype=bool)
         if self.n_beats >= 2:
             self.inter_beat_intervals_s = np.diff(self.beat_times_s)
         else:
@@ -217,6 +222,39 @@ def _choose_polarity(
     return 1 if pos_mean_height >= neg_mean_height else -1
 
 
+
+def _suppress_companions(
+    indices: np.ndarray,
+    amplitudes: np.ndarray,
+    fs_hz: float,
+    *,
+    max_amplitude_ratio: float,
+    max_gap_fraction_of_period: float,
+    expected_period_s: float | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fold a smaller same-polarity peak into the preceding beat when timing and size fit."""
+    if (
+        len(indices) == 0
+        or max_amplitude_ratio <= 0
+        or not expected_period_s
+        or expected_period_s <= 0
+    ):
+        return np.asarray(indices, dtype=int), np.asarray(amplitudes, dtype=float), np.zeros(len(indices), dtype=bool)
+    max_gap_samples = max_gap_fraction_of_period * expected_period_s * fs_hz
+    kept_indices = [int(indices[0])]
+    kept_amplitudes = [float(amplitudes[0])]
+    has_companion = [False]
+    for idx, amp in zip(indices[1:], amplitudes[1:], strict=True):
+        gap = int(idx) - kept_indices[-1]
+        ratio = abs(float(amp)) / abs(kept_amplitudes[-1]) if kept_amplitudes[-1] else float("inf")
+        if gap <= max_gap_samples and ratio <= max_amplitude_ratio:
+            has_companion[-1] = True
+            continue
+        kept_indices.append(int(idx))
+        kept_amplitudes.append(float(amp))
+        has_companion.append(False)
+    return np.asarray(kept_indices, dtype=int), np.asarray(kept_amplitudes, dtype=float), np.asarray(has_companion, dtype=bool)
+
 def detect_beats(
     trace: np.ndarray,
     fs_hz: float,
@@ -239,6 +277,10 @@ def detect_beats(
         raise ValueError("Beat detection thresholds and distances must be positive")
     if config.noise_prominence_multiplier < 0:
         raise ValueError("noise_prominence_multiplier must be non-negative")
+    if config.companion_max_gap_fraction_of_period <= 0:
+        raise ValueError("companion_max_gap_fraction_of_period must be positive")
+    if config.companion_max_amplitude_ratio < 0:
+        raise ValueError("companion_max_amplitude_ratio must be non-negative")
 
     duration_s = len(trace) / fs_hz
     min_distance_samples = max(1, int(round(config.min_distance_ms / 1000.0 * fs_hz)))
@@ -268,11 +310,22 @@ def detect_beats(
     )
     candidate_indices = candidate_pos if polarity > 0 else candidate_neg
 
-    beat_indices = np.asarray(peak_indices, dtype=int)
+    raw_indices = np.asarray(peak_indices, dtype=int)
+    raw_amplitudes = trace[raw_indices] if len(raw_indices) else np.array([], dtype=float)
+    expected_beat_count = _estimate_expected_beat_count(trace, fs_hz, duration_s)
+    expected_period_s = (
+        duration_s / expected_beat_count
+        if expected_beat_count and expected_beat_count > 0
+        else None
+    )
+    beat_indices, amplitudes_uv, has_companion = _suppress_companions(
+        raw_indices, raw_amplitudes, fs_hz,
+        max_amplitude_ratio=config.companion_max_amplitude_ratio,
+        max_gap_fraction_of_period=config.companion_max_gap_fraction_of_period,
+        expected_period_s=expected_period_s,
+    )
     candidate_indices = np.asarray(candidate_indices, dtype=int)
     beat_times_s = beat_indices / fs_hz
-    amplitudes_uv = trace[beat_indices] if len(beat_indices) else np.array([], dtype=float)
-    expected_beat_count = _estimate_expected_beat_count(trace, fs_hz, duration_s)
 
     return BeatDetectionResult(
         beat_indices=beat_indices,
@@ -283,4 +336,5 @@ def detect_beats(
         candidate_beat_indices=candidate_indices,
         expected_beat_count=expected_beat_count,
         effective_prominence_uv=float(effective_prominence_uv),
+        has_companion=has_companion,
     )
