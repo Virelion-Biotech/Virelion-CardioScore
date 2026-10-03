@@ -6,10 +6,8 @@ import numpy as np
 import pytest
 
 from tests.conftest import make_electrode_trace, make_well_traces
-from virelion_cardioscore.features.endpoints import (
-    extract_electrode_features,
-    extract_well_features,
-)
+from virelion_cardioscore.features.endpoints import extract_electrode_features, extract_well_features
+from virelion_cardioscore.preprocessing.endpoints import _find_repolarization_peak
 
 
 def test_extract_electrode_features_fpd_accuracy():
@@ -24,13 +22,42 @@ def test_extract_electrode_features_fpd_accuracy():
 
 @pytest.mark.parametrize("true_fpd_ms", [250.0, 280.0, 380.0, 420.0])
 def test_extract_electrode_features_fpd_across_range(true_fpd_ms):
-    """FPD detection should track ground truth across a range of durations,
-    including prolonged (cardiotoxic-like) values."""
+    """FPD detection should track ground truth across a range of durations."""
     trace = make_electrode_trace(seed=hash(true_fpd_ms) % 1000, bpm=55.0, fpd_ms=true_fpd_ms)
     features = extract_electrode_features(trace, fs_hz=1000.0)
 
     assert features.fpd_ms is not None
     assert abs(features.fpd_ms - true_fpd_ms) < 8.0
+
+
+def test_repolarization_search_cannot_cross_next_depolarization():
+    """A later opposite-polarity deflection must not become the prior beat's FPD."""
+    fs = 1000.0
+    trace = np.zeros(1500, dtype=float)
+    trace[500] = 100.0
+    trace[800] = 100.0
+    trace[900] = -100.0
+
+    unconstrained_idx, unconstrained_width = _find_repolarization_peak(
+        trace,
+        depol_idx=500,
+        fs_hz=fs,
+        depol_amplitude_uv=100.0,
+        min_prominence_uv=20.0,
+    )
+    constrained_idx, constrained_width = _find_repolarization_peak(
+        trace,
+        depol_idx=500,
+        fs_hz=fs,
+        depol_amplitude_uv=100.0,
+        min_prominence_uv=20.0,
+        next_depol_idx=800,
+    )
+
+    assert unconstrained_idx == 900
+    assert unconstrained_width is not None
+    assert constrained_idx is None
+    assert constrained_width is None
 
 
 def test_extract_electrode_features_beat_rate_accuracy():
@@ -65,13 +92,16 @@ def test_extract_well_features_empty_dict_raises():
 
 
 def test_extract_well_features_handles_all_noise_electrode():
-    """A well with no real beats should degrade to zeros, not crash."""
+    """A well with no reliable beats must expose undefined endpoints as missing."""
     noisy = {"E1": np.random.default_rng(0).normal(0, 5, 10000)}
     features = extract_well_features(noisy, fs_hz=1000.0)
 
     assert features.n_electrodes == 1
-    assert features.fpd_ms == 0.0
+    assert np.isnan(features.fpd_ms)
     assert features.beat_rate_bpm == 0.0
+    assert np.isnan(features.amplitude_uv)
+    assert np.isnan(features.stv)
+    assert np.isnan(features.triangulation_proxy)
 
 
 def test_extract_well_features_excludes_unreliable_electrodes():
@@ -85,7 +115,7 @@ def test_extract_well_features_excludes_unreliable_electrodes():
 
     features = extract_well_features(traces, fs_hz=1000.0)
     assert features.n_electrodes == 3
-    assert abs(features.fpd_ms - 280.0) < 10.0  # still accurate, driven by good electrodes
+    assert abs(features.fpd_ms - 280.0) < 10.0
 
 
 def test_well_features_to_row_has_expected_columns(baseline_well):

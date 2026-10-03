@@ -27,7 +27,7 @@ endpoints:
     max_contribution: 1.0
 
   stv_increase:
-    description: "Short-term variability increase (normalized)"
+    description: "Normalized inter-beat-interval short-term variability increase relative to vehicle"
     direction: "increase"
     weight: 0.25
     effect_threshold: 0.15

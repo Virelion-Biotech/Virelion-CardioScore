@@ -5,10 +5,10 @@ Virelion CardioScore
 CiPA-aligned cardiotoxicity risk scoring for human iPSC-CM MEA
 field-potential recordings.
 
-License: GPL-3.0-or-later
+License: AGPL-3.0-or-later
 """
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("virelion-cardioscore")
@@ -17,7 +17,7 @@ except PackageNotFoundError:
 
 from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine
 from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
-from virelion_cardioscore.io.synthetic import load_synthetic_dataset, generate_synthetic_mea
+from virelion_cardioscore.io.synthetic import generate_synthetic_mea, load_synthetic_dataset
 
 __all__ = [
     "__version__",

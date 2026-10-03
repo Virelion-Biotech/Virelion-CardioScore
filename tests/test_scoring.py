@@ -51,6 +51,86 @@ def test_engine_high_risk():
     assert result.score > 0.60
 
 
+def test_score_feature_table_fails_on_missing_endpoint_values():
+    engine = CardioScoreEngine()
+    frame = pd.DataFrame(
+        {
+            "compound": ["A", "A"],
+            "fpd_change_pct": [20.0, 22.0],
+            "beat_rate_change_pct": [5.0, 6.0],
+            "amplitude_change_pct": [-10.0, -11.0],
+            "stv_increase": [0.10, 0.11],
+            "triangulation_proxy": [0.10, 0.11],
+        }
+    )
+    frame.loc[1, "stv_increase"] = np.nan
+
+    with pytest.raises(ValueError, match="missing or non-finite observation"):
+        engine.score_feature_table(frame)
+
+
+def _runtime_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "compound": ["A", "A", "A"],
+            "well": ["W1", "W2", "W3"],
+            "concentration_uM": [0.0, 1.0, 2.0],
+            "vehicle": [True, False, False],
+            "fpd_ms": [100.0, 120.0, 130.0],
+            "beat_rate_bpm": [60.0, 60.0, 59.0],
+            "amplitude_uv": [100.0, 95.0, 90.0],
+            "stv": [0.04, 0.05, 0.06],
+            "triangulation_proxy": [0.18, 0.20, 0.22],
+            "noise_sd_uv": [5.0, 5.0, 5.0],
+            "n_electrodes": [8, 8, 8],
+            "beat_detection_rate": [0.95, 0.95, 0.95],
+        }
+    )
+
+
+def test_runtime_schema_rejects_missing_required_column():
+    frame = _runtime_frame().drop(columns=["triangulation_proxy"])
+    with pytest.raises(ValueError, match="missing required columns"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_rejects_invalid_qc_range():
+    frame = _runtime_frame()
+    frame.loc[0, "beat_detection_rate"] = 1.5
+    with pytest.raises(ValueError, match="beat_detection_rate must be between"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_rejects_treated_zero_concentration():
+    frame = _runtime_frame()
+    frame.loc[1, "concentration_uM"] = 0.0
+    with pytest.raises(ValueError, match="treated wells must have strictly positive"):
+        CardioScorePipeline.validate_runtime_feature_schema(frame)
+
+
+def test_runtime_schema_allows_missing_endpoint_for_qc_rejection():
+    frame = _runtime_frame()
+    frame.loc[1, "fpd_ms"] = np.nan
+
+    CardioScorePipeline.validate_runtime_feature_schema(frame)
+    pipeline = CardioScorePipeline.from_defaults()
+    kept = pipeline.apply_qc(frame)
+
+    assert len(kept) == 2
+    assert "W2" not in set(kept["well"])
+    assert any("missing_endpoint=fpd_ms" in msg for msg in pipeline.qc_log)
+
+
+def test_pipeline_run_rejects_non_numeric_feature_values():
+    frame = _runtime_frame()
+    frame["amplitude_uv"] = frame["amplitude_uv"].astype(object)
+    frame.loc[0, "amplitude_uv"] = "bad"
+    pipeline = CardioScorePipeline.from_defaults()
+
+    with pytest.raises(ValueError, match="amplitude_uv contains non-numeric"):
+        pipeline.run(frame)
+
+
 def test_pipeline_end_to_end():
     dataset = load_synthetic_dataset(n_compounds=3, n_concentrations=4, seed=123)
     pipeline = CardioScorePipeline.from_defaults()
@@ -186,14 +266,27 @@ def test_irregularity_proxy_requires_explicit_threshold():
     assert any("max_stv is not configured" in msg for msg in pipeline.qc_log)
 
 
-def test_concentration_coverage_warning_is_reported_without_silent_exclusion():
+def test_concentration_coverage_fails_closed_by_default():
     dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
     pipeline = CardioScorePipeline.from_defaults()
     result = pipeline.run(dataset)
 
+    assert result.scores == []
+    assert result.summary_table.empty
+    assert not result.concentration_table.empty
+    assert int(result.concentration_table["concentration_uM"].nunique()) == 2
+    assert any("excluded from scoring" in msg for msg in result.qc_log)
+
+
+def test_concentration_coverage_can_be_explicitly_allowed():
+    dataset = load_synthetic_dataset(n_compounds=1, n_concentrations=2, seed=9)
+    pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["concentration_response"]["require_min_concentrations_for_scoring"] = False
+    result = pipeline.run(dataset)
+
     assert len(result.scores) == 1
     assert int(result.summary_table.iloc[0]["concentrations_tested"]) == 2
-    assert any("configured minimum is 3" in msg for msg in result.qc_log)
+    assert any("scoring is allowed" in msg.lower() for msg in result.qc_log)
 
 
 def test_replicates_are_aggregated_within_concentration():
@@ -252,8 +345,8 @@ def test_invalid_aggregation_settings_are_rejected():
         CardioScorePipeline.summarize_concentrations(effects, replicate_aggregation="bogus")
 
 
-def test_compound_aggregation_uses_concentration_means_not_single_wells():
-    concentration_summary = pd.DataFrame(
+def _concentration_summary_for_aggregation() -> pd.DataFrame:
+    return pd.DataFrame(
         {
             "compound": ["A", "A"],
             "concentration_uM": [1.0, 2.0],
@@ -267,7 +360,23 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
         }
     )
 
-    aggregate = CardioScorePipeline.aggregate_compound_effects(concentration_summary)
+
+def test_compound_aggregation_default_uses_mean_harmful_effect():
+    aggregate = CardioScorePipeline.aggregate_compound_effects(_concentration_summary_for_aggregation())
+    row = aggregate.iloc[0]
+
+    assert row["fpd_change_pct"] == pytest.approx(27.5)
+    assert row["amplitude_change_pct"] == pytest.approx(-10.0)
+    assert row["stv_increase"] == pytest.approx(0.075)
+    assert row["triangulation_proxy"] == pytest.approx(0.03)
+    assert row["max_effect_pct"] == pytest.approx(35.0)
+
+
+def test_compound_aggregation_can_explicitly_use_max_absolute_effect():
+    aggregate = CardioScorePipeline.aggregate_compound_effects(
+        _concentration_summary_for_aggregation(),
+        concentration_aggregation="max_absolute_effect",
+    )
     row = aggregate.iloc[0]
 
     assert row["fpd_change_pct"] == pytest.approx(35.0)
@@ -276,20 +385,28 @@ def test_compound_aggregation_uses_concentration_means_not_single_wells():
     assert row["concentrations_tested"] == 2
 
 
+def test_invalid_concentration_aggregation_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported concentration_aggregation"):
+        CardioScorePipeline.aggregate_compound_effects(
+            _concentration_summary_for_aggregation(),
+            concentration_aggregation="bogus",
+        )
+
+
 def test_4pl_fit_recovers_known_curve():
     concentrations = np.logspace(-1, 2, 7)
     expected = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
-    # A perfectly noiseless curve fit without weights has zero residual
-    # variance, so scipy's covariance estimate (scaled by residual
-    # variance / dof when no sigma is supplied) collapses to zero-width --
-    # ec50_ci_low == ec50 == ec50_ci_high exactly. That's correct numerical
-    # behavior, not something fit_4pl should paper over, so the test adds
-    # small, fixed-seed noise to get a realistic (non-degenerate) CI while
-    # still recovering the known curve closely.
     rng = np.random.default_rng(7)
     responses = expected + rng.normal(0, 0.5, size=expected.shape)
 
-    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions={"fpd_change_pct": "absolute"},
+        effect_threshold=10.0,
+        min_r_squared=0.99,
+    )
 
     assert result.success
     assert result.quality_pass
@@ -304,7 +421,14 @@ def test_4pl_fit_can_use_replicate_sem_weights():
     concentrations = np.logspace(-1, 2, 6)
     responses = 80.0 / (1.0 + (10.0 / concentrations) ** 1.5)
     sem = np.full(6, 1.0)
-    result = fit_4pl(concentrations, responses, response_sem=sem)
+    result = fit_4pl(
+        concentrations,
+        responses,
+        endpoint="fpd_change_pct",
+        endpoint_directions={"fpd_change_pct": "absolute"},
+        effect_threshold=10.0,
+        response_sem=sem,
+    )
 
     assert result.success
     assert result.weighted
@@ -315,7 +439,7 @@ def test_4pl_fit_can_use_replicate_sem_weights():
 def test_4pl_fit_marks_poor_fit_without_calling_it_a_failure():
     concentrations = np.logspace(-1, 2, 7)
     responses = np.array([0.0, 20.0, 19.0, 20.0, 21.0, 20.0, 20.0])
-    result = fit_4pl(concentrations, responses, min_r_squared=0.99)
+    result = fit_4pl(concentrations, responses, endpoint="fpd_change_pct", min_r_squared=0.99)
 
     assert result.success
     assert not result.quality_pass

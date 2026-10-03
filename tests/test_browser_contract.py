@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 APP = Path(__file__).parents[1] / "web" / "app.js"
+CONTRACT = Path(__file__).parents[1] / "web" / "scoring_contract.json"
 
 
 def test_browser_scoring_uses_concentration_level_replicate_means():
@@ -14,22 +15,35 @@ def test_browser_scoring_uses_concentration_level_replicate_means():
     assert "tri:mean(group.map" in text
 
 
-def test_browser_scoring_uses_directional_compound_aggregation():
+def test_browser_scoring_uses_contract_driven_concentration_aggregation():
     text = APP.read_text(encoding="utf-8")
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.fpd)}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return Math.abs(e.rate)}))" in text
-    assert "Math.min.apply(null,concentrationEffects.map(function(e){return e.amp}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return e.stv}))" in text
-    assert "Math.max.apply(null,concentrationEffects.map(function(e){return e.tri}))" in text
+    contract = CONTRACT.read_text(encoding="utf-8")
+    assert "function aggregateEndpoint(values,direction,aggregation)" in text
+    assert "aggregation==='mean_harmful_effect'" in text
+    assert "scoringContract.concentration_aggregation" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.fpd}),scoringContract.endpoints.fpd_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.rate}),scoringContract.endpoints.beat_rate_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.amp}),scoringContract.endpoints.amplitude_change_pct.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.stv}),scoringContract.endpoints.stv_increase.direction,aggregation)" in text
+    assert "aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)" in text
+    assert '"concentration_aggregation": "mean_harmful_effect"' in contract
 
 
-def test_browser_does_not_claim_hierarchical_or_4pl_parity():
+def test_browser_uses_shared_contract_for_weights_and_thresholds():
     text = APP.read_text(encoding="utf-8")
-    assert "biological-unit inference and 4PL evidence remain Python-only" in text
+    contract = CONTRACT.read_text(encoding="utf-8")
+    assert "function weights()" in text
+    assert "scoringContract.endpoints.fpd_change_pct.weight" in text
+    assert "scoringContract.endpoints.beat_rate_change_pct.weight" in text
+    assert "scoringContract.endpoints.amplitude_change_pct.weight" in text
+    assert "scoringContract.endpoints.stv_increase.weight" in text
+    assert "scoringContract.endpoints.triangulation_proxy.weight" in text
+    assert "scoringContract.risk_thresholds.low" in text
+    assert "scoringContract.risk_thresholds.moderate" in text
+    assert '"fpd_change_pct"' in contract
+    assert '"risk_thresholds"' in contract
 
 
-def test_browser_preserves_explicit_zero_weight_values():
+def test_browser_discloses_python_only_features():
     text = APP.read_text(encoding="utf-8")
-    assert "function numericOrDefault(id, fallback)" in text
-    assert "Number.isFinite(value)?value:fallback" in text
-    assert "return{fpd:numericOrDefault('w_fpd',0.3)" in text
+    assert "plate/batch normalization, biological-unit inference, and 4PL evidence remain Python-only" in text

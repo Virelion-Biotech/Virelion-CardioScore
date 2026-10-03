@@ -90,5 +90,18 @@ def conventional_treatment_effect(df: pd.DataFrame, *, endpoint: str = "fpd_ms")
 
 
 def true_treatment_effect(spec: StressTestSpec | None = None) -> float:
-    """Return the known generating treatment effect for a stress-test spec."""
-    return float((spec or StressTestSpec()).treatment_effect)
+    """Return the mean generating treatment effect across treated groups."""
+    spec = spec or StressTestSpec()
+    n_groups = len(spec.group_offsets)
+    treated_groups = (
+        tuple(range(n_groups))
+        if spec.groups_with_treatment is None
+        else tuple(spec.groups_with_treatment)
+    )
+    if not treated_groups:
+        raise ValueError("true_treatment_effect requires at least one treated group.")
+    if spec.group_scales is None:
+        return float(spec.treatment_effect)
+    return float(
+        np.mean([spec.treatment_effect * spec.group_scales[group] for group in treated_groups])
+    )

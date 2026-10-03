@@ -35,6 +35,27 @@ def test_configured_biological_unit_column_is_used():
     assert aggregated.set_index("bio_id").loc["B1", "fpd_change_pct"] == pytest.approx(15.0)
 
 
+def test_auto_uses_configured_biological_unit_column_first():
+    effects = _effects_with_custom_unit_column()
+    aggregated = aggregate_to_scoring_units(
+        effects,
+        scoring_unit="auto",
+        biological_unit_column="bio_id",
+    )
+
+    assert len(aggregated) == 2
+    assert aggregated["well"].tolist() == ["biological_replicate:B1", "biological_replicate:B2"]
+    assert aggregated["n_wells"].tolist() == [2, 2]
+
+
+def test_auto_falls_back_to_well_when_no_higher_level_metadata_exists():
+    effects = _effects_with_custom_unit_column().drop(columns=["bio_id"])
+    aggregated = aggregate_to_scoring_units(effects, scoring_unit="auto")
+
+    assert len(aggregated) == len(effects)
+    assert aggregated["well"].tolist() == effects["well"].tolist()
+
+
 def test_missing_configured_unit_column_is_rejected():
     with pytest.raises(ValueError, match="requires column 'not_present'"):
         aggregate_to_scoring_units(

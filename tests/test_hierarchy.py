@@ -60,7 +60,7 @@ def test_independent_unit_count_is_not_well_count():
 
 
 def test_supported_scoring_units_are_explicit():
-    assert SUPPORTED_SCORING_UNITS == ("well", "biological_replicate", "batch", "plate")
+    assert SUPPORTED_SCORING_UNITS == ("auto", "well", "biological_replicate", "batch", "plate")
 
 
 def test_biological_replicate_scoring_aggregates_technical_wells():
@@ -70,6 +70,23 @@ def test_biological_replicate_scoring_aggregates_technical_wells():
     assert aggregated.set_index("biological_replicate").loc["B1", "fpd_change_pct"] == pytest.approx(11.0)
     assert aggregated.set_index("biological_replicate").loc["B4", "fpd_change_pct"] == pytest.approx(41.0)
     assert set(aggregated["n_wells"]) == {2}
+
+
+def test_site_scopes_reused_biological_replicate_ids():
+    effects = _effects()
+    effects.loc[:3, "site"] = 1
+    effects.loc[4:, "site"] = 2
+    effects.loc[4:, "biological_replicate"] = ["B1", "B1", "B2", "B2"]
+
+    aggregated = aggregate_to_scoring_units(effects, scoring_unit="biological_replicate")
+    assert len(aggregated) == 4
+    assert set(zip(aggregated["site"], aggregated["biological_replicate"], strict=True)) == {
+        (1, "B1"), (1, "B2"), (2, "B1"), (2, "B2")
+    }
+
+    summary = summarize_experimental_units(effects)
+    counts = count_independent_units(summary)
+    assert counts.iloc[0]["n_independent_units"] == 4
 
 
 def test_well_scoring_preserves_historical_rows():
@@ -85,12 +102,6 @@ def test_missing_requested_metadata_is_rejected():
 
 
 def test_batch_alias_supports_experiment_id():
-    # plate_id genuinely has two distinct values (P1, P2) in this fixture,
-    # so aliasing it to experiment_id and grouping by "batch" correctly
-    # produces two groups -- one per distinct experiment_id, each averaging
-    # its own 4 technical wells. (A single-group expectation here would only
-    # make sense if batch_id, which actually is constant at "Batch1", had
-    # been the column renamed instead.)
     effects = _effects().drop(columns=["batch_id"]).rename(columns={"plate_id": "experiment_id"})
     aggregated = aggregate_to_scoring_units(effects, scoring_unit="batch")
 

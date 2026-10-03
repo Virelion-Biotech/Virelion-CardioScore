@@ -39,11 +39,32 @@ def test_random_intercept_recovers_treatment_effect_and_group_variance():
 
 def test_random_intercept_requires_multiple_groups():
     frame = _dataset().query("plate_id == 'P1'")
-    with pytest.raises(ValueError, match="at least two groups"):
+    with pytest.raises(ValueError, match="at least three independent groups"):
         fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")
 
 
 def test_random_intercept_requires_both_treatment_levels():
     frame = _dataset().query("treatment == 1")
     with pytest.raises(ValueError, match="both treatment levels"):
+        fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")
+
+
+def test_random_intercept_rejects_missing_group_identifier():
+    frame = _dataset().copy()
+    frame.loc[0, "plate_id"] = None
+    with pytest.raises(ValueError, match="missing or blank identifiers"):
+        fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")
+
+
+def test_random_intercept_rejects_missing_endpoint():
+    frame = _dataset().copy()
+    frame.loc[0, "fpd_ms"] = np.nan
+    with pytest.raises(ValueError, match="missing or non-numeric observations"):
+        fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")
+
+
+def test_random_intercept_rejects_non_binary_treatment():
+    frame = _dataset().copy()
+    frame.loc[0, "treatment"] = 2
+    with pytest.raises(ValueError, match="only 0/1"):
         fit_random_intercept(frame, endpoint="fpd_ms", group_column="plate_id")

@@ -12,14 +12,30 @@ def compare_effect_estimates(
     *,
     endpoint_column: str = "fpd_change_pct_mean",
     mixed_effect_column: str = "treatment_effect",
+    effect_unit_column: str = "effect_unit",
 ) -> pd.DataFrame:
-    """Align conventional and mixed-effects estimates by compound/dose/endpoint.
+    """Align estimates only when both inputs explicitly declare the same effect unit.
 
-    The function reports disagreement metrics only; it does not select a preferred
-    estimate or alter CardioScore.
+    A treatment effect expressed in milliseconds cannot be compared numerically
+    with a percentage-change estimate. Older versions identified rows only by
+    endpoint name, which allowed exactly that invalid comparison. Both inputs
+    must now carry an explicit ``effect_unit`` column, and every aligned pair
+    must declare the same unit.
     """
-    required_conventional = {"compound", "concentration_uM", endpoint_column}
-    required_mixed = {"compound", "concentration_uM", "endpoint", mixed_effect_column, "status"}
+    required_conventional = {
+        "compound",
+        "concentration_uM",
+        endpoint_column,
+        effect_unit_column,
+    }
+    required_mixed = {
+        "compound",
+        "concentration_uM",
+        "endpoint",
+        mixed_effect_column,
+        "status",
+        effect_unit_column,
+    }
     missing_conventional = sorted(required_conventional - set(conventional.columns))
     missing_mixed = sorted(required_mixed - set(mixed_effects.columns))
     if missing_conventional:
@@ -28,20 +44,21 @@ def compare_effect_estimates(
         raise ValueError(f"Mixed-effects estimates are missing columns: {missing_mixed}.")
 
     conventional_long = conventional[
-        ["compound", "concentration_uM", endpoint_column]
+        ["compound", "concentration_uM", endpoint_column, effect_unit_column]
     ].copy()
     conventional_long["endpoint"] = endpoint_column
     conventional_long = conventional_long.rename(columns={endpoint_column: "conventional_effect"})
 
     mixed = mixed_effects[mixed_effects["status"] == "ok"].copy()
     mixed = mixed[
-        ["compound", "concentration_uM", "endpoint", mixed_effect_column]
+        ["compound", "concentration_uM", "endpoint", mixed_effect_column, effect_unit_column]
     ].rename(columns={mixed_effect_column: "mixed_effect"})
 
     merged = conventional_long.merge(
         mixed,
         on=["compound", "concentration_uM", "endpoint"],
         how="inner",
+        suffixes=("_conventional", "_mixed"),
     )
     if merged.empty:
         return merged.assign(
@@ -50,6 +67,24 @@ def compare_effect_estimates(
             direction_agreement=pd.Series(dtype=bool),
         )
 
+    units_match = (
+        merged[f"{effect_unit_column}_conventional"].astype(str).str.strip().str.lower()
+        == merged[f"{effect_unit_column}_mixed"].astype(str).str.strip().str.lower()
+    )
+    if not units_match.all():
+        mismatched = merged.loc[~units_match, [
+            "compound",
+            "concentration_uM",
+            "endpoint",
+            f"{effect_unit_column}_conventional",
+            f"{effect_unit_column}_mixed",
+        ]].to_dict(orient="records")
+        raise ValueError(
+            "Cannot compare effect estimates with different units: "
+            f"{mismatched}"
+        )
+
+    merged["effect_unit"] = merged[f"{effect_unit_column}_conventional"]
     merged["absolute_difference"] = (
         merged["mixed_effect"] - merged["conventional_effect"]
     ).abs()

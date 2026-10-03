@@ -16,22 +16,6 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
-_ENDPOINT_HARM_DIRECTIONS = {
-    "fpd_change_pct": "absolute",
-    "beat_rate_change_pct": "absolute",
-    "amplitude_change_pct": "decrease",
-    "stv_increase": "increase",
-    "triangulation_proxy_change": "increase",
-}
-
-_ENDPOINT_EFFECT_THRESHOLDS = {
-    "fpd_change_pct": 10.0,
-    "beat_rate_change_pct": 15.0,
-    "amplitude_change_pct": 20.0,
-    "stv_increase": 0.15,
-    "triangulation_proxy_change": 0.20,
-}
-
 _DEFAULT_MIN_EC50_COVERAGE = 0.10
 
 
@@ -109,6 +93,15 @@ def _ci95(value: float, standard_error: float) -> tuple[float, float]:
     return value - delta, value + delta
 
 
+def _positive_parameter_ci95(value: float, standard_error: float) -> tuple[float, float]:
+    """Approximate a 95% CI on a positive parameter using log-scale delta method."""
+    if value <= 0 or not np.isfinite(value) or not np.isfinite(standard_error):
+        return float("nan"), float("nan")
+    log_se = standard_error / value
+    half_width = 1.96 * log_se
+    return float(value * np.exp(-half_width)), float(value * np.exp(half_width))
+
+
 def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
     if len(x) < 2:
         return 1.0, "flat"
@@ -121,8 +114,20 @@ def _monotonicity_score(x: np.ndarray, y: np.ndarray) -> tuple[float, str]:
     return float(matches / len(deltas)), "increasing" if direction > 0 else "decreasing"
 
 
-def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None, endpoint_directions: dict[str, str] | None = None) -> bool | None:
-    expected = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _fitted_monotonic_direction(bottom: float, top: float, hill_slope: float) -> str:
+    """Return the concentration direction implied by the fitted 4PL parameters."""
+    signed_change = (top - bottom) * hill_slope
+    if np.isclose(signed_change, 0.0):
+        return "flat"
+    return "increasing" if signed_change > 0 else "decreasing"
+
+
+def _harm_direction_compatible(
+    endpoint: str,
+    monotonic_direction: str | None,
+    endpoint_directions: dict[str, str] | None = None,
+) -> bool | None:
+    expected = (endpoint_directions or {}).get(endpoint)
     if expected is None or monotonic_direction in {None, "flat"}:
         return None if expected is None else False
     if expected == "absolute":
@@ -133,8 +138,12 @@ def _harm_direction_compatible(endpoint: str, monotonic_direction: str | None, e
     return monotonic_direction == expected_monotonic
 
 
-def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _harmful_effect_magnitude(
+    y: np.ndarray,
+    endpoint: str,
+    endpoint_directions: dict[str, str] | None = None,
+) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint)
     if direction is None:
         return None
     if direction == "absolute":
@@ -146,12 +155,17 @@ def _harmful_effect_magnitude(y: np.ndarray, endpoint: str, endpoint_directions:
     raise ValueError(f"Unsupported endpoint direction: {direction!r}.")
 
 
-def _fitted_harmful_effect_magnitude(bottom: float, top: float, endpoint: str, endpoint_directions: dict[str, str] | None = None) -> float | None:
-    direction = (endpoint_directions or {}).get(endpoint, _ENDPOINT_HARM_DIRECTIONS.get(endpoint))
+def _fitted_harmful_effect_magnitude(
+    bottom: float,
+    top: float,
+    endpoint: str,
+    endpoint_directions: dict[str, str] | None = None,
+) -> float | None:
+    direction = (endpoint_directions or {}).get(endpoint)
     if direction is None:
         return None
     if direction == "absolute":
-        return float(max(abs(bottom), abs(top)))
+        return float(abs(top - bottom))
     if direction == "increase":
         return float(max(0.0, top - bottom))
     if direction == "decrease":
@@ -174,8 +188,6 @@ def fit_4pl(
     effect_threshold: float | None = None,
     min_ec50_coverage: float = _DEFAULT_MIN_EC50_COVERAGE,
 ) -> DoseResponseFit:
-    if effect_threshold is None:
-        effect_threshold = _ENDPOINT_EFFECT_THRESHOLDS.get(endpoint)
     if effect_threshold is not None and effect_threshold < 0:
         raise ValueError("effect_threshold must be non-negative.")
     if not 0.0 <= min_ec50_coverage <= 1.0:
@@ -184,13 +196,20 @@ def fit_4pl(
     x = np.asarray(concentrations, dtype=float)
     y = np.asarray(responses, dtype=float)
     sigma = None if response_sem is None else np.asarray(response_sem, dtype=float)
-    finite = np.isfinite(x) & np.isfinite(y) & (x > 0)
+
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError("concentrations and responses must be one-dimensional arrays.")
+    if x.shape != y.shape:
+        raise ValueError("concentrations and responses must have the same shape.")
     if sigma is not None:
-        finite &= np.isfinite(sigma) & (sigma > 0)
-    x = x[finite]
-    y = y[finite]
-    if sigma is not None:
-        sigma = sigma[finite]
+        if sigma.shape != x.shape:
+            raise ValueError("response_sem must have the same shape as concentrations and responses.")
+        if not np.isfinite(sigma).all() or (sigma <= 0).any():
+            raise ValueError("response_sem must contain finite, strictly positive values.")
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
+        raise ValueError("concentrations and responses must contain only finite values.")
+    if (x <= 0).any():
+        raise ValueError("4PL fitting requires strictly positive concentrations; invalid concentrations were supplied.")
 
     if len(x) < min_points:
         return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=len(x), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} positive concentrations; got {len(x)}.")
@@ -201,8 +220,11 @@ def fit_4pl(
     if sigma is not None:
         sigma = sigma[order]
 
-    if np.unique(x).size < min_points:
-        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=int(np.unique(x).size), effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
+    n_unique = int(np.unique(x).size)
+    if n_unique != len(x):
+        raise ValueError("4PL fitting requires one response per concentration; duplicate concentrations were supplied.")
+    if n_unique < min_points:
+        return DoseResponseFit(endpoint=endpoint, success=False, quality_pass=False, n_points=n_unique, effect_threshold=effect_threshold, min_ec50_coverage=min_ec50_coverage, message=f"Need at least {min_points} distinct positive concentrations.")
 
     span = float(np.max(y) - np.min(y))
     observed_harmful_effect = _harmful_effect_magnitude(y, endpoint, endpoint_directions)
@@ -231,10 +253,11 @@ def fit_4pl(
     ec50, hill_slope = float(params[2]), float(params[3])
     bottom, top = float(params[0]), float(params[1])
     ec50_se, hill_se = float(standard_errors[2]), float(standard_errors[3])
-    ec50_ci_low, ec50_ci_high = _ci95(ec50, ec50_se)
+    ec50_ci_low, ec50_ci_high = _positive_parameter_ci95(ec50, ec50_se)
     hill_ci_low, hill_ci_high = _ci95(hill_slope, hill_se)
-    monotonicity, monotonic_direction = _monotonicity_score(x, y)
-    harm_direction_compatible = _harm_direction_compatible(endpoint, monotonic_direction, endpoint_directions)
+    monotonicity, _observed_monotonic_direction = _monotonicity_score(x, y)
+    fitted_monotonic_direction = _fitted_monotonic_direction(bottom, top, hill_slope)
+    harm_direction_compatible = _harm_direction_compatible(endpoint, fitted_monotonic_direction, endpoint_directions)
     fitted_harmful_effect = _fitted_harmful_effect_magnitude(bottom, top, endpoint, endpoint_directions)
     effect_size_pass = None if effect_threshold is None or fitted_harmful_effect is None else fitted_harmful_effect >= effect_threshold
     boundary_low = ec50 < float(np.min(x)) * ec50_boundary_factor
@@ -268,7 +291,7 @@ def fit_4pl(
         reasons.append("parameter confidence intervals are non-finite")
 
     message = "Fit passed quality criteria." if quality_pass else "Fit converged but failed quality criteria: " + "; ".join(dict.fromkeys(reasons))
-    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=bottom, top=top, r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=fitted_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
+    return DoseResponseFit(endpoint=endpoint, success=True, quality_pass=quality_pass, n_points=len(x), ec50=ec50, ec50_ci_low=float(ec50_ci_low), ec50_ci_high=float(ec50_ci_high), hill_slope=hill_slope, hill_ci_low=float(hill_ci_low), hill_ci_high=float(hill_ci_high), bottom=bottom, top=top, r_squared=float(r_squared), rmse=rmse, weighted=sigma is not None, monotonicity=monotonicity, monotonic_direction=fitted_monotonic_direction, harm_direction_compatible=harm_direction_compatible, harmful_effect_magnitude=fitted_harmful_effect, effect_threshold=effect_threshold, effect_size_pass=effect_size_pass, ec50_coverage=ec50_coverage, min_ec50_coverage=min_ec50_coverage, coverage_pass=coverage_pass, ec50_boundary_flag=ec50_boundary_flag, ec50_uncertainty_fold=ec50_uncertainty_fold, message=message)
 
 
 def fit_concentration_series(

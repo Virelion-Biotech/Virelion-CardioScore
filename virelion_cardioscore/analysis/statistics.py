@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class BootstrapCI:
     n_observations: int
     n_bootstrap: int
     seed: Optional[int] = None
+    n_clusters: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +34,7 @@ class BootstrapCI:
             "n_observations": self.n_observations,
             "n_bootstrap": self.n_bootstrap,
             "seed": self.seed,
+            "n_clusters": self.n_clusters,
         }
 
 
@@ -70,7 +73,7 @@ def bootstrap_ci(
     confidence: float = 0.95,
     seed: Optional[int] = 42,
 ) -> BootstrapCI:
-    """Bootstrap a one-sample statistic using replicate-level resampling."""
+    """Bootstrap a one-sample statistic using observation-level resampling."""
     _validate_bootstrap_args(n_bootstrap, confidence)
     x = np.asarray(values, dtype=float)
     x = x[np.isfinite(x)]
@@ -92,6 +95,67 @@ def bootstrap_ci(
         n_observations=int(x.size),
         n_bootstrap=n_bootstrap,
         seed=seed,
+        n_clusters=None,
+    )
+
+
+def bootstrap_cluster_ci(
+    values: np.ndarray,
+    clusters: np.ndarray,
+    *,
+    statistic: Callable[[np.ndarray], float] = np.mean,
+    n_bootstrap: int = 2000,
+    confidence: float = 0.95,
+    seed: Optional[int] = 42,
+) -> BootstrapCI:
+    """Bootstrap a statistic by resampling independent clusters as units.
+
+    The default mean statistic is evaluated after first averaging observations
+    within each cluster, so clusters contribute equally even when they contain
+    different numbers of technical observations. Custom statistics are applied
+    to the cluster-level values as well. This prevents technical-well imbalance
+    from silently changing the inferential weight of independent units.
+    """
+    _validate_bootstrap_args(n_bootstrap, confidence)
+    x = np.asarray(values, dtype=float)
+    g = np.asarray(clusters)
+    if x.ndim != 1 or g.ndim != 1 or x.size != g.size:
+        raise ValueError("values and clusters must be one-dimensional arrays of equal length.")
+    finite = np.isfinite(x)
+    x = x[finite]
+    g = g[finite]
+    if x.size < 2:
+        raise ValueError("At least two finite observations are required for bootstrap inference.")
+    if pd.isna(g).any():
+        raise ValueError("clusters cannot contain missing identifiers.")
+    unique_clusters = pd.unique(g)
+    if len(unique_clusters) < 2:
+        raise ValueError("At least two independent clusters are required for cluster bootstrap.")
+
+    cluster_values = np.asarray(
+        [float(np.mean(x[g == cluster])) for cluster in unique_clusters],
+        dtype=float,
+    )
+    if not np.isfinite(cluster_values).all():
+        raise ValueError("Cluster-level values must be finite for bootstrap inference.")
+
+    rng = np.random.default_rng(seed)
+    estimate = float(statistic(cluster_values))
+    boot_stats = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        sampled = rng.integers(0, len(cluster_values), size=len(cluster_values))
+        boot_stats[i] = float(statistic(cluster_values[sampled]))
+    alpha = 1.0 - confidence
+    low, high = np.quantile(boot_stats, [alpha / 2.0, 1.0 - alpha / 2.0])
+    return BootstrapCI(
+        estimate=estimate,
+        ci_low=float(low),
+        ci_high=float(high),
+        confidence=confidence,
+        n_observations=int(x.size),
+        n_bootstrap=n_bootstrap,
+        seed=seed,
+        n_clusters=int(len(unique_clusters)),
     )
 
 

@@ -4,7 +4,7 @@ Thank you for your interest in improving early cardiac safety assessment tools.
 
 ## Ground rules
 
-- Keep the project GPL-3.0-or-later compatible.
+- Keep the project AGPL-3.0-or-later compatible.
 - Prefer transparent, interpretable methods over black-box models for the core scoring path.
 - Document scientific assumptions clearly (especially endpoint weights and risk thresholds).
 - Do not claim regulatory validation unless a formal study supports it.

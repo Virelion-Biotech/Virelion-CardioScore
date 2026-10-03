@@ -13,9 +13,60 @@ from virelion_cardioscore.analysis.cipa_scoring import CardioScoreEngine, ScoreR
 from virelion_cardioscore.analysis.dose_response import DoseResponseFit, fit_concentration_series
 from virelion_cardioscore.analysis.hierarchy import aggregate_to_scoring_units
 from virelion_cardioscore.analysis.normalization import apply_control_anchor_correction
-from virelion_cardioscore.analysis.statistics import bootstrap_ci
+from virelion_cardioscore.analysis.statistics import bootstrap_cluster_ci
 from virelion_cardioscore.analysis.variability import control_variability, standardized_treatment_separation
 from virelion_cardioscore.io.synthetic import SyntheticMEADataset
+from virelion_cardioscore.utils.coercion import coerce_bool_series
+from virelion_cardioscore.validation.config import validate_pipeline_config
+from virelion_cardioscore.reporting.provenance import build_provenance
+
+
+RUNTIME_REQUIRED_COLUMNS = {
+    "compound",
+    "concentration_uM",
+    "well",
+    "vehicle",
+    "fpd_ms",
+    "beat_rate_bpm",
+    "amplitude_uv",
+    "stv",
+    "triangulation_proxy",
+    "noise_sd_uv",
+    "n_electrodes",
+    "beat_detection_rate",
+}
+RUNTIME_ENDPOINT_COLUMNS = (
+    "fpd_ms",
+    "beat_rate_bpm",
+    "amplitude_uv",
+    "stv",
+    "triangulation_proxy",
+)
+# QC rejection reasons that indicate loss of usable signal. A treated well lost this way at high
+# concentration may be a drug effect (cells stopped beating), not a bad well, so it is tracked
+# as potential informative dropout rather than silently discarded.
+SIGNAL_LOSS_QC_REASONS = frozenset({"too_few_electrodes", "low_beat_detection", "missing_endpoint"})
+QC_REJECTION_COLUMNS = ("row_position", "compound", "well", "concentration_uM", "vehicle", "reasons", "signal_loss")
+DROPOUT_COLUMNS = (
+    "compound",
+    "concentration_uM",
+    "n_wells_input",
+    "n_signal_loss",
+    "n_other_rejected",
+    "n_kept",
+    "dropout_fraction",
+    "vehicle_dropout_fraction",
+    "informative_dropout",
+)
+EXCLUSION_COLUMNS = ("compound", "reason", "detail")
+RUNTIME_HIERARCHY_COLUMNS = (
+    "biological_replicate",
+    "batch_id",
+    "experiment_id",
+    "plate_id",
+    "site",
+    "cell_type",
+)
 
 
 @dataclass
@@ -32,6 +83,10 @@ class PipelineResult:
     dose_response_fits: dict[str, list[DoseResponseFit]] = field(default_factory=dict)
     config: dict = field(default_factory=dict)
     qc_log: list[str] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
+    qc_rejections: pd.DataFrame = field(default_factory=pd.DataFrame)
+    dropout_table: pd.DataFrame = field(default_factory=pd.DataFrame)
+    exclusion_table: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def to_html(self, path: str | Path) -> None:
         from virelion_cardioscore.reporting.report_generator import write_html_report
@@ -55,15 +110,20 @@ class PipelineResult:
                 compound: [fit.to_dict() for fit in fits]
                 for compound, fits in self.dose_response_fits.items()
             },
+            "provenance": self.provenance,
+            "qc_rejections": self.qc_rejections.to_dict(orient="records"),
+            "dropout": self.dropout_table.to_dict(orient="records"),
+            "exclusions": self.exclusion_table.to_dict(orient="records"),
         }
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
 
 
 class CardioScorePipeline:
-    """High-level orchestrator for the CardioScore workflow."""
+    """High-level orchestrator of the CardioScore workflow."""
 
     def __init__(self, config: dict):
+        validate_pipeline_config(config)
         self.config = config
         scoring_cfg = config.get("scoring", {})
         endpoint_config = scoring_cfg.get("endpoint_config", "cipa_endpoints.yaml")
@@ -81,6 +141,7 @@ class CardioScorePipeline:
             moderate_threshold=scoring_cfg.get("moderate_threshold", 0.60),
         )
         self.qc_log: list[str] = []
+        self.qc_rejections = pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
 
     @classmethod
     def from_config(cls, path: str | Path) -> "CardioScorePipeline":
@@ -96,6 +157,57 @@ class CardioScorePipeline:
         default = Path(__file__).resolve().parent.parent / "config" / "default.yaml"
         return cls.from_config(default)
 
+    @staticmethod
+    def validate_runtime_feature_schema(df: pd.DataFrame) -> None:
+        """Validate the feature-table contract before any pipeline processing."""
+        missing = sorted(RUNTIME_REQUIRED_COLUMNS - set(df.columns))
+        if missing:
+            raise ValueError(f"CardioScore feature table is missing required columns: {missing}")
+        if df.empty:
+            raise ValueError("CardioScore feature table is empty.")
+
+        for column in ("compound", "well"):
+            values = df[column]
+            if values.isna().any() or values.astype(str).str.strip().eq("").any():
+                raise ValueError(f"CardioScore feature table contains missing or blank {column!r} identifiers.")
+
+        vehicle = coerce_bool_series(df["vehicle"], name="vehicle")
+        concentrations = pd.to_numeric(df["concentration_uM"], errors="coerce")
+        if concentrations.isna().any() or not np.isfinite(concentrations.to_numpy()).all():
+            raise ValueError("concentration_uM must be numeric and finite.")
+        if (concentrations < 0).any():
+            raise ValueError("concentration_uM cannot be negative.")
+        if ((~vehicle) & (concentrations <= 0)).any():
+            raise ValueError("treated wells must have strictly positive concentration_uM.")
+
+        for column in ("n_electrodes", "noise_sd_uv", "beat_detection_rate"):
+            values = pd.to_numeric(df[column], errors="coerce")
+            if values.isna().any() or not np.isfinite(values.to_numpy()).all():
+                raise ValueError(f"{column} must be numeric and finite.")
+        electrodes = pd.to_numeric(df["n_electrodes"], errors="coerce")
+        if (electrodes < 0).any() or not np.isclose(electrodes, np.round(electrodes)).all():
+            raise ValueError("n_electrodes must contain non-negative integers.")
+        noise = pd.to_numeric(df["noise_sd_uv"], errors="coerce")
+        if (noise < 0).any():
+            raise ValueError("noise_sd_uv cannot be negative.")
+        detection = pd.to_numeric(df["beat_detection_rate"], errors="coerce")
+        if ((detection < 0) | (detection > 1)).any():
+            raise ValueError("beat_detection_rate must be between 0 and 1.")
+
+        for column in RUNTIME_HIERARCHY_COLUMNS:
+            if column in df.columns:
+                values = df[column]
+                if values.isna().any() or values.astype(str).str.strip().eq("").any():
+                    raise ValueError(f"Hierarchy metadata column {column!r} contains missing or blank identifiers.")
+
+        for column in RUNTIME_ENDPOINT_COLUMNS:
+            if column not in df.columns:
+                raise ValueError(f"CardioScore feature table is missing endpoint column {column!r}.")
+            numeric = pd.to_numeric(df[column], errors="coerce")
+            invalid_non_numeric = numeric.isna() & df[column].notna()
+            if invalid_non_numeric.any():
+                raise ValueError(f"{column} contains non-numeric feature values.")
+
     def apply_qc(self, df: pd.DataFrame) -> pd.DataFrame:
         qc = self.config.get("quality_control", {})
         min_elec = qc.get("min_electrodes_per_well", 4)
@@ -104,69 +216,186 @@ class CardioScorePipeline:
         reject_irregular = qc.get("reject_wells_with_arrhythmia_proxy", False)
         irregularity_threshold = qc.get("arrhythmia_proxy_max_stv")
         before = len(df)
+        endpoint_complete = np.ones(len(df), dtype=bool)
+        available_endpoints = [endpoint for endpoint in RUNTIME_ENDPOINT_COLUMNS if endpoint in df.columns]
+        for endpoint in available_endpoints:
+            numeric = pd.to_numeric(df[endpoint], errors="coerce")
+            endpoint_complete &= np.isfinite(numeric.to_numpy(dtype=float))
+        reason_flags = {
+            "too_few_electrodes": ~(df["n_electrodes"] >= min_elec),
+            "high_noise": ~(df["noise_sd_uv"] <= max_noise),
+            "low_beat_detection": ~(df["beat_detection_rate"] >= min_bdr),
+            "missing_endpoint": pd.Series(~endpoint_complete, index=df.index),
+        }
         mask = (
             (df["n_electrodes"] >= min_elec)
             & (df["noise_sd_uv"] <= max_noise)
             & (df["beat_detection_rate"] >= min_bdr)
+            & endpoint_complete
         )
         if reject_irregular:
+            if irregularity_threshold is not None:
+                reason_flags["irregular"] = ~(df["stv"] <= float(irregularity_threshold))
             if irregularity_threshold is None:
                 self.qc_log.append(
-                    "Warning: arrhythmia-proxy rejection is enabled, but "
-                    "quality_control.arrhythmia_proxy_max_stv is not configured; "
-                    "no irregularity rejection was applied. STV is treated only "
-                    "as an optional irregularity proxy, not an arrhythmia detector."
+                    "Warning: arrhythmia-proxy rejection is enabled, but quality_control.arrhythmia_proxy_max_stv is not configured; no irregularity rejection was applied. STV is treated only as an optional irregularity proxy, not an arrhythmia detector."
                 )
             else:
                 mask &= df["stv"] <= float(irregularity_threshold)
         rejected = df[~mask]
         kept = df[mask].copy()
+        self.qc_rejections = self._build_qc_rejections(df, ~np.asarray(mask, dtype=bool), reason_flags)
         if qc.get("log_rejections", True) and len(rejected) > 0:
             for _, row in rejected.iterrows():
                 details = (
-                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, "
-                    f"bdr={row['beat_detection_rate']:.2f}"
+                    f"noise={row['noise_sd_uv']:.1f}, elec={row['n_electrodes']}, bdr={row['beat_detection_rate']:.2f}"
                 )
+                missing_endpoints = [
+                    endpoint
+                    for endpoint in available_endpoints
+                    if not np.isfinite(pd.to_numeric(pd.Series([row[endpoint]]), errors="coerce").iloc[0])
+                ]
+                if missing_endpoints:
+                    details += f", missing_endpoint={','.join(missing_endpoints)}"
                 if reject_irregular and irregularity_threshold is not None and row["stv"] > irregularity_threshold:
                     details += f", stv={row['stv']:.3f}"
-                self.qc_log.append(
-                    f"Rejected {row['compound']} {row['well']} ({details})"
-                )
+                self.qc_log.append(f"Rejected {row['compound']} {row['well']} ({details})")
         self.qc_log.append(f"QC: kept {len(kept)}/{before} wells")
         return kept
 
-    def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
-        scope = self.config.get("control_normalization", {}).get("scope", "compound")
-        aliases = {
-            "compound": ["compound"],
-            "plate": ["plate_id"],
-            "batch": ["batch_id" if "batch_id" in df.columns else "experiment_id"],
-            "biological_replicate": ["biological_replicate"],
-            "global": [],
-        }
-        if scope not in aliases:
-            raise ValueError(
-                f"Unsupported control_normalization.scope: {scope!r}. Expected 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
+    @staticmethod
+    def _build_qc_rejections(df: pd.DataFrame, rejected_mask: np.ndarray, reason_flags: dict) -> pd.DataFrame:
+        """Structured record of every QC rejection (row position, well, and reason codes)."""
+        positions = np.flatnonzero(rejected_mask)
+        if positions.size == 0:
+            return pd.DataFrame(columns=list(QC_REJECTION_COLUMNS))
+        vehicle = coerce_bool_series(df["vehicle"], name="vehicle").to_numpy() if "vehicle" in df.columns else None
+        records = []
+        for position in positions:
+            reasons = [name for name, flag in reason_flags.items() if bool(np.asarray(flag)[position])]
+            records.append(
+                {
+                    "row_position": int(position),
+                    "compound": str(df["compound"].iloc[position]),
+                    "well": str(df["well"].iloc[position]),
+                    "concentration_uM": float(df["concentration_uM"].iloc[position]) if "concentration_uM" in df.columns else float("nan"),
+                    "vehicle": bool(vehicle[position]) if vehicle is not None else False,
+                    "reasons": ";".join(reasons),
+                    "signal_loss": any(reason in SIGNAL_LOSS_QC_REASONS for reason in reasons),
+                }
             )
-        columns = aliases[scope]
+        return pd.DataFrame(records, columns=list(QC_REJECTION_COLUMNS))
+
+    def compute_dropout_table(self, df_pre_qc: pd.DataFrame, rejections: pd.DataFrame) -> pd.DataFrame:
+        """Per compound x concentration accounting of wells lost to signal loss.
+
+        A concentration is flagged ``informative_dropout`` when a large share of its treated wells lost
+        signal (cells stopped beating, no reliable electrodes, endpoints not computable) and that
+        share clearly exceeds the same compound's vehicle-well loss. Such compounds must never be
+        read as "clean" just because their worst wells were removed by QC.
+        """
+        qc = self.config.get("quality_control", {})
+        min_fraction = float(qc.get("informative_dropout_min_fraction", 0.5))
+        min_excess = float(qc.get("informative_dropout_min_excess", 0.25))
+        frame = df_pre_qc.reset_index(drop=True)
+        vehicle = coerce_bool_series(frame["vehicle"], name="vehicle")
+        lost = np.zeros(len(frame), dtype=bool)
+        other = np.zeros(len(frame), dtype=bool)
+        if not rejections.empty:
+            signal = rejections["signal_loss"].to_numpy(dtype=bool)
+            positions = rejections["row_position"].to_numpy(dtype=int)
+            lost[positions[signal]] = True
+            other[positions[~signal]] = True
+        frame = frame.assign(_vehicle=vehicle.to_numpy(), _lost=lost, _other=other)
+        vehicle_rows = frame[frame["_vehicle"]]
+        overall_vehicle = float(vehicle_rows["_lost"].mean()) if len(vehicle_rows) else 0.0
+        vehicle_fraction = {
+            str(compound): float(group["_lost"].mean())
+            for compound, group in vehicle_rows.groupby("compound", sort=True)
+        }
+        rows = []
+        treated = frame[~frame["_vehicle"]]
+        for (compound, concentration), group in treated.groupby(["compound", "concentration_uM"], sort=True):
+            n_input = int(len(group))
+            n_lost = int(group["_lost"].sum())
+            n_other = int(group["_other"].sum())
+            fraction = n_lost / n_input if n_input else 0.0
+            vehicle_lost = vehicle_fraction.get(str(compound), overall_vehicle)
+            informative = bool(n_lost > 0 and fraction >= min_fraction and (fraction - vehicle_lost) >= min_excess)
+            rows.append(
+                {
+                    "compound": str(compound),
+                    "concentration_uM": float(concentration),
+                    "n_wells_input": n_input,
+                    "n_signal_loss": n_lost,
+                    "n_other_rejected": n_other,
+                    "n_kept": n_input - n_lost - n_other,
+                    "dropout_fraction": round(float(fraction), 6),
+                    "vehicle_dropout_fraction": round(float(vehicle_lost), 6),
+                    "informative_dropout": informative,
+                }
+            )
+        return pd.DataFrame(rows, columns=list(DROPOUT_COLUMNS))
+
+    def _control_group_columns(self, df: pd.DataFrame) -> list[str]:
+        control_cfg = self.config.get("control_normalization", {})
+        scope = control_cfg.get("scope", "auto")
+        if scope == "auto":
+            if "plate_id" in df.columns:
+                scope = "plate"
+            elif "batch_id" in df.columns:
+                scope = "batch"
+            elif "experiment_id" in df.columns:
+                scope = "batch"
+            else:
+                scope = "compound"
+            self.qc_log.append(f"Control normalization: auto-selected {scope!r} scope.")
+        if scope not in {"compound", "plate", "batch", "biological_replicate", "global"}:
+            raise ValueError(
+                f"Unsupported control_normalization.scope: {scope!r}. Expected 'auto', 'compound', 'plate', 'batch', 'biological_replicate', or 'global'."
+            )
+        if scope == "global":
+            columns: list[str] = []
+        else:
+            unit_map = {
+                "compound": ["compound"],
+                "plate": ["compound", "plate_id"],
+                "batch": ["compound", "batch_id" if "batch_id" in df.columns else "experiment_id"],
+                "biological_replicate": ["compound", "biological_replicate"],
+            }
+            columns = unit_map[scope]
+            namespace = [column for column in ("site", "experiment_id") if column in df.columns and column not in columns]
+            columns = [*namespace, *columns]
         missing = [column for column in columns if column not in df.columns]
         if missing:
-            raise ValueError(f"control_normalization.scope={scope!r} requires metadata column(s) {missing!r}, but they are not present in the dataset.")
+            raise ValueError(
+                f"control_normalization.scope={scope!r} requires metadata column(s) {missing!r}, but they are not present in the dataset."
+            )
         for column in columns:
             if df[column].isna().any() or df[column].astype(str).str.strip().eq("").any():
-                raise ValueError(f"control_normalization.scope={scope!r} cannot use grouping column {column!r} with missing or blank identifiers.")
+                raise ValueError(
+                    f"control_normalization.scope={scope!r} cannot use grouping column {column!r} with missing or blank identifiers."
+                )
         return columns
 
     def compute_effects(self, df: pd.DataFrame) -> pd.DataFrame:
         control_cfg = self.config.get("control_normalization", {})
         normalize = bool(self.config.get("scoring", {}).get("normalize_by_vehicle", True))
+        working_df = df.copy()
+        if normalize:
+            if "vehicle" not in working_df.columns:
+                raise ValueError("Effect calculation with vehicle normalization requires a 'vehicle' column.")
+            working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
+        elif "vehicle" in working_df.columns:
+            working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
         if not normalize:
             required = {"compound", "concentration_uM", "well", "fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"}
-            missing = sorted(required - set(df.columns))
+            missing = sorted(required - set(working_df.columns))
             if missing:
                 raise ValueError(f"normalize_by_vehicle=false requires precomputed effect columns: {missing}")
-            effects = df.copy()
-            effects["vehicle"] = False
+            effects = working_df.copy()
+            if "vehicle" in effects.columns:
+                effects["vehicle"] = False
             effects["max_effect_pct"] = effects[["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct"]].abs().max(axis=1)
             if "stv_increase" in effects.columns:
                 effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["stv_increase"].abs() * 100.0)
@@ -174,16 +403,16 @@ class CardioScorePipeline:
                 effects["max_effect_pct"] = np.maximum(effects["max_effect_pct"], effects["triangulation_proxy_change"].abs() * 100.0)
             return effects
         records = []
-        optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id"]
+        optional_metadata = ["biological_replicate", "batch_id", "experiment_id", "plate_id", "site", "cell_type"]
         scope = control_cfg.get("scope", "compound")
-        control_columns = self._control_group_columns(df)
+        control_columns = self._control_group_columns(working_df)
         require_match = bool(control_cfg.get("require_matching_control", True))
-        grouped = df.groupby(control_columns, dropna=False, sort=True) if control_columns else [((), df)]
+        grouped = working_df.groupby(control_columns, dropna=False, sort=True) if control_columns else [((), working_df)]
         for group_key, group in grouped:
             if not isinstance(group_key, tuple):
                 group_key = (group_key,)
-            vehicle = group[group["vehicle"].astype(bool)]
-            treated = group[~group["vehicle"].astype(bool)]
+            vehicle = group[group["vehicle"]]
+            treated = group[~group["vehicle"]]
             if vehicle.empty:
                 message = f"No matching vehicle control for normalization scope={scope!r} group={group_key!r}."
                 if require_match:
@@ -238,9 +467,7 @@ class CardioScorePipeline:
             }
             requested_column = required_map.get(scoring_unit)
             if requested_column and requested_column not in effects.columns:
-                self.qc_log.append(
-                    f"Experimental-unit column {requested_column!r} is absent; falling back to well-level scoring."
-                )
+                self.qc_log.append(f"Experimental-unit column {requested_column!r} is absent; falling back to well-level scoring.")
                 scoring_unit = "well"
         try:
             prepared = aggregate_to_scoring_units(
@@ -263,14 +490,16 @@ class CardioScorePipeline:
         if not cfg.get("enabled", False):
             return pd.DataFrame(), pd.DataFrame()
         group_column = cfg.get("group_column")
-        variability_table = control_variability(df, group_column=group_column, max_control_cv_pct=float(cfg.get("max_control_cv_pct", 20.0)))
+        working_df = df.copy()
+        working_df["vehicle"] = coerce_bool_series(working_df["vehicle"], name="vehicle")
+        variability_table = control_variability(working_df, group_column=group_column, max_control_cv_pct=float(cfg.get("max_control_cv_pct", 20.0)))
         if variability_table.empty:
             return variability_table, pd.DataFrame()
         resolved_group = str(variability_table.iloc[0]["group_column"])
         separation_frames = []
         for endpoint in ["fpd_ms", "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy"]:
-            if endpoint in df.columns:
-                separation_frames.append(standardized_treatment_separation(df.assign(vehicle=df["vehicle"].astype(bool)), endpoint=endpoint, group_column=resolved_group))
+            if endpoint in working_df.columns:
+                separation_frames.append(standardized_treatment_separation(working_df, endpoint=endpoint, group_column=resolved_group))
         separation_table = pd.concat(separation_frames, ignore_index=True) if separation_frames else pd.DataFrame()
         for _, row in variability_table.iterrows():
             if row["status"] in {"high_variability", "insufficient_groups"}:
@@ -319,21 +548,52 @@ class CardioScorePipeline:
         return pd.DataFrame(rows)
 
     @staticmethod
-    def bootstrap_concentration_inference(effects: pd.DataFrame, *, n_bootstrap: int = 2000, confidence: float = 0.95, seed: int = 42) -> pd.DataFrame:
+    def bootstrap_concentration_inference(
+        effects: pd.DataFrame,
+        *,
+        n_bootstrap: int = 2000,
+        confidence: float = 0.95,
+        seed: int = 42,
+        cluster_column: str | None = None,
+    ) -> pd.DataFrame:
+        """Estimate concentration-level endpoint CIs using independent-unit bootstrap."""
         if effects.empty:
             return pd.DataFrame()
-        endpoint_columns = ["fpd_change_pct", "beat_rate_change_pct", "amplitude_change_pct", "stv_increase", "triangulation_proxy_change"]
+        endpoint_columns = [
+            "fpd_change_pct",
+            "beat_rate_change_pct",
+            "amplitude_change_pct",
+            "stv_increase",
+            "triangulation_proxy_change",
+        ]
+        candidate_columns = [cluster_column] if cluster_column is not None else ["biological_replicate", "batch_id", "plate_id"]
+        resolved_cluster_column = next((column for column in candidate_columns if column in effects.columns), None)
+        if resolved_cluster_column is None:
+            raise ValueError(
+                "Cluster-aware bootstrap requires independent-unit metadata. Provide one of 'biological_replicate', 'batch_id', or 'plate_id' or configure inference.cluster_column explicitly. Observation-level bootstrap is disabled."
+            )
+        if effects[resolved_cluster_column].isna().any() or effects[resolved_cluster_column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Cluster column {resolved_cluster_column!r} contains missing or blank identifiers.")
         rows = []
         for group_index, ((compound, concentration), group) in enumerate(effects.groupby(["compound", "concentration_uM"], sort=True)):
-            row = {"compound": compound, "concentration_uM": concentration, "n_replicates": int(group["well"].nunique())}
+            cluster_ids = group[resolved_cluster_column].to_numpy()
+            row = {
+                "compound": compound,
+                "concentration_uM": concentration,
+                "cluster_column": resolved_cluster_column,
+                "n_replicates": int(group["well"].nunique()),
+                "n_clusters": int(pd.unique(cluster_ids).size),
+            }
             for endpoint in endpoint_columns:
                 values = pd.to_numeric(group[endpoint], errors="coerce").to_numpy(dtype=float)
-                values = values[np.isfinite(values)]
-                if len(values) < 2:
+                finite = np.isfinite(values)
+                values = values[finite]
+                endpoint_clusters = cluster_ids[finite]
+                if len(values) < 2 or pd.unique(endpoint_clusters).size < 2:
                     row[f"{endpoint}_ci_low"] = np.nan
                     row[f"{endpoint}_ci_high"] = np.nan
                     continue
-                result = bootstrap_ci(values, n_bootstrap=n_bootstrap, confidence=confidence, seed=seed + group_index)
+                result = bootstrap_cluster_ci(values, endpoint_clusters, n_bootstrap=n_bootstrap, confidence=confidence, seed=seed + group_index)
                 row[f"{endpoint}_ci_low"] = result.ci_low
                 row[f"{endpoint}_ci_high"] = result.ci_high
             rows.append(row)
@@ -342,13 +602,15 @@ class CardioScorePipeline:
     @staticmethod
     def aggregate_compound_effects(
         concentration_summary: pd.DataFrame,
-        concentration_aggregation: str = "max_absolute_effect",
+        concentration_aggregation: str = "mean_harmful_effect",
         endpoint_directions: dict[str, str] | None = None,
     ) -> pd.DataFrame:
         if concentration_summary.empty:
             return pd.DataFrame()
-        if concentration_aggregation != "max_absolute_effect":
-            raise ValueError(f"Unsupported concentration_aggregation: {concentration_aggregation!r}. Expected 'max_absolute_effect'.")
+        if concentration_aggregation not in {"mean_harmful_effect", "max_absolute_effect"}:
+            raise ValueError(
+                f"Unsupported concentration_aggregation: {concentration_aggregation!r}. Expected 'mean_harmful_effect' or 'max_absolute_effect'."
+            )
         endpoint_directions = endpoint_directions or {
             "fpd_change_pct": "absolute",
             "beat_rate_change_pct": "absolute",
@@ -361,17 +623,26 @@ class CardioScorePipeline:
             def aggregate_endpoint(column: str) -> float:
                 values = pd.to_numeric(group[column], errors="coerce").dropna()
                 if values.empty:
-                    return 0.0
+                    # Never fabricate "no effect": an endpoint with no finite value stays missing so the
+                    # scoring engine (which requires finite values) fails closed instead of scoring it clean.
+                    return float("nan")
                 endpoint = column.removesuffix("_mean")
                 direction = endpoint_directions.get(endpoint, "absolute")
-                if direction == "decrease":
-                    return float(values.min())
-                if direction == "increase":
-                    return float(values.max())
-                if direction == "absolute":
-                    return float(values.abs().max())
+                if concentration_aggregation == "max_absolute_effect":
+                    if direction == "decrease":
+                        return float(values.min())
+                    if direction == "increase":
+                        return float(values.max())
+                    if direction == "absolute":
+                        return float(values.abs().max())
+                elif concentration_aggregation == "mean_harmful_effect":
+                    if direction == "decrease":
+                        return float(-np.maximum(-values, 0.0).mean())
+                    if direction == "increase":
+                        return float(np.maximum(values, 0.0).mean())
+                    if direction == "absolute":
+                        return float(values.abs().mean())
                 raise ValueError(f"Unsupported endpoint direction: {direction!r} for {endpoint!r}.")
-
             technical_wells = int(group["n_technical_wells"].sum()) if "n_technical_wells" in group.columns else int(group["n_replicates"].sum())
             independent_units = int(group["n_replicates"].sum())
             rows.append({
@@ -395,8 +666,20 @@ class CardioScorePipeline:
         if not cfg.get("fit_curve", False) or concentration_summary.empty:
             return {}
         results: dict[str, list[DoseResponseFit]] = {}
+        endpoint_directions = {name: str(meta["direction"]) for name, meta in self.engine.endpoints.items()}
+        endpoint_thresholds = {name: float(meta["effect_threshold"]) for name, meta in self.engine.endpoints.items()}
         for compound, group in concentration_summary.groupby("compound"):
-            fits = fit_concentration_series(group, min_points=int(cfg.get("fit_min_concentrations", 4)), min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)), min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)), ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)), max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)))
+            fits = fit_concentration_series(
+                group,
+                min_points=int(cfg.get("fit_min_concentrations", 4)),
+                min_r_squared=float(cfg.get("fit_min_r_squared", 0.80)),
+                min_monotonicity=float(cfg.get("fit_min_monotonicity", 0.80)),
+                ec50_boundary_factor=float(cfg.get("fit_ec50_boundary_factor", 2.0)),
+                max_ec50_uncertainty_fold=float(cfg.get("fit_max_ec50_uncertainty_fold", 100.0)),
+                endpoint_directions=endpoint_directions,
+                endpoint_thresholds=endpoint_thresholds,
+                min_ec50_coverage=float(cfg.get("min_ec50_coverage", 0.10)),
+            )
             results[str(compound)] = fits
         return results
 
@@ -418,10 +701,82 @@ class CardioScorePipeline:
         total_weight = sum(weight for weight, _ in usable)
         return float(sum(weight * coverage for weight, coverage in usable) / total_weight)
 
+    @staticmethod
+    def _dropout_summary_by_compound(dropout_table: pd.DataFrame) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        if dropout_table.empty:
+            return out
+        for compound, group in dropout_table.groupby("compound", sort=False):
+            flagged = group[group["informative_dropout"]]
+            out[str(compound)] = {
+                "n_wells_input_treated": int(group["n_wells_input"].sum()),
+                "n_wells_rejected_signal_loss": int(group["n_signal_loss"].sum()),
+                "informative_dropout": bool(len(flagged) > 0),
+                "dropout_concentrations_uM": ";".join(f"{value:g}" for value in flagged["concentration_uM"]),
+                "max_dropout_fraction": float(group["dropout_fraction"].max()),
+            }
+        return out
+
+    @staticmethod
+    def _build_exclusion_table(
+        *,
+        df_pre_qc: pd.DataFrame,
+        df_post_qc: pd.DataFrame,
+        effects: pd.DataFrame,
+        concentration_summary: pd.DataFrame,
+        scorable_compounds: set[str],
+        scored: set[str],
+        dropout_table: pd.DataFrame,
+        min_concentrations: int,
+    ) -> pd.DataFrame:
+        """Every compound that was in the input but not scored, with an explicit reason."""
+        treated_input = set(map(str, df_pre_qc.loc[~df_pre_qc["vehicle"], "compound"].unique()))
+        treated_after_qc = set(map(str, df_post_qc.loc[~df_post_qc["vehicle"], "compound"].unique()))
+        with_effects = set(map(str, effects["compound"].unique())) if not effects.empty else set()
+        rows = []
+        for compound in sorted(treated_input - set(map(str, scored))):
+            detail = ""
+            if compound not in treated_after_qc:
+                reason = "all_treated_wells_rejected_by_qc"
+            elif compound not in with_effects:
+                reason = "no_matching_vehicle_control"
+            elif compound not in scorable_compounds:
+                reason = "insufficient_concentrations"
+                n_conc = 0
+                if not concentration_summary.empty:
+                    n_conc = int(
+                        concentration_summary.loc[
+                            concentration_summary["compound"].astype(str) == compound, "concentration_uM"
+                        ].nunique()
+                    )
+                detail = f"{n_conc} concentration(s) with usable wells; minimum {min_concentrations}"
+            else:
+                reason = "not_scored_other"
+            if not dropout_table.empty:
+                flagged = dropout_table[(dropout_table["compound"] == compound) & dropout_table["informative_dropout"]]
+                if len(flagged):
+                    detail = (detail + "; " if detail else "") + (
+                        "informative dropout at " + ";".join(f"{value:g}" for value in flagged["concentration_uM"]) + " uM"
+                    )
+            rows.append({"compound": compound, "reason": reason, "detail": detail})
+        return pd.DataFrame(rows, columns=list(EXCLUSION_COLUMNS))
+
     def run(self, dataset: SyntheticMEADataset | pd.DataFrame) -> PipelineResult:
         self.qc_log = []
         df = dataset.features.copy() if isinstance(dataset, SyntheticMEADataset) else dataset.copy()
+        self.validate_runtime_feature_schema(df)
+        df["vehicle"] = coerce_bool_series(df["vehicle"], name="vehicle")
+        df_pre_qc = df.copy()
         df = self.apply_qc(df)
+        qc_rejections = self.qc_rejections
+        dropout_table = self.compute_dropout_table(df_pre_qc, qc_rejections)
+        for _, drop in dropout_table[dropout_table["informative_dropout"]].iterrows():
+            self.qc_log.append(
+                f"Warning: informative dropout for {drop['compound']} at {drop['concentration_uM']:g} uM: "
+                f"{int(drop['n_signal_loss'])}/{int(drop['n_wells_input'])} treated wells lost signal "
+                f"(vehicle loss {drop['vehicle_dropout_fraction']:.2f}). The score is computed from surviving "
+                "wells only and must not be read as a clean profile."
+            )
         variability_cfg = self.config.get("variability", {})
         variability_before, _ = self.run_variability_diagnostics(df)
         normalization_diagnostic: dict = {}
@@ -431,27 +786,48 @@ class CardioScorePipeline:
         effects = self.compute_effects(df)
         scoring_effects = self.prepare_scoring_effects(effects)
         concentration_cfg = self.config.get("concentration_response", {})
-        concentration_summary = self.summarize_concentrations(scoring_effects, replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"))
+        concentration_summary = self.summarize_concentrations(
+            scoring_effects,
+            replicate_aggregation=concentration_cfg.get("replicate_aggregation", "mean"),
+        )
+        if concentration_summary.empty:
+            # e.g. every treated well was rejected by QC: report exclusions instead of raising KeyError.
+            concentration_summary = pd.DataFrame(columns=["compound", "concentration_uM"])
         min_concentrations = int(concentration_cfg.get("min_concentrations", 3))
+        require_min_concentrations = bool(concentration_cfg.get("require_min_concentrations_for_scoring", False))
+        scorable_compounds: set[str] = set()
         for compound, group in concentration_summary.groupby("compound"):
             n_concentrations = int(group["concentration_uM"].nunique())
             if n_concentrations < min_concentrations:
-                self.qc_log.append(
-                    f"Warning: {compound} has {n_concentrations} tested concentration(s); "
-                    f"configured minimum is {min_concentrations}. No concentrations were silently excluded."
-                )
+                if require_min_concentrations:
+                    self.qc_log.append(
+                        f"Insufficient concentration coverage: {compound} has {n_concentrations} tested concentration(s); configured minimum is {min_concentrations}. Compound excluded from scoring."
+                    )
+                else:
+                    self.qc_log.append(
+                        f"Warning: {compound} has {n_concentrations} tested concentration(s); configured minimum is {min_concentrations}. Scoring is allowed because require_min_concentrations_for_scoring=false."
+                    )
+            else:
+                scorable_compounds.add(str(compound))
+        if not require_min_concentrations:
+            scorable_compounds = set(str(compound) for compound in concentration_summary["compound"].unique())
         inference_cfg = self.config.get("inference", {})
         inference_table = pd.DataFrame()
         if inference_cfg.get("enabled", False) and not scoring_effects.empty:
-            inference_table = self.bootstrap_concentration_inference(scoring_effects, n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)), confidence=float(inference_cfg.get("confidence", 0.95)), seed=int(inference_cfg.get("seed", 42)))
+            inference_table = self.bootstrap_concentration_inference(
+                scoring_effects,
+                n_bootstrap=int(inference_cfg.get("n_bootstrap", 2000)),
+                confidence=float(inference_cfg.get("confidence", 0.95)),
+                seed=int(inference_cfg.get("seed", 42)),
+                cluster_column=inference_cfg.get("cluster_column"),
+            )
         dose_response_fits = self.fit_dose_response(concentration_summary)
-        scoring_endpoint_directions = {
-            name: str(meta["direction"])
-            for name, meta in self.engine.endpoints.items()
-        }
+        scoring_endpoint_directions = {name: str(meta["direction"]) for name, meta in self.engine.endpoints.items()}
         dose_response_weight = float(self.config.get("scoring", {}).get("dose_response_weight", 0.0))
+        eligible_concentration_summary = concentration_summary[concentration_summary["compound"].astype(str).isin(scorable_compounds)].copy()
         agg = self.aggregate_compound_effects(
-            concentration_summary,
+            eligible_concentration_summary,
+            concentration_aggregation=str(concentration_cfg.get("concentration_aggregation", "mean_harmful_effect")),
             endpoint_directions={
                 "fpd_change_pct": scoring_endpoint_directions.get("fpd_change_pct", "absolute"),
                 "beat_rate_change_pct": scoring_endpoint_directions.get("beat_rate_change_pct", "absolute"),
@@ -518,13 +894,42 @@ class CardioScorePipeline:
                     for fit in successful
                     if fit.ec50_uncertainty_fold is not None and fit.ec50_uncertainty_fold > max_ec50_uncertainty_fold
                 )
-                row["dose_response_mean_monotonicity"] = (
-                    round(float(np.mean(monotonicities)), 4) if monotonicities else None
-                )
+                row["dose_response_mean_monotonicity"] = round(float(np.mean(monotonicities)), 4) if monotonicities else None
             summary_rows.append(row)
         summary = pd.DataFrame(summary_rows)
         if not summary.empty:
+            per_compound = self._dropout_summary_by_compound(dropout_table)
+            for column, default in (
+                ("n_wells_input_treated", 0),
+                ("n_wells_rejected_signal_loss", 0),
+                ("informative_dropout", False),
+                ("dropout_concentrations_uM", ""),
+                ("max_dropout_fraction", 0.0),
+            ):
+                summary[column] = summary["compound"].map(
+                    lambda name, column=column, default=default: per_compound.get(str(name), {}).get(column, default)
+                )
             summary = summary.sort_values("cardioscore", ascending=False)
+        exclusion_table = self._build_exclusion_table(
+            df_pre_qc=df_pre_qc,
+            df_post_qc=df,
+            effects=effects,
+            concentration_summary=concentration_summary,
+            scorable_compounds=scorable_compounds,
+            scored={s.compound for s in scores},
+            dropout_table=dropout_table,
+            min_concentrations=min_concentrations,
+        )
+        excluded_compounds = sorted(set(exclusion_table["compound"].astype(str))) if not exclusion_table.empty else []
+        provenance = build_provenance(
+            input_frame=(dataset.features if isinstance(dataset, SyntheticMEADataset) else dataset),
+            config=self.config,
+            input_rows_after_qc=len(df),
+            effect_rows=len(effects),
+            scoring_unit_rows=len(scoring_effects),
+            excluded_compounds=excluded_compounds,
+            qc_log=self.qc_log,
+        )
         return PipelineResult(
             scores=scores,
             feature_table=effects,
@@ -538,4 +943,8 @@ class CardioScorePipeline:
             dose_response_fits=dose_response_fits,
             config=self.config,
             qc_log=self.qc_log,
+            provenance=provenance,
+            qc_rejections=qc_rejections,
+            dropout_table=dropout_table,
+            exclusion_table=exclusion_table,
         )
