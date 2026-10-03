@@ -1,0 +1,21 @@
+# CardioScore Stage 3 blinded Cardio PyMEA beat-detection acceptance criteria.
+# Frozen before the next held-out annotation/scoring run. Any threshold change creates a new version.
+schema_version: 1
+status: frozen
+validation_version: pymea-beat-v1
+frozen_on: 2026-10-04
+validation_code_sha: 39767da5144946f73717b34c2ba7f1e63766afef
+reference_standard: blinded_human_beat_annotation
+development_exposure:
+  note: >-
+    Detector hardening used 20 real Cardio PyMEA windows. A confirmatory held-out run requires the
+    exact prior development sheet_manifest.json so those electrode/time regions can be excluded.
+    If that manifest is unavailable and the historical default batch is reconstructed instead, the
+    notebook must label the resulting evaluation provisional/exploratory rather than confirmatory.
+beat_detection:
+  status: frozen
+  tolerance_ms: 50
+  f1_min: 0.95
+  precision_min: 0.95
+  recall_min: 0.95
+  timing_median_abs_error_ms_max: 10
