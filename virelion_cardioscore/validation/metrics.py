@@ -54,6 +54,44 @@ def _normalise_label(value: Any) -> str:
     return str(value).strip().lower()
 
 
+def _label_ordinals(values: Iterable[str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for value in values:
+        key = _normalise_label(value)
+        if key not in RISK_ORDER:
+            raise ValueError(f"Unsupported risk label: {value!r}")
+        out[key] = RISK_ORDER[key]
+    return out
+
+
+def _canonicalize_to_labels(values: Iterable[Any], labels: list[str]) -> np.ndarray:
+    """Map compatible short/long risk labels onto configured label tokens."""
+    label_ordinals = _label_ordinals(labels)
+    ordinal_to_label: dict[int, str] = {}
+    for label, ordinal in label_ordinals.items():
+        if ordinal in ordinal_to_label and ordinal_to_label[ordinal] != label:
+            raise ValueError(
+                "Configured metric labels must contain at most one token per ordinal risk class."
+            )
+        ordinal_to_label[ordinal] = label
+
+    canonical: list[str] = []
+    for value in values:
+        key = _normalise_label(value)
+        if key in label_ordinals:
+            canonical.append(key)
+            continue
+        if key not in RISK_ORDER:
+            raise ValueError(f"Unsupported risk label: {value!r}")
+        ordinal = RISK_ORDER[key]
+        if ordinal not in ordinal_to_label:
+            raise ValueError(
+                f"Risk label {value!r} is not representable by configured metric labels {labels!r}."
+            )
+        canonical.append(ordinal_to_label[ordinal])
+    return np.asarray(canonical)
+
+
 def _ordinal(values: Iterable[str]) -> np.ndarray:
     out = []
     for value in values:
@@ -68,20 +106,18 @@ def locked_metrics(
     reference: Iterable[str],
     observed: Iterable[str],
     *,
-    labels: tuple[str, ...] = ("low", "intermediate", "high"),
+    labels: tuple[str, ...] = ("low", "moderate", "high"),
 ) -> LockedMetrics:
     """Compute fixed metrics; this function never fits or changes a model."""
-    y_true = np.asarray([_normalise_label(x) for x in reference])
-    y_pred = np.asarray([_normalise_label(x) for x in observed])
-    if y_true.shape != y_pred.shape or y_true.size == 0:
-        raise ValueError("reference and observed must have equal, non-zero length")
-
     label_values = [_normalise_label(x) for x in labels]
     if len(set(label_values)) != len(label_values):
         raise ValueError("labels must be unique")
-    unknown_labels = sorted(set(label_values) - set(RISK_ORDER))
-    if unknown_labels:
-        raise ValueError(f"Unsupported metric labels: {unknown_labels}")
+    _label_ordinals(label_values)
+
+    y_true = _canonicalize_to_labels(reference, label_values)
+    y_pred = _canonicalize_to_labels(observed, label_values)
+    if y_true.shape != y_pred.shape or y_true.size == 0:
+        raise ValueError("reference and observed must have equal, non-zero length")
 
     cm = confusion_matrix(y_true, y_pred, labels=label_values)
     true_ord = _ordinal(y_true)
@@ -132,3 +168,65 @@ def stratified_failures(
         )
         .reset_index()
     )
+
+
+def binary_auroc_bootstrap(
+    positive: Iterable[bool],
+    scores: Iterable[float],
+    *,
+    n_bootstrap: int,
+    seed: int,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """AUROC with a percentile bootstrap CI that resamples *compounds* (the independent unit).
+
+    Resamples that contain only one class are skipped and counted; nothing is fitted or tuned.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    y = np.asarray(list(positive), dtype=bool)
+    x = np.asarray(list(scores), dtype=float)
+    if y.shape != x.shape or y.size == 0:
+        raise ValueError("positive and scores must have equal, non-zero length")
+    if not np.isfinite(x).all():
+        raise ValueError("scores must be finite")
+    if y.all() or (~y).all():
+        raise ValueError("AUROC requires both positive and negative compounds")
+    if not 0.0 < confidence < 1.0 or n_bootstrap < 1:
+        raise ValueError("confidence must be in (0, 1) and n_bootstrap must be >= 1")
+    auroc = float(roc_auc_score(y, x))
+    rng = np.random.default_rng(int(seed))
+    draws: list[float] = []
+    for _ in range(int(n_bootstrap)):
+        index = rng.integers(0, y.size, y.size)
+        if y[index].all() or (~y[index]).all():
+            continue
+        draws.append(float(roc_auc_score(y[index], x[index])))
+    if not draws:
+        raise ValueError("No valid bootstrap resamples contained both classes")
+    lower_q = (1.0 - confidence) / 2.0
+    lower, upper = np.quantile(draws, [lower_q, 1.0 - lower_q])
+    return {
+        "auroc": auroc,
+        "ci_lower": float(lower),
+        "ci_upper": float(upper),
+        "confidence": float(confidence),
+        "n": int(y.size),
+        "n_positive": int(y.sum()),
+        "n_negative": int((~y).sum()),
+        "n_bootstrap_requested": int(n_bootstrap),
+        "n_bootstrap_valid": len(draws),
+        "seed": int(seed),
+    }
+
+
+def primary_outcome(result: dict[str, Any], rule: dict[str, Any]) -> str:
+    """Apply the pre-registered three-outcome rule: 'success', 'inconclusive' or 'failure'."""
+    for outcome in ("success", "inconclusive"):
+        thresholds = rule[outcome]
+        if (
+            result["auroc"] >= float(thresholds["auroc_min"])
+            and result["ci_lower"] >= float(thresholds["ci_lower_min"])
+        ):
+            return outcome
+    return "failure"

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 OPTIONAL_HIERARCHY_COLUMNS = (
@@ -23,7 +24,7 @@ OPTIONAL_HIERARCHY_COLUMNS = (
     "experiment_id",
 )
 
-SUPPORTED_SCORING_UNITS = ("well", "biological_replicate", "batch", "plate")
+SUPPORTED_SCORING_UNITS = ("auto", "well", "biological_replicate", "batch", "plate")
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,34 @@ def _require_complete_identifier(df: pd.DataFrame, column: str) -> None:
         )
 
 
+def _require_complete_endpoints(df: pd.DataFrame, endpoint_columns: list[str]) -> None:
+    """Reject partial endpoint data before aggregation changes the denominator."""
+    for endpoint in endpoint_columns:
+        if endpoint not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[endpoint], errors="coerce")
+        numeric_values = numeric.to_numpy(dtype=float)
+        invalid = numeric.isna() | ~np.isfinite(numeric_values)
+        if invalid.any():
+            raise ValueError(
+                f"Scoring endpoint {endpoint!r} contains {int(invalid.sum())} missing or non-finite observation(s); "
+                "partial endpoint data are not allowed for scoring-unit aggregation."
+            )
+
+
+def _unit_group_columns(df: pd.DataFrame, unit_column: str) -> list[str]:
+    """Return a collision-safe experimental-unit grouping key."""
+    namespace = [
+        column
+        for column in ("site", "experiment_id")
+        if column in df.columns and column != unit_column
+    ]
+    for column in namespace:
+        _require_complete_identifier(df, column)
+    _require_complete_identifier(df, unit_column)
+    return [*namespace, unit_column]
+
+
 def _resolve_scoring_column(
     df: pd.DataFrame,
     scoring_unit: str,
@@ -95,6 +124,19 @@ def _resolve_scoring_column(
     batch_unit_column: Optional[str] = None,
     plate_unit_column: Optional[str] = None,
 ) -> str:
+    if scoring_unit == "auto":
+        candidates = [
+            ("biological_replicate", biological_unit_column or "biological_replicate"),
+            ("batch", batch_unit_column or ("batch_id" if "batch_id" in df.columns else "experiment_id")),
+            ("plate", plate_unit_column or "plate_id"),
+            ("well", "well"),
+        ]
+        for _, candidate in candidates:
+            if candidate in df.columns:
+                _require_complete_identifier(df, candidate)
+                return candidate
+        raise ValueError("scoring_unit='auto' requires at least a biological, batch, plate, or well identifier.")
+
     if scoring_unit not in SUPPORTED_SCORING_UNITS:
         raise ValueError(
             f"Unsupported scoring_unit: {scoring_unit!r}. "
@@ -129,7 +171,7 @@ def aggregate_to_scoring_units(
     plate_unit_column: Optional[str] = None,
 ) -> pd.DataFrame:
     """Aggregate technical wells to the configured independent scoring unit."""
-    if effects.empty or scoring_unit == "well":
+    if effects.empty:
         return effects.copy()
 
     if endpoint_columns is None:
@@ -141,6 +183,7 @@ def aggregate_to_scoring_units(
             "triangulation_proxy_change",
             "max_effect_pct",
         ]
+    _require_complete_endpoints(effects, endpoint_columns)
 
     unit_column = _resolve_scoring_column(
         effects,
@@ -149,19 +192,33 @@ def aggregate_to_scoring_units(
         batch_unit_column=batch_unit_column,
         plate_unit_column=plate_unit_column,
     )
-    group_columns = ["compound", "concentration_uM", unit_column]
+    unit_key_columns = _unit_group_columns(effects, unit_column)
+    if unit_column == "well" and unit_key_columns == ["well"]:
+        return effects.copy()
+
+    resolved_unit = (
+        "biological_replicate" if unit_column == (biological_unit_column or "biological_replicate")
+        else "batch" if unit_column in {batch_unit_column or "batch_id", "experiment_id"}
+        else "plate" if unit_column == (plate_unit_column or "plate_id")
+        else "well"
+    )
+    group_columns = ["compound", "concentration_uM", *unit_key_columns]
     rows: list[dict] = []
     for keys, group in effects.groupby(group_columns, sort=True, dropna=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
         row = dict(zip(group_columns, keys, strict=True))
-        row["well"] = f"{scoring_unit}:{keys[-1]}"
+        namespace_values = keys[2:]
+        if len(unit_key_columns) == 1:
+            row["well"] = f"{resolved_unit}:{keys[-1]}"
+        else:
+            row["well"] = f"{resolved_unit}:{':'.join(str(value) for value in namespace_values)}"
         row["n_wells"] = int(group["well"].nunique())
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
                 continue
-            values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
-            row[endpoint] = float(values.mean()) if len(values) else float("nan")
+            values = pd.to_numeric(group[endpoint], errors="coerce")
+            row[endpoint] = float(values.mean())
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -184,8 +241,9 @@ def summarize_experimental_units(
             "beat_rate_change_pct",
             "amplitude_change_pct",
             "stv_increase",
-            "triangulation_proxy",
+            "triangulation_proxy_change",
         ]
+    _require_complete_endpoints(effects, endpoint_columns)
 
     metadata = hierarchy_columns(
         effects,
@@ -195,19 +253,21 @@ def summarize_experimental_units(
     )
     biological = biological_unit_column or "biological_replicate"
     if biological in metadata:
-        unit_columns = ["compound", "concentration_uM", biological]
+        base_unit = biological
     else:
         batch = batch_unit_column or ("batch_id" if "batch_id" in metadata else "experiment_id")
         if batch in metadata:
-            unit_columns = ["compound", "concentration_uM", batch]
+            base_unit = batch
         else:
             plate = plate_unit_column or "plate_id"
             if plate in metadata:
-                unit_columns = ["compound", "concentration_uM", plate]
+                base_unit = plate
             else:
-                unit_columns = ["compound", "concentration_uM", "well"]
+                base_unit = "well"
 
-    for column in unit_columns[2:]:
+    unit_key_columns = _unit_group_columns(effects, base_unit)
+    unit_columns = ["compound", "concentration_uM", *unit_key_columns]
+    for column in unit_key_columns:
         _require_complete_identifier(effects, column)
 
     grouped = effects.groupby(unit_columns, sort=True, dropna=False)
@@ -220,8 +280,8 @@ def summarize_experimental_units(
         for endpoint in endpoint_columns:
             if endpoint not in group.columns:
                 continue
-            values = pd.to_numeric(group[endpoint], errors="coerce").dropna()
-            row[f"{endpoint}_mean"] = float(values.mean()) if len(values) else float("nan")
+            values = pd.to_numeric(group[endpoint], errors="coerce")
+            row[f"{endpoint}_mean"] = float(values.mean())
             row[f"{endpoint}_sd"] = float(values.std(ddof=1)) if len(values) > 1 else float("nan")
         rows.append(row)
 
@@ -244,9 +304,24 @@ def count_independent_units(summary: pd.DataFrame) -> pd.DataFrame:
     else:
         unit = "well"
 
-    _require_complete_identifier(summary, unit)
+    namespace = [
+        column
+        for column in ("site", "experiment_id")
+        if column in summary.columns and column != unit
+    ]
+    for column in [*namespace, unit]:
+        _require_complete_identifier(summary, column)
+
+    scoped = summary.copy()
+    key_columns = [*namespace, unit]
+    if len(key_columns) == 1:
+        count_column = key_columns[0]
+    else:
+        scoped["_independent_unit_key"] = scoped[key_columns].astype(str).agg("::".join, axis=1)
+        count_column = "_independent_unit_key"
+
     return (
-        summary.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[unit]
+        scoped.groupby(["compound", "concentration_uM"], sort=True, dropna=False)[count_column]
         .nunique()
         .reset_index(name="n_independent_units")
     )

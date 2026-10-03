@@ -2,7 +2,28 @@
 
 ## Unreleased
 
+### Changed (algorithm - requires a new validation version if frozen earlier)
+- Beat detection: a repolarization deflection that is itself prominent enough to register as a peak (observed on 6 of 20 blinded real Cardio PyMEA windows: 25-357 bpm doubled to correct ~29 bpm, precision as low as 0.24) is now folded into the preceding beat instead of counted as a second one, when it follows within `companion_max_gap_fraction_of_period` (default half) of the trace's own estimated beat period and its amplitude is at most `companion_max_amplitude_ratio` (default 0.6) of the beat it follows. `BeatDetectionResult.has_companion` marks which beats had a folded companion, for future arrhythmia-adjacent analysis. This is a same-polarity amplitude/timing heuristic: a genuine early afterdepolarization at a similar latency and amplitude would also be folded in.
+- Beat detection: effective prominence is max(`min_prominence_uv`, `noise_prominence_multiplier` × robust noise scale of the trace), default multiplier 10.
+- `beat_detection_rate` is two-sided so both over-detection and under-detection lower the QC value; rhythm estimation covers 15–120 bpm.
+- Noise is estimated from the raw trace so broadband filtering cannot hide excessive noise.
+- Repolarization search extends to 1200 ms while remaining bounded by the next depolarization.
+- Scored `stv` remains inter-beat-interval variability; `fpd_stv_ms` is reported separately as classical repolarization STV.
+
+### Fixed
+- Blinded Cardio PyMEA scoring no longer reports a confirmatory pass/fail from draft acceptance criteria; draft criteria return exploratory checks only, while confirmatory `passed` is populated only when both criteria statuses are frozen and the criteria file hash is recorded.
+- Aligned the scored `stv` contract across extraction, endpoint configuration, and the draft preregistration: `stv` is normalized inter-beat-interval variability, while classical repolarization STV remains the separate report-only `fpd_stv_ms` field.
+- Compounds whose treated wells lost signal at high concentration (cells stopped beating) were silently scored from the surviving lower concentrations, e.g. a High-risk profile became Low, or the compound vanished from the summary. The pipeline now reports structured QC rejections, per-concentration dropout, an `informative_dropout` flag, and an exclusion table with reasons; a dataset where no treated well survives QC no longer raises a bare `KeyError`.
+- `aggregate_compound_effects` no longer turns an endpoint with no finite values into a zero effect; it returns NaN so the scoring engine fails closed.
+- The locked feature-schema check no longer forces missing endpoints to be fabricated for wells with no usable signal; missing endpoints remain an error on wells that have signal.
+- Colab runner: restored the site/cell-type dataset detail on the `UNDOCUMENTED_PLATFORM_CODE` flag (the committed regression test was failing).
+
 ### Added
+- Unified Colab validation runner now recognizes strict MC_Data/Cardio PyMEA ASCII sources, requires an explicit electrode/window selection, verifies two independent extractions by hash, and records them as signal-component evidence only (never as drug-response validation without compound/dose metadata).
+- v5 signal validation hardening: prolonged FPD search through 900 ms, pre-filter noise estimation, over-detection penalty in beat-detection QC, and classical per-beat repolarization STV from consecutive FPDs.
+- Signal-level validation suite with exact synthetic ground truth, event-level precision/recall/F1, agreement metrics, deterministic rebuild checks, and a Multichannel Systems MC_Data adapter for Cardio PyMEA.
+- `validation/preregistration.yaml` (draft), `virelion_cardioscore.validation.freeze`, and `scripts/validation/make_freeze_manifest.py`: pre-registration and freeze manifest with hash verification; the locked stage blocks without a verified freeze.
+- Locked-stage primary analysis: AUROC with compound-level bootstrap CI and a pre-registered outcome rule, informative-dropout sensitivity analysis, exclusion reasons, and dropout/exclusion CSVs.
 - Optional exposure-response evidence contribution to CardioScore using only quality-passing 4PL fits.
 - Dose-response evidence is calculated from the tested log-concentration range above fitted EC50.
 - Default dose-response scoring weight remains `0.0`, preserving the endpoint-only CardioScore unless explicitly enabled.
@@ -23,8 +44,21 @@
 - Conventional-vs-hierarchical effect concordance analysis reporting absolute/relative disagreement and direction agreement.
 - Synthetic hierarchical stress-test generator with known treatment effects, additive plate drift, multiplicative scale drift, and treatment-allocation imbalance scenarios.
 - Robustness-matrix runner that sweeps plate drift, treatment allocation, replicate count, and noise level and summarizes conventional-estimator bias and recovery rate.
+- Runtime-aligned external validation schema requiring QC fields, vehicle metadata, finite endpoint values, and valid concentration semantics.
+- Explicit vehicle-structure validation for locked external runs when vehicle normalization is enabled.
+- Signal extraction pre-freeze fixes: FPD search now extends to 900 ms while respecting the next detected beat, noise QC estimates broadband noise from the raw trace, beat-count QC penalizes both over- and under-detection, and stv now represents classical repolarization STV derived from consecutive per-beat FPD measurements.
 
 ### Fixed
+- Corrected Blinova event-label parsing so combined A-D labels such as `AC`/`ABC` count as arrhythmia-like, unresolved labels remain explicit audit flags, and non-blank event labels with `EAD != 1` fail closed.
+- Added regression coverage for combined labels, quiescence separation, unresolved event codes, and the event-label semantics of `EAD`.
+- Hardened the Colab validation runner's Blinova stage: blank `risk`, undocumented platform codes such as `ACA`, missing `ddFPDc`, and the documented terfenadine/verapamil event discrepancies are recorded as explicit audit flags; structural inconsistencies still fail closed.
+- Fixed locked external validation invocation to pass the required `input_dir` argument and added regression coverage for internal call arity.
+- Pinned the Colab runner by commit SHA in the execution guide and recorded the runner source SHA-256 in the run manifest.
+- Added `tests/test_colab_runner_blinova.py` covering the audited workbook quirks and failure gates.
+- Colab validation runner (Blinova stage): known workbook quirks (blank `risk`, undocumented platform code `ACA`, missing `ddFPDc`, and event-field discrepancies for terfenadine/verapamil) are recorded as audit flags instead of stopping the stage; structural errors still fail closed. Compound-level reference labels come only from labeled rows, with no label or platform relabeling.
+- Colab validation runner: the locked external stage passes `input_dir` to `run_locked_external`, preventing a runtime `TypeError` when verified assets are supplied.
+- Colab validation runner: the run manifest records the runner revision and source SHA-256 from the SHA-pinned launcher; unpinned launches warn explicitly.
+- Added `tests/test_colab_runner_blinova.py` covering the audited workbook quirks and internal call-arity regression.
 - Restored the actual `preprocessing.beat_detection` implementation after a module collision had replaced it with endpoint-extraction code.
 - Removed invalid bootstrap p-values that were derived from an observed-effect bootstrap distribution; profile comparisons now report confidence intervals only.
 - Made endpoint direction semantics consistent, including correct handling of decrease-only endpoints and feature-table scoring.
@@ -36,6 +70,8 @@
 - Tightened raw-trace validation for finite values, non-negative concentrations, duplicate timestamps, and inconsistent electrode sampling rates.
 - Aligned hierarchical mixed-effects inference with the base run's QC/normalization population instead of re-analyzing rejected raw wells.
 - Hardened the browser demo against unsafe HTML injection and silent feature fabrication from missing CSV columns.
+- Fixed the standardized validation contract so vehicle controls may legitimately use `concentration_uM=0`, while treated wells must have strictly positive concentrations.
+- Prevented external validation from proceeding silently with compounds that lack matching vehicle controls under vehicle-normalized scoring.
 
 ### Methodology
 - The configured experimental unit now controls the analysis frame used for concentration summaries, dose-response fitting, bootstrap inference, and scoring.
@@ -62,6 +98,7 @@
 - The robustness matrix is an operating-characteristic tool for synthetic data only; recovery thresholds are configurable and are not claims of real-world performance or regulatory validation.
 - The hierarchy layer rejects requests for unavailable experimental-unit metadata instead of silently pseudoreplicating wells.
 - The hierarchy layer does not claim a mixed-effects model; it is an explicit guard against accidental pseudoreplication.
+- The locked external validation path now validates the full runtime feature contract before executing the pipeline and fails closed when normalized validation data lack compound-matched vehicle controls.
 
 ## [0.1.1] – 2026-08-16
 

@@ -1,0 +1,12 @@
+# Stage 3 signal-validation acceptance criteria for beat detection (DRAFT PROPOSALS).
+# Freeze these numbers before scoring any human annotations; changing them afterwards is a new
+# validation version. They are judged against blinded human annotation, not against another algorithm.
+schema_version: 1
+status: draft
+beat_detection:
+  status: draft
+  tolerance_ms: 50
+  f1_min: 0.95
+  precision_min: 0.95
+  recall_min: 0.95
+  timing_median_abs_error_ms_max: 10

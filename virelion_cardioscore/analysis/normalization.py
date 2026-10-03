@@ -11,6 +11,7 @@ import pandas as pd
 from virelion_cardioscore.analysis.normalization_assumptions import (
     check_additive_correction_assumptions,
 )
+from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
 @dataclass(frozen=True)
@@ -86,10 +87,13 @@ def apply_control_anchor_correction(
     if max_shift_cv_pct < 0:
         raise ValueError("max_shift_cv_pct cannot be negative.")
 
+    working = df.copy()
+    working["vehicle"] = coerce_bool_series(working["vehicle"], name="vehicle")
+
     assumption_checks: dict[str, dict] = {}
     for column in corrected_columns:
         check = check_additive_correction_assumptions(
-            df,
+            working,
             group_column=group,
             endpoint=column,
             min_treated_per_group=min_treated_per_group,
@@ -102,8 +106,7 @@ def apply_control_anchor_correction(
                 f"Control-anchored correction is not justified for endpoint {column!r}: {check.message}"
             )
 
-    working = df.copy()
-    controls = working[working["vehicle"].astype(bool)]
+    controls = working[working["vehicle"]]
     if controls.empty:
         raise ValueError("Control-anchored correction requires at least one vehicle well.")
 
@@ -124,10 +127,14 @@ def apply_control_anchor_correction(
     target_means: dict[str, float] = {}
     group_shifts: dict[str, dict[str, float]] = {}
     for column in corrected_columns:
-        values = pd.to_numeric(controls_usable[column], errors="coerce").dropna()
-        if values.empty:
-            raise ValueError(f"No finite vehicle values are available for correction column {column!r}.")
-        target_means[column] = float(values.mean())
+        # The target is the unweighted mean of eligible group control means.
+        # Pooling all control wells would let groups with more technical wells
+        # dominate the correction target.
+        values = pd.to_numeric(controls_usable[column], errors="coerce")
+        group_means = values.groupby(controls_usable[group], dropna=False).mean().dropna()
+        if group_means.empty:
+            raise ValueError(f"No finite vehicle group means are available for correction column {column!r}.")
+        target_means[column] = float(group_means.mean())
 
     for group_value, indices in working.groupby(group, dropna=False).groups.items():
         if group_value not in usable_groups:

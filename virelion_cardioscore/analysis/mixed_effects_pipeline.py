@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from virelion_cardioscore.analysis.mixed_effects import MixedEffectsResult, fit_random_intercept
+from virelion_cardioscore.utils.coercion import coerce_bool_series
 
 
 def fit_compound_concentration_mixed_effects(
@@ -37,8 +38,17 @@ def fit_compound_concentration_mixed_effects(
         if numeric_treatment.isna().any() or not set(numeric_treatment.dropna().unique()).issubset({0, 1}):
             raise ValueError(f"Treatment column {treatment_column!r} must contain only 0/1 values.")
         working[treatment_column] = numeric_treatment.astype(int)
+        if vehicle_column in working.columns:
+            vehicle_bool = coerce_bool_series(working[vehicle_column], name=vehicle_column)
+            derived_treatment = (~vehicle_bool).astype(int)
+            if not working[treatment_column].equals(derived_treatment):
+                raise ValueError(
+                    f"Treatment column {treatment_column!r} conflicts with {vehicle_column!r}; "
+                    "explicit treatment metadata must agree with the vehicle flag."
+                )
     else:
-        working[treatment_column] = (~working[vehicle_column].astype(bool)).astype(int)
+        vehicle_bool = coerce_bool_series(working[vehicle_column], name=vehicle_column)
+        working[treatment_column] = (~vehicle_bool).astype(int)
 
     rows: list[dict] = []
     for (compound, concentration), subset in working.groupby(

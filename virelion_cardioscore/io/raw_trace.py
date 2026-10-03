@@ -6,9 +6,9 @@ preprocessing.filtering + features.endpoints to produce the same
 well-level feature table consumed by CardioScorePipeline.
 
 Required input columns are defined by ``REQUIRED_COLUMNS``. Optional
-experimental-design metadata (plate, batch, biological replicate, and
-experiment ID) are preserved through feature extraction so downstream
-hierarchical analysis does not lose the experimental unit.
+experimental-design and study metadata are preserved through feature extraction
+so downstream hierarchical analysis and validation do not lose the experimental
+context.
 """
 
 from __future__ import annotations
@@ -38,7 +38,11 @@ OPTIONAL_METADATA_COLUMNS = (
     "batch_id",
     "experiment_id",
     "biological_replicate",
+    "site",
+    "cell_type",
 )
+MAX_RELATIVE_TIMESTAMP_JITTER = 0.01
+TIMESTAMP_ALIGNMENT_ATOL_S = 1e-9
 
 
 class RawTraceSchemaError(ValueError):
@@ -110,7 +114,7 @@ def _coerce_vehicle(series: pd.Series) -> pd.Series:
 
 
 def _infer_sampling_rate(time_s: np.ndarray) -> float:
-    """Infer fs_hz from the median gap between consecutive timestamps."""
+    """Infer fs_hz only when timestamps are sufficiently close to uniform sampling."""
     ordered = np.sort(np.asarray(time_s, dtype=float))
     diffs = np.diff(ordered)
     diffs = diffs[diffs > 0]
@@ -119,6 +123,17 @@ def _infer_sampling_rate(time_s: np.ndarray) -> float:
             "Could not infer sampling rate: time_s has no positive gaps between samples."
         )
     median_dt = float(np.median(diffs))
+    if median_dt <= 0 or not np.isfinite(median_dt):
+        raise RawTraceSchemaError("Could not infer sampling rate from time_s.")
+
+    relative_deviation = float(np.max(np.abs(diffs - median_dt)) / median_dt)
+    if relative_deviation > MAX_RELATIVE_TIMESTAMP_JITTER:
+        raise RawTraceSchemaError(
+            "Irregular sampling detected: maximum timestamp interval deviation "
+            f"is {relative_deviation * 100.0:.2f}%, exceeding the allowed "
+            f"{MAX_RELATIVE_TIMESTAMP_JITTER * 100.0:.2f}%. Resample the raw trace "
+            "to a uniform sampling grid before CardioScore processing."
+        )
     return 1.0 / median_dt
 
 
@@ -145,6 +160,8 @@ def load_raw_traces_csv(path: str | Path) -> list[RawWellRecording]:
         metadata = dict(zip(metadata_columns, keys[base_count:], strict=True))
         electrode_traces: dict[str, np.ndarray] = {}
         fs_values = []
+        reference_times: np.ndarray | None = None
+        reference_electrode: str | None = None
         for electrode_id, edf in well_df.groupby("electrode_id", sort=False):
             edf = edf.sort_values("time_s")
             times = edf["time_s"].to_numpy(dtype=float)
@@ -154,6 +171,23 @@ def load_raw_traces_csv(path: str | Path) -> list[RawWellRecording]:
                 )
             fs_hz = _infer_sampling_rate(times)
             fs_values.append(fs_hz)
+            if reference_times is None:
+                reference_times = times
+                reference_electrode = str(electrode_id)
+            else:
+                aligned = len(times) == len(reference_times) and np.allclose(
+                    times,
+                    reference_times,
+                    rtol=0.0,
+                    atol=TIMESTAMP_ALIGNMENT_ATOL_S,
+                )
+                if not aligned:
+                    raise RawTraceSchemaError(
+                        f"Electrode timestamps are not aligned within compound={compound!r}, "
+                        f"well={well!r}: electrode={electrode_id!r} does not match "
+                        f"reference electrode={reference_electrode!r}. Resample or align all "
+                        "electrode traces to a common time grid before CardioScore processing."
+                    )
             electrode_traces[str(electrode_id)] = edf["voltage_uv"].to_numpy(dtype=float)
 
         if not fs_values:

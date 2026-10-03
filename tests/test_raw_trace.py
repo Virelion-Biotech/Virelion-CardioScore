@@ -56,9 +56,6 @@ def test_validate_raw_trace_schema_nan_values():
             "voltage_uv": [1.5],
         }
     )
-    # NaN fails the finite-value check (which now runs before the dedicated
-    # missing-value check, since NaN is also non-finite), so that's the
-    # message that actually surfaces here.
     with pytest.raises(RawTraceSchemaError, match="finite values"):
         validate_raw_trace_schema(df)
 
@@ -86,7 +83,6 @@ def test_load_raw_traces_csv_missing_file(tmp_path):
 
 def test_load_raw_traces_csv_groups_by_well_and_electrode(two_compound_plate):
     recordings = load_raw_traces_csv(two_compound_plate)
-    # 2 compounds x (1 vehicle + 2 doses) x 2 replicates = 12 wells
     assert len(recordings) == 12
     for rec in recordings:
         assert rec.fs_hz == pytest.approx(1000.0, rel=0.01)
@@ -99,23 +95,58 @@ def test_load_raw_traces_csv_infers_sampling_rate(two_compound_plate):
         assert 900.0 < rec.fs_hz < 1100.0
 
 
+def test_load_raw_traces_csv_rejects_irregular_sampling(two_compound_plate, tmp_path):
+    """Raw traces with non-uniform timestamp gaps must fail closed."""
+    frame = pd.read_csv(two_compound_plate)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E1")
+    indices = frame.index[mask]
+    assert len(indices) > 5
+    frame.loc[indices[3], "time_s"] = float(
+        frame.loc[indices[2], "time_s"]
+        + 1.05 * (frame.loc[indices[2], "time_s"] - frame.loc[indices[1], "time_s"])
+    )
+    broken = tmp_path / "irregular.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Irregular sampling detected"):
+        load_raw_traces_csv(broken)
+
+
+def test_load_raw_traces_csv_rejects_cross_electrode_time_shift(two_compound_plate, tmp_path):
+    """Same sampling rate is insufficient when electrode time grids differ."""
+    frame = pd.read_csv(two_compound_plate)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E2")
+    indices = frame.index[mask]
+    assert len(indices) > 5
+    frame.loc[indices, "time_s"] = frame.loc[indices, "time_s"] + 1e-5
+    broken = tmp_path / "misaligned.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
+
+
+def test_load_raw_traces_csv_rejects_cross_electrode_length_mismatch(two_compound_plate, tmp_path):
+    """Electrodes with different sample counts cannot be averaged implicitly."""
+    frame = pd.read_csv(two_compound_plate)
+    mask = (frame["compound"] == "Compound_Safe") & (frame["well"] == "W01") & (frame["electrode_id"] == "E3")
+    drop_index = frame.index[mask][0]
+    frame = frame.drop(index=drop_index)
+    broken = tmp_path / "length_mismatch.csv"
+    frame.to_csv(broken, index=False)
+
+    with pytest.raises(RawTraceSchemaError, match="Electrode timestamps are not aligned"):
+        load_raw_traces_csv(broken)
+
+
 def test_recordings_to_feature_table_schema(two_compound_plate):
     recordings = load_raw_traces_csv(two_compound_plate)
     table = recordings_to_feature_table(recordings)
 
     expected_cols = {
-        "compound",
-        "concentration_uM",
-        "well",
-        "vehicle",
-        "fpd_ms",
-        "beat_rate_bpm",
-        "amplitude_uv",
-        "stv",
-        "triangulation_proxy",
-        "noise_sd_uv",
-        "n_electrodes",
-        "beat_detection_rate",
+        "compound", "concentration_uM", "well", "vehicle", "fpd_ms",
+        "beat_rate_bpm", "amplitude_uv", "stv", "triangulation_proxy",
+        "noise_sd_uv", "n_electrodes", "beat_detection_rate",
     }
     assert expected_cols.issubset(set(table.columns))
     assert len(table) == 12
@@ -123,7 +154,6 @@ def test_recordings_to_feature_table_schema(two_compound_plate):
 
 def test_load_raw_traces_to_feature_table_end_to_end(two_compound_plate):
     table = load_raw_traces_to_feature_table(two_compound_plate)
-
     toxic_vehicle = table[(table["compound"] == "Compound_Toxic") & (table["vehicle"])]
     toxic_high_dose = table[
         (table["compound"] == "Compound_Toxic") & (table["concentration_uM"] == 10.0)
@@ -132,14 +162,11 @@ def test_load_raw_traces_to_feature_table_end_to_end(two_compound_plate):
 
 
 def test_feature_table_from_raw_traces_runs_through_real_pipeline(two_compound_plate):
-    """
-    Full integration: raw voltage CSV -> feature extraction -> the actual
-    CardioScorePipeline, with no schema changes needed on the pipeline side.
-    """
     from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
 
     table = load_raw_traces_to_feature_table(two_compound_plate)
     pipeline = CardioScorePipeline.from_defaults()
+    pipeline.config["concentration_response"]["require_min_concentrations_for_scoring"] = False
     result = pipeline.run(table)
 
     assert not result.summary_table.empty

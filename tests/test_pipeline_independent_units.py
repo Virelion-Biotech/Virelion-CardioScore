@@ -9,7 +9,7 @@ def _nested_feature_table() -> pd.DataFrame:
     rows = []
     for compound in ["A"]:
         for replicate in ["B1", "B2"]:
-            for concentration, fpd in [(1.0, 110.0), (10.0, 130.0)]:
+            for concentration, fpd in [(1.0, 110.0), (10.0, 130.0), (30.0, 150.0)]:
                 for technical in [1, 2]:
                     rows.append(
                         {
@@ -46,8 +46,8 @@ def test_compound_independent_units_are_unique_across_concentrations():
     result = pipeline.run(combined)
     score = result.scores[0]
 
-    # Two biological replicates are reused across two concentrations; they
-    # must not be counted as four independent biological units.
+    # Two biological replicates are reused across three concentrations; they
+    # must not be counted as six independent biological units.
     assert score.n_independent_units == 2
-    assert score.n_wells == 8
+    assert score.n_wells == 12
     assert result.summary_table.iloc[0]["n_independent_units"] == 2

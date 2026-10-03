@@ -12,6 +12,11 @@ quality_control:
   reject_wells_with_arrhythmia_proxy: false
   arrhythmia_proxy_max_stv: null
   log_rejections: true
+  # Informative dropout: flag a concentration when >= min_fraction of its treated wells lost signal
+  # (cells stopped beating / no usable electrodes) AND that exceeds the compound's vehicle-well loss by
+  # >= min_excess. Flagged compounds are reported, never treated as clean.
+  informative_dropout_min_fraction: 0.5
+  informative_dropout_min_excess: 0.25
 
 preprocessing:
   highpass_hz: 0.5
@@ -25,6 +30,9 @@ beat_detection:
   min_prominence_uv: 20.0
   min_distance_ms: 250.0
   refractory_ms: 200.0
+  noise_prominence_multiplier: 10.0
+  companion_max_amplitude_ratio: 0.6
+  companion_max_gap_fraction_of_period: 0.5
 
 features:
   compute_fpd: true
@@ -36,16 +44,20 @@ features:
   window_s: 60.0
 
 experimental_units:
-  scoring_unit: "well"
+  # Prefer biological replicate, then batch, then plate; use wells only when
+  # no higher-level experimental-unit metadata are available.
+  scoring_unit: "auto"
   biological_unit_column: "biological_replicate"
   batch_unit_column: "batch_id"
   plate_unit_column: "plate_id"
-  # Safety default: requesting a higher-level unit without its metadata must fail
-  # rather than silently reverting to technical-well scoring.
   fall_back_to_well: false
 
 control_normalization:
-  scope: "compound"
+  # Prefer plate/batch-scoped controls when those design fields are present;
+  # otherwise require compound-matched controls. This prevents a vehicle well
+  # from one plate/site or compound from becoming a normalization anchor for a
+  # different experimental block.
+  scope: "auto"
   require_matching_control: true
 
 variability:
@@ -61,8 +73,6 @@ variability:
       - "stv"
       - "triangulation_proxy"
     min_controls_per_group: 2
-    # When true, every correction group must have sufficient vehicle controls
-    # and the configured minimum treated observations before correction is allowed.
     require_all_groups: true
     assumptions:
       min_treated_per_group: 1
@@ -71,21 +81,29 @@ variability:
 
 concentration_response:
   replicate_aggregation: "mean"
-  concentration_aggregation: "max_absolute_effect"
+  # The default scores the average harmful response across tested
+  # concentrations, avoiding automatic domination by a single extreme dose.
+  # max_absolute_effect remains available as an explicit diagnostic/legacy mode.
+  concentration_aggregation: "mean_harmful_effect"
   effect_threshold_pct: 10.0
   min_concentrations: 3
+  # A compound with fewer than the minimum tested concentrations is not
+  # sufficient for concentration-response scoring evidence by default.
+  require_min_concentrations_for_scoring: true
   fit_curve: false
   fit_min_concentrations: 4
   fit_min_r_squared: 0.80
   fit_min_monotonicity: 0.80
   fit_ec50_boundary_factor: 2.0
   fit_max_ec50_uncertainty_fold: 100.0
+  min_ec50_coverage: 0.10
 
 inference:
   enabled: false
   n_bootstrap: 2000
   confidence: 0.95
   seed: 42
+  cluster_column: null
 
 mixed_effects:
   enabled: false

@@ -64,9 +64,6 @@ def test_control_variability_requires_two_groups_for_between_group_estimate():
 
 def test_standardized_treatment_separation_is_group_specific():
     frame = _frame().copy()
-    # Vehicle wells at concentration 0, treated wells at a nonzero dose --
-    # matching real feature-table data (io.raw_trace / io.synthetic always
-    # populate concentration_uM this way).
     frame["concentration_uM"] = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
 
     result = standardized_treatment_separation(
@@ -90,6 +87,35 @@ def test_pipeline_exposes_variability_diagnostics_without_scoring_change(tmp_pat
     frame["concentration_uM"] = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
     frame["well"] = [f"W{i}" for i in range(len(frame))]
 
+    extra_10 = frame.loc[frame["vehicle"]].copy()
+    extra_10["vehicle"] = False
+    extra_10["concentration_uM"] = 10.0
+    extra_10["fpd_ms"] = extra_10["fpd_ms"] + 40.0
+    extra_10["well"] = ["W8", "W9", "W10", "W11"]
+
+    extra_30 = frame.loc[frame["vehicle"]].copy()
+    extra_30["vehicle"] = False
+    extra_30["concentration_uM"] = 30.0
+    extra_30["fpd_ms"] = extra_30["fpd_ms"] + 60.0
+    extra_30["well"] = ["W12", "W13", "W14", "W15"]
+
+    columns = [
+        "compound",
+        "vehicle",
+        "plate_id",
+        "fpd_ms",
+        "beat_rate_bpm",
+        "amplitude_uv",
+        "stv",
+        "triangulation_proxy",
+        "n_electrodes",
+        "noise_sd_uv",
+        "beat_detection_rate",
+        "concentration_uM",
+        "well",
+    ]
+    frame = pd.concat([frame, extra_10[columns], extra_30[columns]], ignore_index=True)
+
     pipeline = CardioScorePipeline.from_defaults()
     pipeline.config["variability"]["enabled"] = True
     pipeline.config["variability"]["group_column"] = "plate_id"
@@ -101,9 +127,6 @@ def test_pipeline_exposes_variability_diagnostics_without_scoring_change(tmp_pat
     assert not result.separation_table.empty
     assert {"status", "control_cv_pct", "between_group_sd"}.issubset(result.variability_table.columns)
     assert len(result.scores) > 0
-    # Guards the standardized_treatment_separation bug where grouping by
-    # concentration_uM silo'd vehicle (conc=0) and treated (conc=1) wells
-    # apart, making a real control-vs-treated comparison impossible.
     assert (result.separation_table["n_controls"] > 0).all()
     assert (result.separation_table["n_treated"] > 0).all()
 

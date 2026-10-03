@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virelion-cardioscore"
-version = "0.1.1"
+version = "0.1.2"
 description = "CiPA-aligned cardiotoxicity risk scoring from human iPSC-CM MEA field-potential recordings"
 readme = "README.md"
-license = {text = "GPL-3.0-or-later"}
+license = {text = "AGPL-3.0-or-later"}
 authors = [
     {name = "Virelion Biotech", email = "contact@virelionbiotech.org"}
 ]
@@ -18,7 +18,7 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -43,6 +43,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
+    "openpyxl>=3.1",
     "pytest-cov>=4.1",
     "ruff>=0.16,<0.17",
     "mypy>=1.5",
@@ -68,6 +69,7 @@ Issues = "https://github.com/Virelion-Biotech/Virelion-CardioScore/issues"
 
 [project.scripts]
 cardioscore = "virelion_cardioscore.cli:main"
+cardioscore-hearttwin = "virelion_cardioscore.hearttwin_adapter:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -88,6 +90,7 @@ addopts = "-v --tb=short"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "B"]

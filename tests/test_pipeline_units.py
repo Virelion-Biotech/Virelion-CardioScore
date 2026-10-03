@@ -54,6 +54,7 @@ def _dataset() -> pd.DataFrame:
 def _run(scoring_unit: str):
     pipeline = CardioScorePipeline.from_defaults()
     pipeline.config["experimental_units"]["scoring_unit"] = scoring_unit
+    pipeline.config["concentration_response"]["require_min_concentrations_for_scoring"] = False
     return pipeline.run(_dataset())
 
 
