@@ -266,15 +266,61 @@ def test_internal_call_arities_match_signatures():
     funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     problems = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            fn = funcs.get(node.func.id)
-            if fn is None or fn.args.kwarg or fn.args.vararg:
-                continue
-            total = len(fn.args.args)
-            required = total - len(fn.args.defaults)
-            given = len(node.args) + len(node.keywords)
-            if not required <= given <= total:
-                problems.append((node.func.id, node.lineno, given, required, total))
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        fn = funcs.get(node.func.id)
+        if fn is None or fn.args.kwarg or fn.args.vararg:
+            continue
+
+        positional_total = len(fn.args.posonlyargs) + len(fn.args.args)
+        positional_required = positional_total - len(fn.args.defaults)
+        supplied_positional = len(node.args)
+        if not positional_required <= supplied_positional <= positional_total:
+            problems.append(
+                (
+                    node.func.id,
+                    node.lineno,
+                    "positional",
+                    supplied_positional,
+                    positional_required,
+                    positional_total,
+                )
+            )
+            continue
+
+        supplied_keywords = {
+            keyword.arg for keyword in node.keywords if keyword.arg is not None
+        }
+        valid_keyword_names = {
+            arg.arg for arg in [*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs]
+        }
+        unknown_keywords = supplied_keywords - valid_keyword_names
+        if unknown_keywords:
+            problems.append(
+                (
+                    node.func.id,
+                    node.lineno,
+                    "unknown_keywords",
+                    sorted(unknown_keywords),
+                )
+            )
+            continue
+
+        required_kwonly = {
+            arg.arg
+            for arg, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults, strict=True)
+            if default is None
+        }
+        missing_kwonly = required_kwonly - supplied_keywords
+        if missing_kwonly:
+            problems.append(
+                (
+                    node.func.id,
+                    node.lineno,
+                    "missing_kwonly",
+                    sorted(missing_kwonly),
+                )
+            )
     assert not problems, problems
 
 
