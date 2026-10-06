@@ -1,0 +1,193 @@
+name: history-squash-build
+
+on:
+  push:
+    branches:
+      - history-squash-build-20261006
+
+permissions:
+  contents: write
+
+jobs:
+  build-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout full repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Build verified 52-commit Aug-Sep preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin main
+          cat > "$RUNNER_TEMP/rewrite.py" <<'PY'
+          import os, subprocess, json, math
+          from pathlib import Path
+
+          EXPECTED_HEAD = 'e275801a0945293f895f4788ac1886bd10064f47'
+          START = 1785531600  # 2026-08-01T00:00:00+03:00
+          END   = 1790802000  # 2026-10-01T00:00:00+03:00
+          TARGET_KEEP = 52
+          PREVIEW_BRANCH = 'history-squash-preview-200-20261006'
+
+          def run(args, *, env=None, input_text=None, check=True):
+              p = subprocess.run(args, text=True, input=input_text, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, env=env)
+              if check and p.returncode != 0:
+                  raise RuntimeError(f"command failed ({p.returncode}): {' '.join(args)}\n{p.stderr}")
+              return p.stdout.strip(), p.returncode
+
+          def git(*args, **kw):
+              return run(['git', *args], **kw)[0]
+
+          def is_user(name, email):
+              n=(name or '').strip().lower(); e=(email or '').strip().lower()
+              return ('syedumerhannan' in e or e in {'syedumerhannan@icloud.com','syedumerhannan@proton.me'}
+                      or n in {'syed umer hannan','syedumerhannan','jason ramirez'})
+
+          head = git('rev-parse','origin/main')
+          if head != EXPECTED_HEAD:
+              raise RuntimeError(f'main moved: expected {EXPECTED_HEAD}, found {head}; refusing rewrite')
+
+          expected_tree = git('rev-parse', f'{EXPECTED_HEAD}^{{tree}}')
+          shas = git('rev-list','--reverse','origin/main').splitlines()
+          commits=[]
+          for sha in shas:
+              meta = git('show','-s','--format=%at%x00%ct%x00%aI%x00%cI%x00%an%x00%ae%x00%cn%x00%ce%x00%P%x00%T',sha)
+              parts=meta.split('\x00')
+              if len(parts)!=10:
+                  raise RuntimeError(f'unexpected metadata shape for {sha}')
+              at,ct,aI,cI,an,ae,cn,ce,parents,tree=parts
+              msg = git('show','-s','--format=%B',sha)
+              commits.append({
+                  'sha':sha,'at':int(at),'ct':int(ct),'aI':aI,'cI':cI,
+                  'an':an,'ae':ae,'cn':cn,'ce':ce,
+                  'parents':[p for p in parents.split() if p], 'tree':tree, 'message':msg,
+              })
+
+          # Safety: history must be strictly linear, and exactly the audited shape.
+          for i,c in enumerate(commits):
+              if i == 0:
+                  if c['parents']:
+                      raise RuntimeError('first commit is not a root commit')
+              else:
+                  if c['parents'] != [commits[i-1]['sha']]:
+                      raise RuntimeError(f'non-linear history at {c["sha"]}: {c["parents"]}')
+
+          target_idx=[i for i,c in enumerate(commits) if START <= c['at'] < END and is_user(c['an'],c['ae'])]
+          nonuser_target=[c for c in commits if START <= c['at'] < END and not is_user(c['an'],c['ae'])]
+          post=[c for c in commits if c['at'] >= END]
+          pre=[c for c in commits if c['at'] < START]
+          if len(commits) != 308 or len(target_idx) != 304 or nonuser_target or len(post) != 4 or pre:
+              raise RuntimeError(f'audit drift: total={len(commits)} target={len(target_idx)} nonuser={len(nonuser_target)} post={len(post)} pre={len(pre)}')
+          if target_idx != list(range(304)):
+              raise RuntimeError('Aug-Sep target commits are not the first contiguous 304 commits')
+
+          target=commits[:304]
+          post=commits[304:]
+          chunks=[]
+          for i in range(TARGET_KEEP):
+              a=(i*len(target))//TARGET_KEEP
+              b=((i+1)*len(target))//TARGET_KEEP
+              chunk=target[a:b]
+              if not chunk:
+                  raise RuntimeError('empty chunk generated')
+              chunks.append(chunk)
+
+          new_parent=None
+          manifest_chunks=[]
+          for idx,chunk in enumerate(chunks,1):
+              last=chunk[-1]
+              first=chunk[0]
+              msg_lines=[
+                  f'history: squash CardioScore batch {idx:02d}/{TARGET_KEEP} ({len(chunk)} commits)',
+                  '',
+                  f'Original range: {first["sha"]}..{last["sha"]}',
+                  f'Preserved resulting tree: {last["tree"]}',
+                  '',
+                  'Original commit messages:',
+              ]
+              for old in chunk:
+                  msg_lines += ['', f'--- {old["sha"]} ---', old['message']]
+              message='\n'.join(msg_lines).rstrip()+'\n'
+              env=os.environ.copy()
+              env.update({
+                  'GIT_AUTHOR_NAME': last['an'], 'GIT_AUTHOR_EMAIL': last['ae'], 'GIT_AUTHOR_DATE': last['aI'],
+                  'GIT_COMMITTER_NAME': last['cn'], 'GIT_COMMITTER_EMAIL': last['ce'], 'GIT_COMMITTER_DATE': last['cI'],
+              })
+              args=['git','commit-tree',last['tree']]
+              if new_parent:
+                  args += ['-p',new_parent]
+              new_sha=run(args,env=env,input_text=message)[0]
+              manifest_chunks.append({
+                  'batch':idx,'new_sha':new_sha,'tree':last['tree'],'author_date':last['aI'],
+                  'old_first':first['sha'],'old_last':last['sha'],'old_count':len(chunk),
+                  'old_shas':[x['sha'] for x in chunk],
+              })
+              new_parent=new_sha
+
+          replay=[]
+          for old in post:
+              env=os.environ.copy()
+              env.update({
+                  'GIT_AUTHOR_NAME': old['an'], 'GIT_AUTHOR_EMAIL': old['ae'], 'GIT_AUTHOR_DATE': old['aI'],
+                  'GIT_COMMITTER_NAME': old['cn'], 'GIT_COMMITTER_EMAIL': old['ce'], 'GIT_COMMITTER_DATE': old['cI'],
+              })
+              new_sha=run(['git','commit-tree',old['tree'],'-p',new_parent],env=env,input_text=old['message'].rstrip()+'\n')[0]
+              replay.append({'old_sha':old['sha'],'new_sha':new_sha,'tree':old['tree'],'author_date':old['aI'],'message':old['message']})
+              new_parent=new_sha
+
+          new_head=new_parent
+          new_tree=git('rev-parse',f'{new_head}^{{tree}}')
+          if new_tree != expected_tree:
+              raise RuntimeError(f'final tree mismatch: {new_tree} != {expected_tree}')
+          _, diff_rc = run(['git','diff','--quiet',EXPECTED_HEAD,new_head],check=False)
+          if diff_rc != 0:
+              raise RuntimeError('git diff reports content changes between original main and preview')
+
+          new_shas=git('rev-list','--reverse',new_head).splitlines()
+          if len(new_shas) != TARGET_KEEP + 4:
+              raise RuntimeError(f'unexpected rewritten commit count: {len(new_shas)}')
+          new_target=0
+          new_post=0
+          for sha in new_shas:
+              meta=git('show','-s','--format=%at%x00%an%x00%ae',sha).split('\x00')
+              at=int(meta[0]); an=meta[1]; ae=meta[2]
+              if START <= at < END and is_user(an,ae): new_target += 1
+              if at >= END: new_post += 1
+          if new_target != TARGET_KEEP or new_post != 4:
+              raise RuntimeError(f'rewritten date/count mismatch: target={new_target}, post={new_post}')
+
+          manifest={
+              'repository':os.environ.get('GITHUB_REPOSITORY'),
+              'expected_old_head':EXPECTED_HEAD,'expected_tree':expected_tree,
+              'new_head':new_head,'new_tree':new_tree,
+              'old_total_commits':len(commits),'old_aug_sep_user':len(target_idx),'old_post_sep':len(post),
+              'new_total_commits':len(new_shas),'new_aug_sep_user':new_target,'new_post_sep':new_post,
+              'chunks':manifest_chunks,'replayed_post_sep':replay,
+          }
+          out=Path(os.environ['RUNNER_TEMP'])/'cardioscore-rewrite-manifest.json'
+          out.write_text(json.dumps(manifest,indent=2))
+          print('REWRITE_SUMMARY '+json.dumps({k:manifest[k] for k in [
+              'expected_old_head','expected_tree','new_head','new_tree','old_total_commits','old_aug_sep_user','old_post_sep','new_total_commits','new_aug_sep_user','new_post_sep'
+          ]},separators=(',',':')))
+
+          # Publish preview only. Main is not touched here.
+          git('push','origin',f'{new_head}:refs/heads/{PREVIEW_BRANCH}')
+          remote=git('ls-remote','origin',f'refs/heads/{PREVIEW_BRANCH}')
+          if not remote.startswith(new_head+'\t'):
+              raise RuntimeError('preview branch did not land at expected rewritten head')
+          print(f'PREVIEW_HEAD {new_head}')
+          PY
+          python "$RUNNER_TEMP/rewrite.py"
+
+      - name: Upload rewrite manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardioscore-history-rewrite-preview
+          path: ${{ runner.temp }}/cardioscore-rewrite-manifest.json
+          if-no-files-found: error
