@@ -55,3 +55,11 @@ def test_direct_scoring_rejects_missing_independent_unit_ids():
         CardioScoreEngine().score_feature_table(
             frame, independent_unit_column="biological_replicate"
         )
+
+
+def test_absent_independence_metadata_never_counts_wells_as_biological_units():
+    result = CardioScoreEngine().score_feature_table(_frame())[0]
+    assert result.n_wells == 4
+    assert result.n_independent_units == 0
+    assert result.to_dict()["score_kind"] == "research_score"
+    assert "not an independently calibrated" in result.to_dict()["risk_class_semantics"]
