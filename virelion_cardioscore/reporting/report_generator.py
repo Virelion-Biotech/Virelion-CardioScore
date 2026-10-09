@@ -48,7 +48,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
   <h1>Virelion CardioScore Report</h1>
-  <p class="subtitle">CiPA-aligned cardiotoxicity risk scoring · Research framework</p>
+  <p class="subtitle">CardioScore research scoring · Heuristic categories, not calibrated clinical risk</p>
   <div class="card">
     <h2 style="margin-top:0">Summary</h2>
     <table>
@@ -222,7 +222,7 @@ def write_html_report(result: "PipelineResult", path: str | Path) -> None:
               <h2 style=\"margin-top:0\">{_text(score.compound)}
                 <span class=\"badge badge-{risk_class}\">{risk_class}</span>
               </h2>
-              <p><strong>CardioScore:</strong> {score.score:.3f}</p>
+              <p><strong>Research score:</strong> {score.score:.3f}</p>
               <p class=\"meta\">{_text(score.interpretation)}</p>
               <p class=\"meta\">Technical wells: {score.n_wells} · Independent units: {score.n_independent_units}</p>
               <h3 style=\"font-size:1rem;margin-top:1rem\">Endpoint contributions</h3>

@@ -37,6 +37,8 @@ class ScoreResult:
         return {
             "compound": self.compound,
             "cardioscore": round(self.score, 4),
+            "score_kind": "research_score",
+            "risk_class_semantics": "heuristic score category; not an independently calibrated drug-risk probability",
             "risk_class": self.risk_class,
             "interpretation": self.interpretation,
             "max_concentration_uM": self.max_concentration_uM,
@@ -57,7 +59,7 @@ class ScoreResult:
 
 
 class CardioScoreEngine:
-    """Interpretable multi-endpoint risk scorer."""
+    """Interpretable multi-endpoint research scorer; categories require independent qualification."""
 
     def __init__(
         self,
@@ -66,7 +68,9 @@ class CardioScoreEngine:
         moderate_threshold: float = 0.60,
     ):
         if endpoint_config_path is None:
-            endpoint_config_path = Path(__file__).resolve().parent.parent / "config" / "cipa_endpoints.yaml"
+            endpoint_config_path = (
+                Path(__file__).resolve().parent.parent / "config" / "cipa_endpoints.yaml"
+            )
         self.endpoint_config_path = Path(endpoint_config_path)
         self.config = self._load_config()
         self.endpoints = self.config["endpoints"]
@@ -79,9 +83,15 @@ class CardioScoreEngine:
         low_max = self.risk_categories["low"].get("max_score")
         moderate_max = self.risk_categories["moderate"].get("max_score")
         if low_max is not None and not np.isclose(float(low_max), self.low_threshold):
-            raise ValueError("risk_categories.low.max_score disagrees with the configured low_threshold.")
-        if moderate_max is not None and not np.isclose(float(moderate_max), self.moderate_threshold):
-            raise ValueError("risk_categories.moderate.max_score disagrees with the configured moderate_threshold.")
+            raise ValueError(
+                "risk_categories.low.max_score disagrees with the configured low_threshold."
+            )
+        if moderate_max is not None and not np.isclose(
+            float(moderate_max), self.moderate_threshold
+        ):
+            raise ValueError(
+                "risk_categories.moderate.max_score disagrees with the configured moderate_threshold."
+            )
 
     def _load_config(self) -> dict:
         with open(self.endpoint_config_path, encoding="utf-8") as handle:
@@ -100,12 +110,14 @@ class CardioScoreEngine:
             weight = float(meta["weight"])
             threshold = float(meta["effect_threshold"])
             direction = str(meta["direction"])
-            if weight < 0:
+            if not np.isfinite(weight) or weight < 0:
                 raise ValueError(f"Endpoint {name!r} weight cannot be negative.")
-            if threshold < 0:
+            if not np.isfinite(threshold) or threshold < 0:
                 raise ValueError(f"Endpoint {name!r} effect_threshold cannot be negative.")
             if direction not in allowed_directions:
-                raise ValueError(f"Endpoint {name!r} has unsupported direction {direction!r}; expected one of {sorted(allowed_directions)}.")
+                raise ValueError(
+                    f"Endpoint {name!r} has unsupported direction {direction!r}; expected one of {sorted(allowed_directions)}."
+                )
         if sum(float(meta["weight"]) for meta in config["endpoints"].values()) <= 0:
             raise ValueError("Endpoint weights must sum to a positive value.")
         for category in ("low", "moderate", "high"):
@@ -114,7 +126,9 @@ class CardioScoreEngine:
                 raise ValueError(f"risk_categories.{category} must define a label.")
         return config
 
-    def _normalize_effect(self, value: float, direction: str, threshold: float, max_contribution: float = 1.0) -> float:
+    def _normalize_effect(
+        self, value: float, direction: str, threshold: float, max_contribution: float = 1.0
+    ) -> float:
         if not np.isfinite(value):
             return 0.0
         scale = threshold if threshold > 0 else 1.0
@@ -148,7 +162,9 @@ class CardioScoreEngine:
         missing = sorted(set(self.endpoints) - set(endpoint_values))
         if missing:
             raise ValueError(f"Scoring endpoint values are missing: {missing}")
-        non_finite = sorted(name for name in self.endpoints if not np.isfinite(float(endpoint_values[name])))
+        non_finite = sorted(
+            name for name in self.endpoints if not np.isfinite(float(endpoint_values[name]))
+        )
         if non_finite:
             raise ValueError(f"Scoring endpoint values must be finite: {non_finite}")
 
@@ -158,16 +174,37 @@ class CardioScoreEngine:
         for name, meta in self.endpoints.items():
             raw = float(endpoint_values[name])
             weight = float(meta["weight"])
-            contrib = self._normalize_effect(raw, meta["direction"], float(meta["effect_threshold"]), float(meta.get("max_contribution", 1.0)))
+            contrib = self._normalize_effect(
+                raw,
+                meta["direction"],
+                float(meta["effect_threshold"]),
+                float(meta.get("max_contribution", 1.0)),
+            )
             weighted_sum += weight * contrib
             total_weight += weight
-            contributions.append(EndpointContribution(name=name, raw_value=raw, contribution=contrib, weight=weight, description=meta.get("description", "")))
+            contributions.append(
+                EndpointContribution(
+                    name=name,
+                    raw_value=raw,
+                    contribution=contrib,
+                    weight=weight,
+                    description=meta.get("description", ""),
+                )
+            )
 
         metadata = {}
         if dose_response_weight > 0 and dose_response_evidence is not None:
             weighted_sum += dose_response_weight * dose_response_evidence
             total_weight += dose_response_weight
-            contributions.append(EndpointContribution(name="dose_response_exposure_evidence", raw_value=float(dose_response_evidence), contribution=float(dose_response_evidence), weight=float(dose_response_weight), description="Exposure-response evidence from quality-passing 4PL fits."))
+            contributions.append(
+                EndpointContribution(
+                    name="dose_response_exposure_evidence",
+                    raw_value=float(dose_response_evidence),
+                    contribution=float(dose_response_evidence),
+                    weight=float(dose_response_weight),
+                    description="Exposure-response evidence from quality-passing 4PL fits.",
+                )
+            )
             metadata["dose_response_evidence"] = float(dose_response_evidence)
             metadata["dose_response_weight"] = float(dose_response_weight)
 
@@ -178,7 +215,18 @@ class CardioScoreEngine:
             cat = self.risk_categories["moderate"]
         else:
             cat = self.risk_categories["high"]
-        return ScoreResult(compound=compound, score=score, risk_class=cat["label"], risk_color=cat.get("color", ""), interpretation=cat.get("interpretation", ""), contributions=contributions, max_concentration_uM=max_concentration_uM, n_wells=n_wells, n_independent_units=n_independent_units, metadata=metadata)
+        return ScoreResult(
+            compound=compound,
+            score=score,
+            risk_class=cat["label"],
+            risk_color=cat.get("color", ""),
+            interpretation=cat.get("interpretation", ""),
+            contributions=contributions,
+            max_concentration_uM=max_concentration_uM,
+            n_wells=n_wells,
+            n_independent_units=n_independent_units,
+            metadata=metadata,
+        )
 
     def _feature_endpoint_value(self, group: pd.DataFrame, name: str) -> float:
         if name not in group.columns:
@@ -188,9 +236,13 @@ class CardioScoreEngine:
         values_array = raw_values.to_numpy(dtype=float)
         if raw_values.isna().any() or (~np.isfinite(values_array)).any():
             n_invalid = int(raw_values.isna().sum() + np.sum(~np.isfinite(values_array)))
-            raise ValueError(f"Scoring endpoint {name!r} contains {n_invalid} missing or non-finite observation(s) for the current group.")
+            raise ValueError(
+                f"Scoring endpoint {name!r} contains {n_invalid} missing or non-finite observation(s) for the current group."
+            )
         if len(values_array) == 0:
-            raise ValueError(f"Scoring endpoint {name!r} has no observations for the current group.")
+            raise ValueError(
+                f"Scoring endpoint {name!r} has no observations for the current group."
+            )
         if meta["direction"] == "absolute":
             return float(np.max(np.abs(values_array)))
         if meta["direction"] == "increase":
@@ -221,12 +273,16 @@ class CardioScoreEngine:
             return []
 
         if independent_unit_column is not None and independent_unit_column not in df.columns:
-            raise ValueError(f"independent_unit_column={independent_unit_column!r} is absent from the feature table.")
+            raise ValueError(
+                f"independent_unit_column={independent_unit_column!r} is absent from the feature table."
+            )
 
         results = []
         for compound, group in df.groupby("compound", sort=True):
-            endpoint_values = {name: self._feature_endpoint_value(group, name) for name in self.endpoints}
-            independent_units = len(group)
+            endpoint_values = {
+                name: self._feature_endpoint_value(group, name) for name in self.endpoints
+            }
+            independent_units = 0  # Unknown: rows/wells are not biological replicates.
             if independent_unit_column is not None:
                 scoped = group.copy()
                 namespace_columns = [
@@ -235,9 +291,23 @@ class CardioScoreEngine:
                     if column in scoped.columns and column != independent_unit_column
                 ]
                 for column in [*namespace_columns, independent_unit_column]:
-                    if scoped[column].isna().any() or scoped[column].astype(str).str.strip().eq("").any():
-                        raise ValueError(f"Independent-unit metadata column {column!r} contains missing or blank identifiers.")
+                    if (
+                        scoped[column].isna().any()
+                        or scoped[column].astype(str).str.strip().eq("").any()
+                    ):
+                        raise ValueError(
+                            f"Independent-unit metadata column {column!r} contains missing or blank identifiers."
+                        )
                 key_columns = [*namespace_columns, independent_unit_column]
-                independent_units = int(scoped[key_columns].astype(str).agg("::".join, axis=1).nunique())
-            results.append(self.score_compound(str(compound), endpoint_values, n_wells=len(group), n_independent_units=independent_units))
+                independent_units = int(
+                    scoped[key_columns].astype(str).agg("::".join, axis=1).nunique()
+                )
+            results.append(
+                self.score_compound(
+                    str(compound),
+                    endpoint_values,
+                    n_wells=len(group),
+                    n_independent_units=independent_units,
+                )
+            )
         return results
