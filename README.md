@@ -2,6 +2,21 @@
 
 CardioScore is a Python framework for analyzing human iPSC-cardiomyocyte microelectrode-array (MEA) field-potential data and combining electrophysiology endpoints into a configurable research risk score.
 
+
+<!-- VALIDATION_PRODUCT_STATUS:BEGIN -->
+## Validation and product completion status
+
+**Reviewed 2026-10-14; implementation base `40b1ef02cf4c`.** **Status: Workbook ingestion/audit evidence; external score qualification incomplete.** This is an evidence-backed scope assessment, not a percentage-complete estimate or a declaration that the product is finished.
+
+| Area | Current evidence / remaining gate |
+|---|---|
+| Software / operational checks | Automated test sources and CI definitions are present; this documentation audit does not report a new algorithm/data-validation run. |
+| Scientific or domain evidence | CiPA-oriented source audits and software/statistical checks do not qualify the default score cutoffs, cardiotoxicity detection or regulatory endpoints. Aggregate workbook labels are not a substitute for raw MEA waveform truth. |
+| Remaining for the declared product scope | Finish provenance/field-semantic reconciliation and complete endpoint mapping; independently qualify raw-waveform extraction; freeze score weights/probability calibration and independent-unit splits; evaluate held-out compounds/sites with uncertainty and clinical-utility boundaries. |
+
+Evidence and limits: [repository report](docs/cipa_blinova_workbook_audit.md). The [organization status index](https://github.com/Virelion-Biotech/Virelion-HeartTwin/blob/main/docs/STACK_VALIDATION_STATUS.md) separates software, numerical, data-readiness and empirical qualification. Code/schema execution or a completed download is not a substitute for endpoint-specific validation.
+<!-- VALIDATION_PRODUCT_STATUS:END -->
+
 ## What it contains
 
 - Signal and electrode quality checks.
