@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.7.0
+rootdir: /workspace/scratch/16c6ed495deb/repos/Virelion-CardioScore
+configfile: pyproject.toml
+plugins: cov-7.1.0
+collected 32 items
+
+repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py .......... [ 31%]
+......................                                                   [100%]
+
+============================== 32 passed in 0.60s ==============================

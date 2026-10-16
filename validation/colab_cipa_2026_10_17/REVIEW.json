@@ -1,0 +1,50 @@
+{
+  "uploaded_status": "READINESS_ONLY",
+  "uploaded_error": null,
+  "original_artifact_hashes_verified": 17,
+  "pinned_source_files_verified": 161,
+  "source_commit": "40b1ef02cf4cd38b652d0448dce8c2290361aabc",
+  "official_download_matches_pinned_workbook": true,
+  "original_derived_artifacts_reproduced_byte_for_byte": [
+    "blinova_reference.csv",
+    "blinova_semantic_summary.csv",
+    "blinova_audit_flags.json"
+  ],
+  "original_audit_json_equal_except_output_paths": true,
+  "safe_fix": {
+    "issue": "Unresolved BCT contributed a positive arrhythmia indicator despite being declared uninterpreted.",
+    "policy": "Only completely resolved tokens may yield typed indicators. Unresolved tokens export null, never confirmed negatives.",
+    "before_n_abcd_events": 1287,
+    "after_n_abcd_events": 1286,
+    "n_Q_events": 550,
+    "unknown_labels": {
+      "1AP": 2,
+      "BCT": 1,
+      "T": 49
+    },
+    "n_unresolved_rows": 52,
+    "missing_ddFPDc_rows": 2067,
+    "missing_risk_rows": 1,
+    "ACA_rows": 560,
+    "source_inputs_and_risk_reference_unchanged": true
+  },
+  "empirical_validation": false,
+  "notebook_execution_repair_required": false,
+  "remaining_gates": [
+    "Clarify unknown event codes and undocumented ACA code with authoritative data dictionary; do not infer their meanings.",
+    "Obtain raw MEA traces plus independent beat/endpoint truth and complete six-endpoint inputs with experimental metadata.",
+    "Freeze score weights and probability calibration on a separate development set.",
+    "Evaluate untouched compounds/sites with biological/compound-level uncertainty and no technical-well pseudoreplication.",
+    "Qualify score thresholds and intended-use boundaries; readiness completion is not predictive or clinical validation."
+  ],
+  "local_verification": {
+    "full_tests_passed": 404,
+    "full_tests_skipped": 1,
+    "targeted_tests_passed": 32,
+    "regressions_failing_before_fix": 3,
+    "lint": "passed",
+    "validation_contract": "passed",
+    "browser_javascript_syntax": "passed",
+    "demo": "passed; outputs are synthetic software checks only"
+  }
+}

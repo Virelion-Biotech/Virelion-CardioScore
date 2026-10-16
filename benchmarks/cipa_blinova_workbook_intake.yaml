@@ -1,8 +1,8 @@
-# Intake record for the user-supplied processed Blinova 2018 workbook.
+# Intake record for the processed Blinova 2018 workbook, verified at the official CiPA URL.
 # This file intentionally does NOT store the workbook or claim raw-archive provenance.
 source_id: cipa_blinova_2018_myocyte_validation
-asset_type: processed_workbook_candidate
-status: audit_complete_pending_official_archive
+asset_type: processed_workbook
+status: readiness_audit_complete_score_validation_blocked
 source_filename: Blinova_etal_2018_data.xlsx
 sha256: 5fd91c2fa1c9b7fbb2f12cf836a061853e0c6a7af22b62965973198d9066459b
 rows: 8859
@@ -61,3 +61,15 @@ provenance_constraints:
 reference:
   doi: 10.1016/j.celrep.2018.08.079
   url: https://cipaproject.org/data-resources/
+
+official_processed_download:
+  url: https://cipaproject.org/wp-content/uploads/2018/09/Blinova_etal_2018_data.xlsx
+  verified_utc_date: 2026-10-16
+  hash_matches_intake: true
+  scope: byte identity at official URL, not independent raw-archive integrity or score qualification
+semantic_policy:
+  typed_events: only completely resolved A-D/Q tokens
+  unresolved_tokens: [T, 1AP, BCT]
+  unresolved_typed_indicators: null, never confirmed negative
+  unknown_platform_ACA: retained without mapping
+review: docs/COLAB_CIPA_REVIEW_2026-10-17.md

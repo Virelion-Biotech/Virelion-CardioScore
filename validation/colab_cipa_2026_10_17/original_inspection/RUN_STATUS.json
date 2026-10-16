@@ -1,0 +1,20 @@
+{
+  "error": null,
+  "input_receipts": {
+    "data/Blinova_etal_2018_data.xlsx.receipt.json": {
+      "producer_algorithm": "sha256",
+      "producer_checksum": "5fd91c2fa1c9b7fbb2f12cf836a061853e0c6a7af22b62965973198d9066459b",
+      "sha256": "5fd91c2fa1c9b7fbb2f12cf836a061853e0c6a7af22b62965973198d9066459b",
+      "size": 415330,
+      "url": "https://cipaproject.org/wp-content/uploads/2018/09/Blinova_etal_2018_data.xlsx"
+    }
+  },
+  "protocol_sha256": "4880207b8238551940e9edb72ca03b7f44284d4b22b46bf7f8bac207a7c8c714",
+  "scientific_validation": "NOT_ESTABLISHED_BY_EXECUTION",
+  "scope": "Audit all 8,859 workbook rows, missing labels, aliases and event code semantics.",
+  "seconds_this_session": 2.2007680259999916,
+  "source_pins": {
+    "Virelion-CardioScore": "40b1ef02cf4cd38b652d0448dce8c2290361aabc"
+  },
+  "status": "READINESS_ONLY"
+}

@@ -353,10 +353,12 @@ def test_unresolved_labels_are_flagged_and_never_interpreted(tmp_path):
     result = audit(df, tmp_path)
     flag = next(f for f in result["flags"] if f["code"] == "EVENT_LABEL_UNRESOLVED")
     assert flag["n_rows"] == 3 and flag["counts"] == {"1AP": 1, "BCT": 1, "T": 1}
-    assert result["n_abcd_events"] == 2 and result["n_unresolved_event_label_rows"] == 3
+    assert result["n_abcd_events"] == 1 and result["n_unresolved_event_label_rows"] == 3
     semantic = pd.read_csv(result["semantic_summary_path"])
     assert semantic["event_label_unresolved"].sum() == 3
     assert set(semantic["Type_of_EADs"].dropna()) == {"T", "1AP", "BCT", "B"}
+    unknown = semantic["event_label_unresolved"]
+    assert semantic.loc[unknown, ["is_abcd_arrhythmia", "is_Q_quiescence"]].isna().all().all()
 
 
 def test_any_event_label_with_ead_zero_fails(tmp_path):
@@ -401,3 +403,13 @@ def test_undocumented_platform_flag_identifies_the_affected_dataset(tmp_path):
     )
     assert flag["site_celltype_datasets"] == ["6|CDI"]
     assert flag["rows_by_dataset"] == {"6|CDI": 1}
+
+
+@pytest.mark.parametrize("label", ["BCT", "AQX", "1AP"])
+def test_unresolved_tokens_cannot_establish_published_claim_mismatch(tmp_path, label):
+    result = audit(_label_rows(make_frame(), "Terfenadine", [label]), tmp_path)
+    assert result["n_abcd_events"] == result["n_Q_events"] == 0
+    assert result["n_unresolved_event_label_rows"] == 1
+    assert "PUBLISHED_CLAIM_MISMATCH" not in codes(result)
+    assert "EAD_EXPLAINED_BY_QUIESCENCE" not in codes(result)
+    assert "EAD_FLAG_WITHOUT_ARRHYTHMIA_TYPE" in codes(result)

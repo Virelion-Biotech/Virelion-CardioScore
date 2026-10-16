@@ -614,6 +614,12 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
     is_abcd = letters.map(lambda ls: bool(ls & abcd))
     is_q = letters.map(lambda ls: BLINOVA_QUIESCENCE_EVENT_TYPE in ls)
     unresolved = has_label & (~event.map(str.isalpha) | letters.map(lambda ls: bool(ls - known)))
+    # A recognized substring does not establish the meaning of an unknown token
+    # (e.g. BCT or AQX). Preserve unknowns as nullable indicators, not positive
+    # events or confirmed negatives. Counts and published-claim checks use only
+    # completely resolved labels; the unresolved-row count is reported separately.
+    is_abcd = is_abcd.astype("boolean").mask(unresolved)
+    is_q = is_q.astype("boolean").mask(unresolved)
     inconsistent = has_label & ~ead.eq(1)
     if inconsistent.any():
         raise ValueError(
@@ -760,7 +766,7 @@ def audit_blinova_frame(df, derived_dir: Path) -> dict:
         "n_rows": int(len(frame)),
         "n_compounds": int(reference["compound"].nunique()),
         "n_sites": int(site.nunique()),
-        # Rows carrying any A-D letter (combinations such as AC/ABC included) / any Q label.
+        # Completely resolved rows carrying A-D (including AC/ABC) / Q; unknowns excluded.
         "n_abcd_events": int(is_abcd.sum()),
         "n_Q_events": int(is_q.sum()),
         "n_unresolved_event_label_rows": int(unresolved.sum()),
