@@ -1,0 +1,23 @@
+{
+  "08_CardioScore_CiPA_v1_results.zip": "21a994f20024075901228fc6bc5e0315c30e4aaf928337d927891308da701cb2",
+  "REPLAY_PROVENANCE.json": "eb2660dd6c04c2192368e2b6c6ae8b463c14bed6ce44f6b719b17025938628b9",
+  "REVIEW.json": "2ce11b0a3a87bf8a8a7616fd3e3a9839b01d6fefe4d1fd028c748a63bd08a867",
+  "WORKBOOK_RECEIPT.json": "fbfafb05b83848409e757005cd7e19832d1224ff92a0ea849a3e1043c961f5fc",
+  "corrected_replay/blinova_audit_flags.json": "f5a6a3d51c4be02e2bd828b23035ae9f6bd263a79776b8239b04ffd367a47323",
+  "corrected_replay/blinova_reference.csv": "40c8f80eea5ee05193768f6fffcb8d6c5ace2e04268d3cd54b5b033b28c3815a",
+  "corrected_replay/blinova_semantic_summary.csv.gz": "1568ed968a799d537ff42177ea7c401b6d6f79d692d638cb0864fce6a6c27999",
+  "corrected_replay/source-audit.json": "252b3a99ecfecc8a50e015ba7fb9739d02ee568e067900d4aaf383e414782062",
+  "corrected_replay/unresolved_rows.csv": "6209b25fa6ce3b1f1f9d5320a1e1ad03f2e98b0b6b03de7618034c9444e20c0b",
+  "original_inspection/ARTIFACT_HASHES.json": "ad0d0806e45d9e8932073f5147e0536fdc7f4d4222e7fe5ddf434f9de48b34bb",
+  "original_inspection/ATTEMPT_STATUS.json": "5ad267f33631bfd34c488ecd6acbfa9553183cfa0a3fa365caa851f69547f986",
+  "original_inspection/RUN_STATUS.json": "130a3a3654cd03db239494abd8bd483492a0c3dc91ad8f6d214d4c64619a0f31",
+  "original_inspection/protocol.json": "72fc84989ee155af3af888d6ab568cda076abc2162035422604625dd42e4a32f",
+  "original_inspection/results/qualification.json": "5ee1933ef5790188770dec35f16647d1ded940490885d200e8477b1415487394",
+  "original_inspection/results/reference/blinova_audit_flags.json": "f5a6a3d51c4be02e2bd828b23035ae9f6bd263a79776b8239b04ffd367a47323",
+  "original_inspection/results/reference/blinova_reference.csv": "40c8f80eea5ee05193768f6fffcb8d6c5ace2e04268d3cd54b5b033b28c3815a",
+  "original_inspection/results/source-audit.json": "b7637d906228101b861f4c6d2ec7117273980526a1585ddecafe3ac70f5edb92",
+  "original_inspection/source_snapshots.json": "9f9492a75db2bcda4ef991cb2c265f52ab911218e915e4ac7d29e3b11e4b3aa3",
+  "regression_after.log": "55b40f799bbb6610c24ecec769a33f6905e2bacacd71f2da039bc1e9287ebb8a",
+  "regression_before.log": "2a91f5f7e18218bf94bac529039a3c903ca7124fcee082c0d4423e4a7fe81d1d",
+  "tests.log": "fa4da8f483c62131e9c2776945c58112975e07bf6d7f8c50472e503e26fb6c0e"
+}

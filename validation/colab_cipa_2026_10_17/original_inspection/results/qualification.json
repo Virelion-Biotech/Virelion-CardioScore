@@ -1,0 +1,7 @@
+{
+  "blocked_endpoints": [
+    "Workbook has aggregate endpoints, missing/ambiguous labels and no raw MEA waveforms; a six-endpoint score input, frozen score-to-probability calibration and independent raw-waveform truth cannot be constructed honestly from this source."
+  ],
+  "empirical_validation": false,
+  "status": "READINESS_ONLY"
+}

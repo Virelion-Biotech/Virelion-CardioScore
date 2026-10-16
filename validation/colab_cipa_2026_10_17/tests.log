@@ -1,0 +1,78 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.7.0
+rootdir: /workspace/scratch/16c6ed495deb/repos/Virelion-CardioScore
+configfile: pyproject.toml
+testpaths: tests
+plugins: platformdirs-4.13.3, cov-7.1.0
+collected 405 items
+
+tests/test_audit_regressions.py ........                                 [  1%]
+tests/test_beat_detection.py ..................                          [  6%]
+tests/test_benchmark.py ...                                              [  7%]
+tests/test_browser_contract.py ....                                      [  8%]
+tests/test_cipa_reference_panel.py .                                     [  8%]
+tests/test_cli_raw_traces.py ...                                         [  9%]
+tests/test_cluster_bootstrap.py ....                                     [ 10%]
+tests/test_coercion.py ...                                               [ 10%]
+tests/test_colab_runner_blinova.py ................................      [ 18%]
+tests/test_colab_runner_mcs.py ....                                      [ 19%]
+tests/test_concentration_drivers.py ....                                 [ 20%]
+tests/test_config_validation.py .......                                  [ 22%]
+tests/test_control_normalization.py .....                                [ 23%]
+tests/test_direct_scoring_units.py ....                                  [ 24%]
+tests/test_dose_response.py ........                                     [ 26%]
+tests/test_dose_response_input_guards.py ....                            [ 27%]
+tests/test_dose_response_regressions.py ..                               [ 28%]
+tests/test_dose_response_scoring.py ..                                   [ 28%]
+tests/test_dropout_accounting.py .............                           [ 31%]
+tests/test_endpoints.py .............                                    [ 35%]
+tests/test_external_sources.py ..                                        [ 35%]
+tests/test_filtering.py ..........                                       [ 38%]
+tests/test_hierarchical_pipeline.py ...                                  [ 38%]
+tests/test_hierarchy.py ...........                                      [ 41%]
+tests/test_hierarchy_config.py ....                                      [ 42%]
+tests/test_hierarchy_integrity.py ...                                    [ 43%]
+tests/test_inference_comparison.py ....                                  [ 44%]
+tests/test_inference_pipeline.py ..                                      [ 44%]
+tests/test_inspect_raw_source.py ...s....                                [ 46%]
+tests/test_locked_freeze.py .....................                        [ 51%]
+tests/test_mcs_ascii.py ................                                 [ 55%]
+tests/test_mixed_effects.py ......                                       [ 57%]
+tests/test_mixed_effects_guards.py ...                                   [ 58%]
+tests/test_mixed_effects_pipeline.py ..                                  [ 58%]
+tests/test_normalization.py .                                            [ 58%]
+tests/test_normalization_assumptions.py ....                             [ 59%]
+tests/test_normalization_validation.py ....                              [ 60%]
+tests/test_pipeline_independent_units.py .                               [ 60%]
+tests/test_pipeline_normalization.py ..                                  [ 61%]
+tests/test_pipeline_units.py ...                                         [ 62%]
+tests/test_precomputed_effects.py ..                                     [ 62%]
+tests/test_provenance.py ..                                              [ 63%]
+tests/test_pymea_beat_validation.py .........                            [ 65%]
+tests/test_raw_trace.py ..............                                   [ 68%]
+tests/test_report_diagnostics.py ...                                     [ 69%]
+tests/test_report_normalization.py .                                     [ 69%]
+tests/test_reporting.py .                                                [ 70%]
+tests/test_risk_boundaries.py ...                                        [ 70%]
+tests/test_robustness.py ....                                            [ 71%]
+tests/test_robustness_classification.py ...                              [ 72%]
+tests/test_score_calibration.py ............                             [ 75%]
+tests/test_score_sensitivity.py .....                                    [ 76%]
+tests/test_scoring.py ...............................                    [ 84%]
+tests/test_signal_accuracy.py .............................              [ 91%]
+tests/test_statistics.py .....                                           [ 92%]
+tests/test_stress_tests.py .....                                         [ 94%]
+tests/test_stv_semantics.py ..                                           [ 94%]
+tests/test_validation_engineering.py ................                    [ 98%]
+tests/test_variability.py ......                                         [100%]
+
+=============================== warnings summary ===============================
+tests/test_dose_response.py::test_non_monotonic_series_is_flagged
+tests/test_dose_response.py::test_pipeline_reports_quality_diagnostics
+tests/test_scoring.py::test_4pl_fit_marks_poor_fit_without_calling_it_a_failure
+tests/test_scoring.py::test_pipeline_can_optionally_fit_dose_response
+  /workspace/scratch/16c6ed495deb/repos/Virelion-CardioScore/virelion_cardioscore/analysis/dose_response.py:102: RuntimeWarning: overflow encountered in exp
+    return float(value * np.exp(-half_width)), float(value * np.exp(half_width))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 404 passed, 1 skipped, 4 warnings in 53.94s ==================

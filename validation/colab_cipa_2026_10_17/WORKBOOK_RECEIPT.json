@@ -1,0 +1,10 @@
+{
+  "url": "https://cipaproject.org/wp-content/uploads/2018/09/Blinova_etal_2018_data.xlsx",
+  "retrieved_utc_date": "2026-10-16",
+  "sha256": "5fd91c2fa1c9b7fbb2f12cf836a061853e0c6a7af22b62965973198d9066459b",
+  "size": 415330,
+  "checksum_scope": "Observed hash matches uploaded receipt and pinned intake; not an independent publisher checksum manifest.",
+  "asset_type": "processed_workbook",
+  "raw_mea_waveforms_present": false,
+  "workbook_committed": false
+}

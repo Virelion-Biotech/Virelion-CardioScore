@@ -1,0 +1,152 @@
+{
+  "ddFPDc_missing_fraction": 0.2333220453775821,
+  "event_label_counts": {
+    "1AP": 2,
+    "A": 663,
+    "AB": 45,
+    "ABC": 14,
+    "AC": 223,
+    "ACD": 2,
+    "AD": 10,
+    "AQ": 1,
+    "B": 137,
+    "BC": 83,
+    "BCT": 1,
+    "BD": 2,
+    "C": 94,
+    "D": 12,
+    "Q": 549,
+    "T": 49
+  },
+  "flags": [
+    {
+      "code": "MISSING_RISK_ROWS",
+      "message": "Source rows have no risk label. Labels were NOT injected into these rows; the compound reference uses only labeled rows of the same compound.",
+      "n_rows": 1,
+      "rows_by_compound": {
+        "sotalol": 1
+      },
+      "severity": "warning",
+      "spreadsheet_rows": [
+        6654
+      ]
+    },
+    {
+      "code": "UNDOCUMENTED_PLATFORM_CODE",
+      "compounds_affected": [
+        "astemizole",
+        "azimilide",
+        "bepridil",
+        "chlorpromazine",
+        "cisapride",
+        "clarithromycin",
+        "clozapine",
+        "diltiazem",
+        "disopyramide",
+        "dofetilide",
+        "domperidone",
+        "droperidol",
+        "ibutilide",
+        "loratadine",
+        "metoprolol",
+        "mexiletine",
+        "nifedipine",
+        "nitrendipine",
+        "ondansetron",
+        "pimozide",
+        "quinidine",
+        "ranolazine",
+        "risperidone",
+        "sotalol",
+        "tamoxifen",
+        "terfenadine",
+        "vandetanib",
+        "verapamil"
+      ],
+      "message": "Platform code(s) outside the paper's documented set. Codes were NOT relabeled.",
+      "n_rows": 560,
+      "rows_by_code": {
+        "ACA": 560
+      },
+      "rows_by_dataset": {
+        "6|CDI": 560
+      },
+      "severity": "warning",
+      "site_celltype_datasets": [
+        "6|CDI"
+      ]
+    },
+    {
+      "code": "EVENT_LABEL_UNRESOLVED",
+      "counts": {
+        "1AP": 2,
+        "BCT": 1,
+        "T": 49
+      },
+      "message": "Type_of_EADs labels with letters other than A-D/Q or non-letter characters are kept verbatim and NOT interpreted. Confirm their meaning in the paper's Data S1 legend before using them.",
+      "n_rows": 52,
+      "rows_by_compound": {
+        "astemizole": 4,
+        "azimilide": 9,
+        "disopyramide": 2,
+        "dofetilide": 3,
+        "domperidone": 5,
+        "droperidol": 2,
+        "ibutilide": 5,
+        "mexiletine": 2,
+        "ondansetron": 4,
+        "quinidine": 8,
+        "ranolazine": 2,
+        "sotalol": 3,
+        "vandetanib": 3
+      },
+      "severity": "warning"
+    },
+    {
+      "code": "EAD_EQUALS_ANY_EVENT_LABEL",
+      "message": "EAD == 1 exactly when Type_of_EADs is non-blank (Q quiescence included), so EAD means 'any event label', not 'arrhythmia'. Use the A-D letters for arrhythmia-like events.",
+      "n_rows": 1887,
+      "severity": "info"
+    },
+    {
+      "code": "EAD_EXPLAINED_BY_QUIESCENCE",
+      "compound": "terfenadine",
+      "datasets_with_EAD_eq_1": 10,
+      "datasets_with_abcd_events": 0,
+      "message": "Paper reports no arrhythmia-like events for terfenadine; every EAD == 1 row is a Q (quiescence) label, so the workbook is consistent with that claim.",
+      "n_rows": 311,
+      "n_site_celltype_datasets": 15,
+      "rows_EAD_eq_1": 46,
+      "rows_Q_events": 46,
+      "rows_Q_only": 46,
+      "rows_abcd_events": 0,
+      "severity": "info"
+    },
+    {
+      "code": "EAD_EXPLAINED_BY_QUIESCENCE",
+      "compound": "verapamil",
+      "datasets_with_EAD_eq_1": 6,
+      "datasets_with_abcd_events": 0,
+      "message": "Paper reports no arrhythmia-like events for verapamil; every EAD == 1 row is a Q (quiescence) label, so the workbook is consistent with that claim.",
+      "n_rows": 317,
+      "n_site_celltype_datasets": 15,
+      "rows_EAD_eq_1": 34,
+      "rows_Q_events": 34,
+      "rows_Q_only": 34,
+      "rows_abcd_events": 0,
+      "severity": "info"
+    }
+  ],
+  "flags_path": "/content/drive/MyDrive/HeartTwinValidation/08_CardioScore_CiPA_v1/results/reference/blinova_audit_flags.json",
+  "n_Q_events": 550,
+  "n_abcd_events": 1287,
+  "n_compounds": 28,
+  "n_ddFPDc_missing": 2067,
+  "n_flags": 6,
+  "n_rows": 8859,
+  "n_sites": 10,
+  "n_unresolved_event_label_rows": 52,
+  "reference_path": "/content/drive/MyDrive/HeartTwinValidation/08_CardioScore_CiPA_v1/results/reference/blinova_reference.csv",
+  "semantic_summary_path": "/content/drive/MyDrive/HeartTwinValidation/08_CardioScore_CiPA_v1/results/reference/blinova_semantic_summary.csv",
+  "status": "complete"
+}

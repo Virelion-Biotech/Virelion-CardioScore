@@ -1,0 +1,28 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.7.0
+rootdir: /workspace/scratch/16c6ed495deb/repos/Virelion-CardioScore
+configfile: pyproject.toml
+plugins: cov-7.1.0
+collected 32 items
+
+repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py .......... [ 31%]
+.............F.....FF.                                                   [100%]
+
+=================================== FAILURES ===================================
+___________ test_unresolved_labels_are_flagged_and_never_interpreted ___________
+repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py:356: in test_unresolved_labels_are_flagged_and_never_interpreted
+    assert result["n_abcd_events"] == 1 and result["n_unresolved_event_label_rows"] == 3
+E   assert (2 == 1)
+____ test_unresolved_tokens_cannot_establish_published_claim_mismatch[BCT] _____
+repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py:411: in test_unresolved_tokens_cannot_establish_published_claim_mismatch
+    assert result["n_abcd_events"] == result["n_Q_events"] == 0
+E   assert 1 == 0
+____ test_unresolved_tokens_cannot_establish_published_claim_mismatch[AQX] _____
+repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py:411: in test_unresolved_tokens_cannot_establish_published_claim_mismatch
+    assert result["n_abcd_events"] == result["n_Q_events"] == 0
+E   assert 1 == 0
+=========================== short test summary info ============================
+FAILED repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py::test_unresolved_labels_are_flagged_and_never_interpreted
+FAILED repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py::test_unresolved_tokens_cannot_establish_published_claim_mismatch[BCT]
+FAILED repos/Virelion-CardioScore/tests/test_colab_runner_blinova.py::test_unresolved_tokens_cannot_establish_published_claim_mismatch[AQX]
+========================= 3 failed, 29 passed in 0.63s =========================

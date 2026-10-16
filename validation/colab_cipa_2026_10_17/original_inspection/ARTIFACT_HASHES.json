@@ -1,0 +1,19 @@
+{
+  "ATTEMPT_STATUS.json": "5ad267f33631bfd34c488ecd6acbfa9553183cfa0a3fa365caa851f69547f986",
+  "LAST_SESSION.json": "540abf0703ae49e74f6820f7e3fdbbcd70282d543cc11263a7a1b9b2bf504929",
+  "RETAINED_ON_DRIVE.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "RUN_STATUS.json": "130a3a3654cd03db239494abd8bd483492a0c3dc91ad8f6d214d4c64619a0f31",
+  "environment-setup.log": "7945fe4b84c221682995106694b31de6aa60945207b7c9dcce528b639fd559c6",
+  "environment.txt": "291fb567809effbc3416df19da7564c0d3f08423f5ad6c3bf9eb6fdf1b71efe0",
+  "launcher/runtime.py": "42099bbb908333a480c11eca9f0586759d57162a1c11b977067a9696c45d0985",
+  "launcher/training.py": "c63aee5893f194932f786c5054bd5ff5938bde40a69328d43fd39fb8b0faf112",
+  "launcher/worker.py": "76a8b3ddbe6411bea07d353948f7bed3a708ddd3dd46624e6569c377b3eb88b3",
+  "protocol.json": "72fc84989ee155af3af888d6ab568cda076abc2162035422604625dd42e4a32f",
+  "results/qualification.json": "5ee1933ef5790188770dec35f16647d1ded940490885d200e8477b1415487394",
+  "results/reference/blinova_audit_flags.json": "f5a6a3d51c4be02e2bd828b23035ae9f6bd263a79776b8239b04ffd367a47323",
+  "results/reference/blinova_reference.csv": "40c8f80eea5ee05193768f6fffcb8d6c5ace2e04268d3cd54b5b033b28c3815a",
+  "results/reference/blinova_semantic_summary.csv": "cc6847eff13eb74c8328c6a6710ec0a8fcbf960a7d5ad7c1783de3673bf9d307",
+  "results/source-audit.json": "b7637d906228101b861f4c6d2ec7117273980526a1585ddecafe3ac70f5edb92",
+  "source_snapshots.json": "9f9492a75db2bcda4ef991cb2c265f52ab911218e915e4ac7d29e3b11e4b3aa3",
+  "worker-session.log": "dc8abedca9f8be909073eda038f28d493d93bd34c8ab022dee3eb064436b7984"
+}
