@@ -1,0 +1,81 @@
+schema_version: 1
+campaign_id: cardioscore-public-validation-v1
+purpose: >-
+  Resumable public-data validation campaign. Each source retains an independent evidence role;
+  no dataset is promoted beyond what its released files support.
+datasets:
+  - id: blinova_2018_cipa
+    role: component_semantic_multisite
+    evidence_level: processed_workbook
+    doi: 10.1016/j.celrep.2018.08.079
+    source: cipa_project
+    acquisition: direct_xlsx
+    url: https://cipaproject.org/wp-content/uploads/2018/09/Blinova_etal_2018_data.xlsx
+    expected_filename: Blinova_etal_2018_data.xlsx
+  - id: patel_2019_optopacing
+    role: primary_external_candidate
+    evidence_level: raw_or_processed_mea_archive
+    doi: 10.5061/dryad.mg2565q
+    source: dryad
+    acquisition: dryad_full_dataset
+    note: >-
+      The paper identifies this DOI, but the old Dryad record has had availability/indexing problems.
+      Acquisition failure is recorded as a blocked source state, never substituted with another study.
+  - id: cardio_pymea_2022
+    role: raw_signal_validation
+    evidence_level: raw_mea
+    doi: 10.5068/D14H5C
+    source: zenodo_mirror
+    record_id: 6524838
+    acquisition: zenodo_selected_files
+    files:
+      - Day9__Nov1_130pm.txt
+      - File_Parameter_List.xlsx
+      - README_cardio_pymea.txt
+      - untreated_MEA120_only.xlsx
+  - id: ballouz_vandenberg_2021
+    role: raw_mea_perturbation_rescue_challenge
+    evidence_level: raw_mea_matlab
+    doi: 10.5061/dryad.612jm640k
+    source: dryad
+    acquisition: dryad_full_dataset
+  - id: simultox_2024
+    role: raw_hdf5_format_pharmacology_challenge
+    evidence_level: raw_mea_hdf5
+    doi: 10.5281/zenodo.13121249
+    source: zenodo
+    record_id: 13121249
+    acquisition: selected_named_files
+    note: >-
+      Only the three self-describing files agreed for the first challenge are downloaded; timestamped
+      recordings are not assigned treatment metadata from filenames.
+    files:
+      - name: SingleWell_HiPSC_cardio_Control.h5
+        md5: 992d4d3e32182717cd23d8212c0b8538
+      - name: SingleWell_HiPSC_cardio_E-4031_1uM.h5
+        md5: a3a3990f4bd353cabef00974d6ff7030
+      - name: 6well_HiPSC_cardio_Control.h5
+        md5: f3c24f14d8dc264540522b25a1584a6e
+  - id: geiger_2025_nam
+    role: directional_combination_challenge
+    evidence_level: processed_mea_summary
+    doi: 10.6084/m9.figshare.30466295
+    source: figshare
+    record_id: 30466295
+    acquisition: figshare_record
+    preferred_file: NIHMS2123424-supplement-Raw_Data_Summary.xlsx
+  - id: daley_2024_microtissue
+    role: cross_modal_apd_triangulation
+    evidence_level: optical_action_potential_summary
+    doi: 10.5061/dryad.sqv9s4nbn
+    source: dryad
+    acquisition: dryad_full_dataset
+  - id: altrocchi_2023_chronic
+    role: qualitative_chronic_corroboration
+    evidence_level: published_summary_and_supplement
+    doi: 10.3389/fphar.2023.1229960
+    source: frontiers
+    acquisition: reference_material
+    note: >-
+      Included for completeness and qualitative corroboration only; it is not treated as a raw
+      machine-readable MEA benchmark.
