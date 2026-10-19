@@ -248,7 +248,35 @@ def test_qc_block_reports_false_rejections_and_bad_admissions(recording):
         "max_noise_sd_uv",
         "min_beat_detection_rate",
     }
-    assert (
-        qc["false_rejections_of_beating_windows"] == [] and qc["admitted_with_poor_detection"] == []
-    )
+    assert qc["false_rejections_of_beating_windows"] == []
+    assert qc["admitted_with_poor_detection"] == [
+        row["window_id"] for row in qc["windows"]
+        if not row["qc_rejected"] and row["reference_event_agreement"] is not None
+        and (row["reference_event_agreement"]["fp"] or row["reference_event_agreement"]["fn"])
+    ]
     assert all("noise_sd_uv" in row and "beat_detection_rate" in row for row in qc["windows"])
+
+
+def test_qc_admission_does_not_hide_reference_disagreement(recording):
+    out, manifest = make(recording, "qc_disagreement")
+    annotations = annotate_from_truth(recording, out, manifest, out / "A.csv", drop=1)
+    qc = tool.score(out, [annotations], 0.05, None, tool.FilterConfig())["qc"]
+    admitted = qc["admitted_with_poor_detection"]
+    assert admitted
+    for row in qc["windows"]:
+        if row["window_id"] in admitted:
+            assert not row["qc_rejected"]
+            assert row["reference_event_agreement"]["fp"] >= 1
+
+
+def test_disjoint_holdout_windows_do_not_overlap_across_electrodes(recording):
+    out = recording["dir"] / "disjoint"
+    manifest = tool.make_sheet(
+        recording["source"], out, n_windows=5, window_s=10, seed=20261020,
+        duration_s=None, disjoint_time_windows=True,
+    )
+    windows = sorted(manifest["windows"], key=lambda w: w["start_s"])
+    assert all(
+        a["start_s"] + a["window_s"] <= b["start_s"]
+        for a, b in zip(windows, windows[1:], strict=False)
+    )
