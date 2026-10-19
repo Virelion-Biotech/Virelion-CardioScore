@@ -13,12 +13,9 @@ are changed. The output remains evidence-scoped and fail-closed.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import math
-import os
 import shutil
-import sys
 import urllib.request
 from pathlib import Path
 from typing import Any

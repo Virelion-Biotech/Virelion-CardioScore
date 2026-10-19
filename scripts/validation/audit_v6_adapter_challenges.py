@@ -10,7 +10,6 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 MIN_BEAT_DETECTION_RATE = 0.70

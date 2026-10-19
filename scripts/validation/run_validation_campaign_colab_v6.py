@@ -15,9 +15,7 @@ It adds two explicitly scoped analyses:
 from __future__ import annotations
 
 import hashlib
-import json
 import math
-import os
 import urllib.request
 from pathlib import Path
 from typing import Any
