@@ -18,6 +18,7 @@ from scipy import signal
 
 
 RHYTHM_PERIOD_RANGE_S = (0.5, 4.0)
+RHYTHM_QC_ESTIMATOR_VERSION = "slope-autocorrelation-v2"
 
 
 def robust_noise_scale(trace: np.ndarray) -> float:
@@ -81,8 +82,8 @@ class BeatDetectionResult:
     def _estimate_detection_rate(self) -> float:
         """Estimate detector coverage against an independent rhythm estimate.
 
-        The expected count is estimated from periodicity in the filtered
-        waveform before thresholded peak detection. This avoids defining the
+        The expected count is estimated from periodicity in the slope of the
+        filtered waveform before thresholded peak detection. This avoids defining the
         denominator from the same peaks used by the detector, which would make
         systematic under-detection self-validating. The estimate is a QC
         heuristic, not validated sensitivity against ground-truth annotations.
@@ -130,7 +131,7 @@ class BeatDetectionResult:
 def _period_from_autocorrelation(
     autocorr: np.ndarray, fs_hz: float, lo_s: float, hi_s: float
 ) -> float | None:
-    """Find the fundamental rhythm period from autocorrelation, allowing a genuine subharmonic."""
+    """Find a rhythm period, including supported integer subperiods."""
     min_lag = max(1, int(round(lo_s * fs_hz)))
     max_lag = min(len(autocorr) - 1, int(round(hi_s * fs_hz)))
     if max_lag <= min_lag:
@@ -148,16 +149,28 @@ def _period_from_autocorrelation(
     best = int(peak_indices[int(np.nanargmax(region[peak_indices]))])
     period_samples = min_lag + best
     while True:
-        half = period_samples / 2.0
-        near = [
-            int(i)
-            for i in peak_indices
-            if abs((min_lag + int(i)) - half) <= 0.08 * half
-            and region[int(i)] >= 0.05
-        ]
-        if not near or half < min_lag * (1.0 - 0.08):
+        shorter = None
+        parent_value = float(autocorr[period_samples])
+        # Jitter can make a three-cycle (or longer) lag the strongest peak.
+        # Require substantial support for these alternatives; weak short-lag
+        # morphology must not become a new rhythm. Retain the existing weaker
+        # half-period allowance so genuine alternating weak beats remain visible.
+        max_divisor = int(period_samples / min_lag * 1.08)
+        for divisor in range(max_divisor, 1, -1):
+            target = period_samples / divisor
+            min_support = max(0.05, 0.5 * parent_value) if divisor > 2 else 0.05
+            near = [
+                int(i)
+                for i in peak_indices
+                if abs((min_lag + int(i)) - target) <= 0.08 * target
+                and region[int(i)] >= min_support
+            ]
+            if near:
+                shorter = min_lag + max(near, key=lambda i: region[i])
+                break
+        if shorter is None:
             break
-        period_samples = min_lag + max(near, key=lambda i: region[i])
+        period_samples = shorter
     return period_samples / float(fs_hz)
 
 
@@ -166,11 +179,21 @@ def _estimate_expected_beat_count(
     fs_hz: float,
     duration_s: float,
 ) -> float | None:
-    """Estimate expected beat count over 15-120 bpm from autocorrelation."""
+    """Estimate expected beat count over 15-120 bpm from slope autocorrelation.
+
+    First differencing reduces the contribution of broad repolarization waves
+    and slow baseline structure, which can otherwise supply a misleading
+    half-period correlation peak. This transform is only used for the independent
+    QC rhythm estimate; peak detection still consumes the original filtered trace.
+    Genuine alternating strong/weak spikes retain their shared slope morphology
+    and can still support the shorter period without using detected beat counts.
+    """
     if duration_s <= 0 or len(trace) < max(32, int(fs_hz * 1.0)):
         return 1.0 if len(trace) > 0 else None
 
-    x = np.asarray(trace, dtype=float)
+    # No fs multiplier is required: autocorrelation is normalized by energy.
+    # Keep duration_s from the original window when converting period to count.
+    x = np.diff(np.asarray(trace, dtype=float))
     x = x - np.mean(x)
     variance = float(np.dot(x, x))
     if not np.isfinite(variance) or variance <= 0:
