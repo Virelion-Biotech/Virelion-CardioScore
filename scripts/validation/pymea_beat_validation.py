@@ -62,6 +62,7 @@ def make_sheet(
     seed: int,
     duration_s: float | None,
     exclude: list[tuple[str, float, float]] | None = None,
+    disjoint_time_windows: bool = False,
 ) -> dict:
     layout = sniff_layout(source)
     if duration_s is None:
@@ -93,6 +94,12 @@ def make_sheet(
             "window_s": window_s,
         }
         if _overlaps(candidate, exclusions):
+            continue
+        if disjoint_time_windows and any(
+            start_s < previous["start_s"] + previous["window_s"]
+            and start_s + window_s > previous["start_s"]
+            for previous in windows
+        ):
             continue
         windows.append(candidate)
     (out_dir / "windows").mkdir(parents=True, exist_ok=True)
@@ -155,6 +162,7 @@ def make_sheet(
         "fs_hz": layout.fs_hz,
         "instructions": "Set done=1 for every window you annotate (blank beat_times_s with done=1 means NO beats). Separate times with ';'.",
         "excluded_regions": [list(item) for item in exclusions],
+        "disjoint_time_windows": disjoint_time_windows,
         "windows": windows,
     }
     (out_dir / "sheet_manifest.json").write_text(
@@ -301,7 +309,7 @@ def score(
     admitted_with_poor_detection: list[str] = []
     for window in manifest["windows"]:
         array = np.load(sheet_dir / "windows" / f"{window['window_id']}.npy")
-        features = extract_electrode_features(array[:, 1], fs_hz)
+        features = extract_electrode_features(array[:, 1], fs_hz, filter_config=filter_config)
         noise_bad = features.noise_sd_uv > float(qc_cfg["max_noise_sd_uv"])
         detection_bad = features.beat_detection_rate < float(qc_cfg["min_beat_detection_rate"])
         reasons = []
@@ -314,7 +322,16 @@ def score(
         human_beating = bool(human["beats"]) and not human["unsure"]
         if human_beating and qc_rejected:
             false_rejections.append(window["window_id"])
-        if human_beating and not qc_rejected and detection_bad:
+        reference_events = (
+            event_detection_metrics(human["beats"], detected[window["window_id"]], tolerance_s)
+            if not human["unsure"] else None
+        )
+        # QC admission is separate from agreement with an independent reference.
+        # The former condition used detection_bad here, which itself forces QC
+        # rejection and made this list impossible to populate.
+        if not qc_rejected and reference_events is not None and (
+            reference_events["fp"] > 0 or reference_events["fn"] > 0
+        ):
             admitted_with_poor_detection.append(window["window_id"])
         qc_windows.append(
             {
@@ -324,6 +341,7 @@ def score(
                 "beat_detection_rate": float(features.beat_detection_rate),
                 "qc_rejected": qc_rejected,
                 "rejection_reasons": reasons,
+                "reference_event_agreement": reference_events,
             }
         )
     results["qc"] = {
@@ -334,6 +352,7 @@ def score(
         },
         "false_rejections_of_beating_windows": false_rejections,
         "admitted_with_poor_detection": admitted_with_poor_detection,
+        "poor_detection_definition": "any unmatched event against the first non-uncertain annotation at the specified tolerance",
         "windows": qc_windows,
     }
     if len(annotations) >= 2:
