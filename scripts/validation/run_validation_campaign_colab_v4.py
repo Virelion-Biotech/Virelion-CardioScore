@@ -9,9 +9,7 @@ SHA-256 digests, and then delegates all analysis/scoring to the unchanged v2 cam
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
