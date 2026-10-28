@@ -29,6 +29,19 @@ Evidence and limits: [Colab review and correction](docs/COLAB_CIPA_REVIEW_2026-1
 - Benchmark manifests and reproducible reports.
 - CLI, Python API, and browser demonstration.
 
+## Run it now
+
+See the [normal-tool quickstart](docs/QUICKSTART_TOOL.md) for copy-paste commands.
+
+```bash
+python -m pip install -e .
+cardioscore demo --output-dir outputs/demo
+```
+
+The demo writes a CSV summary, JSON scores and HTML report. These are synthetic readings for verifying that the tool runs; they are not experimental or clinical results. To analyze your own data, use `cardioscore run` with a documented feature table or raw trace CSV and review the QC/exclusion outputs.
+
+A lightweight browser demo is in [`web/`](web/). Run it locally with `python -m http.server 8000 --directory web` and open `http://localhost:8000`. A GitHub Pages deployment workflow is included; the live URL becomes available once Pages deployment is enabled for the repository.
+
 ## Installation
 
 Python 3.10+ is required.
