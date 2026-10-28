@@ -161,11 +161,11 @@
         triangulation_proxy:aggregateEndpoint(concentrationEffects.map(function(e){return e.tri}),scoringContract.endpoints.triangulation_proxy.direction,aggregation)
       };
       var defs=[
-        ['fpd_change_pct',scoringContract.endpoints.fpd_change_pct.weight,scoringContract.endpoints.fpd_change_pct.effect_threshold,scoringContract.endpoints.fpd_change_pct.direction],
-        ['beat_rate_change_pct',scoringContract.endpoints.beat_rate_change_pct.weight,scoringContract.endpoints.beat_rate_change_pct.effect_threshold,scoringContract.endpoints.beat_rate_change_pct.direction],
-        ['amplitude_change_pct',scoringContract.endpoints.amplitude_change_pct.weight,scoringContract.endpoints.amplitude_change_pct.effect_threshold,scoringContract.endpoints.amplitude_change_pct.direction],
-        ['stv_increase',scoringContract.endpoints.stv_increase.weight,scoringContract.endpoints.stv_increase.effect_threshold,scoringContract.endpoints.stv_increase.direction],
-        ['triangulation_proxy',scoringContract.endpoints.triangulation_proxy.weight,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]
+        ['fpd_change_pct',weights.fpd,scoringContract.endpoints.fpd_change_pct.effect_threshold,scoringContract.endpoints.fpd_change_pct.direction],
+        ['beat_rate_change_pct',weights.rate,scoringContract.endpoints.beat_rate_change_pct.effect_threshold,scoringContract.endpoints.beat_rate_change_pct.direction],
+        ['amplitude_change_pct',weights.amp,scoringContract.endpoints.amplitude_change_pct.effect_threshold,scoringContract.endpoints.amplitude_change_pct.direction],
+        ['stv_increase',weights.stv,scoringContract.endpoints.stv_increase.effect_threshold,scoringContract.endpoints.stv_increase.direction],
+        ['triangulation_proxy',weights.tri,scoringContract.endpoints.triangulation_proxy.effect_threshold,scoringContract.endpoints.triangulation_proxy.direction]
       ];
       var sum=0,tw=0,contribs=[];
       defs.forEach(function(d){var c=normalizeValue(endpoints[d[0]],d[3],d[2]);sum+=d[1]*c;tw+=d[1];contribs.push({name:d[0],raw:endpoints[d[0]],c:c,w:d[1]})});
