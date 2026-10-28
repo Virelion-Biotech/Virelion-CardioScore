@@ -38,7 +38,29 @@ jobs:
         run: |
           cardioscore demo --output-dir /tmp/cardioscore-demo
           test -f /tmp/cardioscore-demo/summary.csv
+          test -f /tmp/cardioscore-demo/scores.json
           test -f /tmp/cardioscore-demo/report.html
+
+      - name: Example feature-table smoke test
+        run: |
+          cardioscore run --config config/default.yaml --features examples/data/example_features.csv --output-dir /tmp/cardioscore-example
+          test -f /tmp/cardioscore-example/summary.csv
+          test -f /tmp/cardioscore-example/scores.json
+          test -f /tmp/cardioscore-example/report.html
+
+      - name: Upload example readings (synthetic only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardioscore-example-readings
+          path: |
+            /tmp/cardioscore-demo/summary.csv
+            /tmp/cardioscore-demo/scores.json
+            /tmp/cardioscore-demo/report.html
+            /tmp/cardioscore-example/summary.csv
+            /tmp/cardioscore-example/scores.json
+            /tmp/cardioscore-example/report.html
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build and validate wheel
         run: |

@@ -1,0 +1,15 @@
+compound,concentration_uM,well,vehicle,fpd_ms,beat_rate_bpm,amplitude_uv,stv,triangulation_proxy,noise_sd_uv,n_electrodes,beat_detection_rate
+ReferenceLike,0,REF_V1,true,280,60,180,0.04,0.18,6,8,0.96
+ReferenceLike,0,REF_V2,true,282,61,178,0.041,0.18,6,8,0.95
+ReferenceLike,0,REF_V3,true,279,59,182,0.039,0.17,7,8,0.95
+ReferenceLike,0.1,T1,false,282,60,178,0.045,0.19,6,8,0.96
+ReferenceLike,1,T2,false,286,59,175,0.05,0.20,7,8,0.95
+ReferenceLike,10,T3,false,291,58,170,0.06,0.22,7,8,0.94
+ReferenceLike,100,T4,false,296,57,165,0.07,0.24,8,7,0.92
+LiabilityLike,0,REF_V1,true,280,60,180,0.04,0.18,6,8,0.96
+LiabilityLike,0,REF_V2,true,282,61,178,0.041,0.18,6,8,0.95
+LiabilityLike,0,REF_V3,true,279,59,182,0.039,0.17,7,8,0.95
+LiabilityLike,0.1,T1,false,300,55,160,0.10,0.28,7,8,0.93
+LiabilityLike,1,T2,false,325,49,135,0.18,0.38,8,7,0.90
+LiabilityLike,10,T3,false,350,42,105,0.27,0.50,9,6,0.85
+LiabilityLike,100,T4,false,375,35,75,0.35,0.62,12,5,0.78
