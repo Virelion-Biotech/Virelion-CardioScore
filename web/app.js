@@ -192,21 +192,40 @@
   }
   function weights(){
     if(!scoringContract || !scoringContract.endpoints) throw new Error('Scoring contract is not loaded.');
-    return {
-      fpd:scoringContract.endpoints.fpd_change_pct.weight,
-      rate:scoringContract.endpoints.beat_rate_change_pct.weight,
-      amp:scoringContract.endpoints.amplitude_change_pct.weight,
-      stv:scoringContract.endpoints.stv_increase.weight,
-      tri:scoringContract.endpoints.triangulation_proxy.weight
+    var selected={
+      fpd:numericOrDefault('w_fpd',scoringContract.endpoints.fpd_change_pct.weight),
+      rate:numericOrDefault('w_rate',scoringContract.endpoints.beat_rate_change_pct.weight),
+      amp:numericOrDefault('w_amp',scoringContract.endpoints.amplitude_change_pct.weight),
+      stv:numericOrDefault('w_stv',scoringContract.endpoints.stv_increase.weight),
+      tri:numericOrDefault('w_tri',scoringContract.endpoints.triangulation_proxy.weight)
     };
+    var values=Object.keys(selected).map(function(k){return selected[k]});
+    if(values.some(function(v){return !Number.isFinite(v)||v<0||v>1;})) throw new Error('Endpoint weights must be between 0 and 1.');
+    if(values.reduce(function(a,b){return a+b},0)<=0) throw new Error('At least one endpoint weight must be greater than zero.');
+    var total=values.reduce(function(a,b){return a+b},0);
+    Object.keys(selected).forEach(function(k){selected[k]/=total});
+    return selected;
+  }
+  function riskThresholds(){
+    var low=numericOrDefault('th_low',scoringContract.risk_thresholds.low);
+    var moderate=numericOrDefault('th_mod',scoringContract.risk_thresholds.moderate);
+    if(!Number.isFinite(low)||!Number.isFinite(moderate)||low<0||moderate>1||low>=moderate||moderate>1){
+      throw new Error('Risk cutoffs must satisfy 0 ≤ Low cutoff < Moderate cutoff ≤ 1.');
+    }
+    return {low:low,moderate:moderate};
   }
 
   document.getElementById('csvFile').addEventListener('change',function(e){var f=e.target.files&&e.target.files[0];if(!f){uploaded=null;return}var reader=new FileReader();reader.onload=function(){try{uploaded=parseCsv(String(reader.result));alert('Loaded '+uploaded.length+' validated rows')}catch(err){uploaded=null;alert(err.message)}};reader.readAsText(f)});
   document.getElementById('run').onclick=function(){
     if(!scoringContract){alert('Scoring contract is still loading; please run again.');return;}
-    var rows=uploaded&&uploaded.length?uploaded:generate(numericOrDefault('nComp',4),numericOrDefault('nConc',6),numericOrDefault('seed',42),document.getElementById('preset').value,document.getElementById('includeToxic').checked);
-    var qc=applyQc(rows);
-    render(scoreRows(qc.rows,weights(),scoringContract.risk_thresholds.low,scoringContract.risk_thresholds.moderate),qc.log)
+    try {
+      var rows=uploaded&&uploaded.length?uploaded:generate(numericOrDefault('nComp',4),numericOrDefault('nConc',6),numericOrDefault('seed',42),document.getElementById('preset').value,document.getElementById('includeToxic').checked);
+      var selectedWeights=weights(), thresholds=riskThresholds();
+      var qc=applyQc(rows);
+      var results=scoreRows(qc.rows,selectedWeights,thresholds.low,thresholds.moderate);
+      if(!results.length) throw new Error('No candidates could be scored. Check that each compound has vehicle and treated wells after QC.');
+      render(results,qc.log.concat(['Weights normalized to sum to 1.','Risk cutoffs: Low < '+thresholds.low.toFixed(2)+'; Moderate < '+thresholds.moderate.toFixed(2)+'.']));
+    } catch(err) { alert(err.message); }
   };
   document.getElementById('clear').onclick=function(){document.getElementById('out').innerHTML='';document.getElementById('qc').style.display='none';lastResults=null};
   function download(name,text,type){var a=document.createElement('a');var url=URL.createObjectURL(new Blob([text],{type:type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
