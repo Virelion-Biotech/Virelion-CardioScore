@@ -17,7 +17,6 @@ import hashlib
 import json
 import math
 import shutil
-import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
