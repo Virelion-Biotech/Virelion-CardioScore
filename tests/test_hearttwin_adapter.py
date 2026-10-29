@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import jsonschema
 
@@ -76,3 +79,22 @@ def test_hearttwin_adapter_rejects_missing_explicit_config(tmp_path):
 
 def test_hearttwin_input_schema_accepts_valid_minimal_envelope():
     jsonschema.Draft202012Validator(INPUT_SCHEMA).validate(_payload(EXAMPLE))
+
+
+
+def test_hearttwin_adapter_cli_process_boundary():
+    env = os.environ.copy()
+    env.pop("HEARTTWIN_PAYLOAD_STDIN", None)
+    env["HEARTTWIN_PAYLOAD"] = json.dumps(_payload(EXAMPLE))
+    completed = subprocess.run(
+        [sys.executable, "-m", "virelion_cardioscore.hearttwin_adapter"],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    output = json.loads(completed.stdout)
+    assert output["schema_version"] == RESULT_SCHEMA_VERSION
+    jsonschema.Draft202012Validator(RESULT_SCHEMA_DOC).validate(output)
