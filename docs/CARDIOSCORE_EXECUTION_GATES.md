@@ -50,7 +50,7 @@ The Blinova 2018 processed workbook audit remains useful for semantic/reference 
 
 ## 5. HeartTwin output contract
 
-The adapter now emits \`virelion.cardioscore.hearttwin-result.v1\`, keeps the existing top-level output keys for compatibility, and adds:
+The adapter now emits \`virelion.cardioscore.hearttwin-result.v1\`, with formal JSON Schemas in \`schemas/hearttwin/\` for the request and result envelopes. It keeps the existing top-level output keys for compatibility and adds:
 - software version and score semantics;
 - input filename, row count, SHA-256 fingerprint;
 - hashes of the active pipeline and endpoint configuration;
