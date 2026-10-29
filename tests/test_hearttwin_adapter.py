@@ -4,12 +4,17 @@ import hashlib
 import json
 from pathlib import Path
 
+import jsonschema
+
 import pytest
 
 from virelion_cardioscore.hearttwin_adapter import RESULT_SCHEMA, score_payload
 
 
-EXAMPLE = Path(__file__).parents[1] / "examples" / "data" / "example_features.csv"
+ROOT = Path(__file__).parents[1]
+EXAMPLE = ROOT / "examples" / "data" / "example_features.csv"
+INPUT_SCHEMA = json.loads((ROOT / "schemas" / "hearttwin" / "cardioscore_input_v1.schema.json").read_text(encoding="utf-8"))
+RESULT_SCHEMA = json.loads((ROOT / "schemas" / "hearttwin" / "cardioscore_result_v1.schema.json").read_text(encoding="utf-8"))
 
 
 def _payload(path: Path, values: dict | None = None) -> dict:
@@ -44,6 +49,7 @@ def test_hearttwin_adapter_emits_versioned_research_result_with_provenance():
     assert "exclusion_table" in output
     assert "provenance" in output
     assert "not an independently calibrated" in output["analysis"]["risk_class_semantics"]
+    jsonschema.Draft202012Validator(RESULT_SCHEMA).validate(output)
 
     # The whole adapter response must be strict JSON: NaN/Infinity are not allowed.
     encoded = json.dumps(output, allow_nan=False)
@@ -66,3 +72,7 @@ def test_hearttwin_adapter_rejects_missing_explicit_config(tmp_path):
     missing = tmp_path / "does-not-exist.yaml"
     with pytest.raises(ValueError, match="existing YAML file"):
         score_payload(_payload(EXAMPLE, {"config": str(missing)}))
+
+
+def test_hearttwin_input_schema_accepts_valid_minimal_envelope():
+    jsonschema.Draft202012Validator(INPUT_SCHEMA).validate(_payload(EXAMPLE))
