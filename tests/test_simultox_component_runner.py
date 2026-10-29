@@ -11,6 +11,7 @@ from scripts.validation.run_simultox_component_validation import (
     acquire_file,
     center_window,
     json_safe,
+    signal_qc_flags,
 )
 
 
@@ -68,3 +69,34 @@ def test_center_window_uses_mcs_tick_units_and_midpoint(tmp_path):
 def test_json_safe_converts_nonfinite_values_to_null():
     output = json_safe({"finite": np.float64(1.5), "nan": float("nan"), "nested": [np.inf]})
     assert output == {"finite": 1.5, "nan": None, "nested": [None]}
+
+
+
+def test_signal_qc_flags_block_single_beat_fpd_candidate():
+    features = {
+        "beat_detection_rate": 0.024,
+        "n_beats": 1,
+        "n_beats_with_fpd": 1,
+    }
+    flags = signal_qc_flags(features, min_beat_detection_rate=0.7)
+
+    assert flags["passes_beat_detection_qc"] is False
+    assert flags["has_minimum_detected_beats"] is False
+    assert flags["has_minimum_fpd_candidates"] is False
+    assert flags["fpd_estimate_eligible"] is False
+    assert "beat_detection_rate_below_pipeline_threshold" in flags["qc_failures"]
+
+
+def test_signal_qc_flags_allow_repeated_fpd_candidates_with_adequate_detection():
+    features = {
+        "beat_detection_rate": 0.96,
+        "n_beats": 50,
+        "n_beats_with_fpd": 21,
+    }
+    flags = signal_qc_flags(features, min_beat_detection_rate=0.7)
+
+    assert flags["passes_beat_detection_qc"] is True
+    assert flags["has_minimum_detected_beats"] is True
+    assert flags["has_minimum_fpd_candidates"] is True
+    assert flags["fpd_estimate_eligible"] is True
+    assert flags["qc_failures"] == []
