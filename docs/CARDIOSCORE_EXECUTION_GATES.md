@@ -4,10 +4,12 @@ This document distinguishes executable software checks from empirical/scientific
 
 ## 1. Browser workbench
 
-- \`web/app.js\` now waits for the scoring contract to load before automatically running the demo.
-- \`tests/browser_smoke.cjs\` exercises the real JavaScript startup, score rendering, QC logging, and failed-contract path with a small dependency-free DOM shim.
+- `web/app.js` now waits for the scoring contract to load before automatically running the demo.
+- `tests/browser_smoke.cjs` exercises the real JavaScript startup, score rendering, QC logging, and failed-contract path with a small dependency-free DOM shim.
 - The CI workflow runs that smoke test in addition to syntax validation.
-- The Pages workflow asks \`actions/configure-pages\` to enable Pages on first deployment. The deployment job is the confirmation gate.
+- The Pages workflow deploys the static site once Pages is enabled for the repository. The default `GITHUB_TOKEN` cannot perform first-time Pages enablement.
+
+**One-time repository setting required:** open [CardioScore repository Settings → Pages](https://github.com/Virelion-Biotech/Virelion-CardioScore/settings/pages) and set **Build and deployment → Source** to **GitHub Actions**. Then rerun the `Deploy CardioScore browser demo` workflow. This is a repository setting outside the code changes in this branch.
 
 Open the deployed site only after the Pages workflow succeeds. The browser scorer intentionally remains a demonstration and a lightweight preview, not a substitute for Python's full normalization/inference/validation pipeline.
 
@@ -17,14 +19,14 @@ Dataset: [Zenodo record 13121249](https://zenodo.org/records/13121249), DOI 10.5
 
 The standalone runner downloads and verifies exactly three source files using the publisher-listed MD5 checksums; raw files are not committed or included in the validation-result artifact.
 
-\`\`\`bash
+```bash
 python -m pip install -e '.[dev,hdf5]'
 python scripts/validation/run_simultox_component_validation.py
-\`\`\`
+```
 
 Defaults:
-- Inputs: \`data/external/simultox_2024/\`
-- Outputs: \`outputs/simultox_component_validation/\`
+- Inputs: `data/external/simultox_2024/`
+- Outputs: `outputs/simultox_component_validation/`
 
 The runner records source MD5 and SHA-256 checksums, manufacturer-defined MCS HDF5 voltage scaling, sampling rate, feature outputs, and a comparison of one control recording with one E-4031 recording. It also summarizes channel-level extraction from the six-well control file. An Actions workflow can run the challenge and retain the compact JSON/CSV results as an artifact.
 
@@ -32,13 +34,13 @@ The runner records source MD5 and SHA-256 checksums, manufacturer-defined MCS HD
 
 ## 3. Independent beat-detection check
 
-Use the existing notebook \`notebooks/cardioscore_validation/CardioScore_PyMEA_AutoDownload_Heldout_Validation_Colab.ipynb\`. It acquires Cardio PyMEA source files and prepares blinded annotation windows. Annotation is an independent, human task; software cannot honestly synthesize the reference labels it is supposed to be evaluated against.
+Use the existing notebook `notebooks/cardioscore_validation/CardioScore_PyMEA_AutoDownload_Heldout_Validation_Colab.ipynb`. It acquires Cardio PyMEA source files and prepares blinded annotation windows. Annotation is an independent, human task; software cannot honestly synthesize the reference labels it is supposed to be evaluated against.
 
 Record the source checksums, the frozen protocol/code revisions, annotator identities or pseudonyms, completed annotation sheets, exclusions, and all beat-detection metrics. Do not call this gate complete until annotations exist and the scoring stage is run.
 
 ## 4. Locked drug-risk qualification
 
-The current \`validation/preregistration.yaml\` remains a draft. Required declarations and primary data provenance fields are intentionally unresolved. Do not fill those fields with inferred values to make the freeze command pass.
+The current `validation/preregistration.yaml` remains a draft. Required declarations and primary data provenance fields are intentionally unresolved. Do not fill those fields with inferred values to make the freeze command pass.
 
 Before the locked run:
 1. Select a dataset with authoritative provenance, an appropriate independent-unit structure, and enough documented endpoints for the declared analysis.
@@ -50,7 +52,7 @@ The Blinova 2018 processed workbook audit remains useful for semantic/reference 
 
 ## 5. HeartTwin output contract
 
-The adapter now emits \`virelion.cardioscore.hearttwin-result.v1\`, with formal JSON Schemas in \`schemas/hearttwin/\` for the request and result envelopes. It keeps the existing top-level output keys for compatibility and adds:
+The adapter now emits `virelion.cardioscore.hearttwin-result.v1`, with formal JSON Schemas in `schemas/hearttwin/` for the request and result envelopes. It keeps the existing top-level output keys for compatibility and adds:
 - software version and score semantics;
 - input filename, row count, SHA-256 fingerprint;
 - hashes of the active pipeline and endpoint configuration;
