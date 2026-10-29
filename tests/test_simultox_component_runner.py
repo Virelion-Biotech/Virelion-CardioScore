@@ -28,7 +28,7 @@ def test_cached_source_file_is_reused_only_when_published_checksum_matches(tmp_p
     body = b"checksum-pinned local fixture"
     target = tmp_path / "fixture.bin"
     target.write_bytes(body)
-    expected_md5 = hashlib.md5(body).hexdigest()
+    expected_md5 = hashlib.md5(body, usedforsecurity=False).hexdigest()
 
     result = acquire_file("fixture.bin", expected_md5, tmp_path)
 
