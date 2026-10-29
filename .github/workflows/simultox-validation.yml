@@ -1,0 +1,49 @@
+name: SiMulTox raw MEA component validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/validation/run_simultox_component_validation.py"
+      - ".github/workflows/simultox-validation.yml"
+      - "virelion_cardioscore/io/mcs_hdf5.py"
+      - "virelion_cardioscore/preprocessing/endpoints.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cardioscore-simultox-validation
+  cancel-in-progress: false
+
+jobs:
+  component-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CardioScore with HDF5 support
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,hdf5]"
+      - name: Run checksum-verified raw MEA component challenge
+        run: |
+          python scripts/validation/run_simultox_component_validation.py \
+            --input-dir /tmp/cardioscore-simultox-input \
+            --output-dir /tmp/cardioscore-simultox-results
+      - name: Upload compact results only (never raw recordings)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardioscore-simultox-component-validation
+          path: |
+            /tmp/cardioscore-simultox-results/*.json
+            /tmp/cardioscore-simultox-results/*.csv
+          if-no-files-found: error
+          retention-days: 30
