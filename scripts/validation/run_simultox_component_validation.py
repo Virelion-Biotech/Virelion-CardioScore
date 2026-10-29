@@ -276,13 +276,18 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
     channel_rows = []
     for idx, (label, trace) in enumerate(traces6.items()):
         feature = extract_electrode_features(trace, fs6)
+        features = feature_dict(feature)
         channel_rows.append({
             "channel": label,
             "fs_hz": fs6,
             "mcs_unit": metadata6[idx].unit if idx < len(metadata6) else None,
             "window_start_s": start6,
             "window_duration_s": window6,
-            **feature_dict(feature),
+            **features,
+            **signal_qc_flags(
+                features,
+                min_beat_detection_rate=min_beat_detection_rate,
+            ),
         })
     channels = pd.DataFrame(channel_rows)
     channels_csv = output_dir / "simultox_6well_control_channel_features.csv"
