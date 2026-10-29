@@ -19,8 +19,21 @@
       if(!response.ok) throw new Error('Unable to load scoring contract.');
       return response.json();
     })
-    .then(function(contract){scoringContract=contract;})
-    .catch(function(){scoringContract=null;});
+    .then(function(contract){
+      if(!contract || !contract.endpoints || !contract.risk_thresholds) {
+        throw new Error('The scoring contract is missing required sections.');
+      }
+      scoringContract=contract;
+      // The demo is initialized only after the shared contract is ready.
+      // This avoids the former startup race where the first click happened
+      // before fetch() completed and produced a spurious "still loading" alert.
+      document.getElementById('run').click();
+    })
+    .catch(function(error){
+      scoringContract=null;
+      document.getElementById('out').textContent =
+        'CardioScore could not load its scoring contract. Check that web/scoring_contract.json is reachable, then reload the page.';
+    });
 
   var PRESETS={
     mcm_mix:[['vaccine',0.2],['antitoxin',0.25],['antiviral',0.35],['mcm',1.0]],
@@ -231,5 +244,4 @@
   function download(name,text,type){var a=document.createElement('a');var url=URL.createObjectURL(new Blob([text],{type:type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
   document.getElementById('exportJson').onclick=function(){if(!lastResults){alert('Run scoring first');return}download('cardioscore_results.json',JSON.stringify({qc:lastQc,scores:lastResults},null,2),'application/json')};
   document.getElementById('exportCsv').onclick=function(){if(!lastResults){alert('Run scoring first');return}var lines=['compound,cardioscore,risk_class,max_concentration_uM,n_concentrations,n_technical_wells'];lastResults.forEach(function(r){lines.push([JSON.stringify(r.compound),r.score.toFixed(4),r.cls,r.maxConc,r.nConcentrations,r.nWells].join(','))});download('cardioscore_summary.csv',lines.join('\n'),'text/csv')};
-  document.getElementById('run').click();
 })();

@@ -29,6 +29,10 @@ jobs:
         run: python -m json.tool web/scoring_contract.json > /dev/null
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # GITHUB_TOKEN cannot enable a new Pages site. Enable Pages once in
+          # Repository Settings -> Pages -> Build and deployment -> GitHub Actions.
+          enablement: false
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://virelionbiotech.org/schemas/cardioscore-hearttwin-input-v1.json",
+  "title": "CardioScore HeartTwin input envelope",
+  "type": "object",
+  "required": [
+    "observations"
+  ],
+  "properties": {
+    "entity_id": {
+      "description": "HeartTwin entity identifier; echoed back as supplied.",
+      "type": [
+        "string",
+        "number",
+        "null"
+      ]
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "modality": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object",
+            "properties": {
+              "input_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "contains": {
+        "type": "object",
+        "required": [
+          "modality",
+          "values"
+        ],
+        "properties": {
+          "modality": {
+            "const": "safety"
+          },
+          "values": {
+            "type": "object",
+            "required": [
+              "input_path"
+            ],
+            "properties": {
+              "input_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      "minContains": 1
+    }
+  },
+  "additionalProperties": true
+}

@@ -17,6 +17,10 @@ CardioScore is a Python framework for analyzing human iPSC-cardiomyocyte microel
 Evidence and limits: [Colab review and correction](docs/COLAB_CIPA_REVIEW_2026-10-17.md), [retained results](validation/colab_cipa_2026_10_17/), and [repository report](docs/cipa_blinova_workbook_audit.md). The [organization status index](https://github.com/Virelion-Biotech/Virelion-HeartTwin/blob/main/docs/STACK_VALIDATION_STATUS.md) separates software, numerical, data-readiness and empirical qualification. Code/schema execution or a completed download is not a substitute for endpoint-specific validation.
 <!-- VALIDATION_PRODUCT_STATUS:END -->
 
+## Current execution gates
+
+See [CardioScore execution gates](docs/CARDIOSCORE_EXECUTION_GATES.md) for the verified browser, raw-MEA component, beat-detection, HeartTwin, and locked external-validation milestones. Synthetic runs and source-ingestion checks are not evidence of predictive or clinical validity.
+
 ## What it contains
 
 - Signal and electrode quality checks.
