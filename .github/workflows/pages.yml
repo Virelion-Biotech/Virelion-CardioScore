@@ -29,6 +29,9 @@ jobs:
         run: python -m json.tool web/scoring_contract.json > /dev/null
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Enable Pages when this workflow is the first deploy to the repository.
+          enablement: true
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
