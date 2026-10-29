@@ -28,7 +28,7 @@ Defaults:
 - Inputs: `data/external/simultox_2024/`
 - Outputs: `outputs/simultox_component_validation/`
 
-The runner records source MD5 and SHA-256 checksums, manufacturer-defined MCS HDF5 voltage scaling, sampling rate, feature outputs, and a comparison of one control recording with one E-4031 recording. It also summarizes channel-level extraction from the six-well control file. An Actions workflow can run the challenge and retain the compact JSON/CSV results as an artifact.
+The runner records source MD5 and SHA-256 checksums, manufacturer-defined MCS HDF5 voltage scaling, sampling rate, feature outputs, and a comparison of one control recording with one E-4031 recording. It also summarizes channel-level extraction from the six-well control file. An Actions workflow can run the challenge and retain the compact JSON/CSV results as an artifact. The runner now emits per-condition and per-channel quality flags so FPD candidates from insufficient beats or low beat-detection rate are marked ineligible. See the [2026-10-29 component run and findings](SIMULTOX_COMPONENT_VALIDATION_2026-10-29.md).
 
 **Evidence limit:** this is raw-file ingestion and signal-feature component validation. There is one source recording per single-well condition, so the comparison is descriptive, not an independent replicated experiment. No composite drug-risk class, AUC, or claim of predictive validity is produced from it.
 

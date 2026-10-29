@@ -130,17 +130,59 @@ def feature_dict(feature: Any) -> dict[str, Any]:
     }
 
 
+def signal_qc_flags(
+    feature_values: dict[str, Any],
+    *,
+    min_beat_detection_rate: float,
+    min_detected_beats: int = 2,
+    min_fpd_candidates: int = 2,
+) -> dict[str, Any]:
+    """Mark whether extracted interval features have enough usable signal to compare.
+
+    These are data-eligibility flags, not a biological acceptance criterion.
+    They reuse CardioScore's configured beat-detection screen and separately
+    require repeated beats/FPD candidates before an FPD comparison is described
+    as eligible.
+    """
+    rate = float(feature_values.get("beat_detection_rate", float("nan")))
+    n_beats = int(feature_values.get("n_beats", 0))
+    n_fpd = int(feature_values.get("n_beats_with_fpd", 0))
+    rate_pass = math.isfinite(rate) and rate >= min_beat_detection_rate
+    beats_pass = n_beats >= min_detected_beats
+    fpd_pass = n_fpd >= min_fpd_candidates
+    failures = []
+    if not rate_pass:
+        failures.append("beat_detection_rate_below_pipeline_threshold")
+    if not beats_pass:
+        failures.append("fewer_than_minimum_detected_beats")
+    if not fpd_pass:
+        failures.append("fewer_than_minimum_fpd_candidates")
+    return {
+        "qc_min_beat_detection_rate": float(min_beat_detection_rate),
+        "passes_beat_detection_qc": bool(rate_pass),
+        "has_minimum_detected_beats": bool(beats_pass),
+        "has_minimum_fpd_candidates": bool(fpd_pass),
+        "fpd_estimate_eligible": bool(rate_pass and beats_pass and fpd_pass),
+        "qc_failures": failures,
+    }
+
+
 def acquire_all(input_dir: Path) -> list[Path]:
     return [acquire_file(name, md5, input_dir) for name, md5 in EXPECTED_FILES.items()]
 
 
 def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) -> dict[str, Any]:
     from virelion_cardioscore import __version__
+    from virelion_cardioscore.analysis.pipeline import CardioScorePipeline
     from virelion_cardioscore.io.mcs_hdf5 import read_mcs_hdf5_traces
     from virelion_cardioscore.preprocessing.endpoints import extract_electrode_features
 
     output_dir.mkdir(parents=True, exist_ok=True)
     input_dir.mkdir(parents=True, exist_ok=True)
+    default_pipeline = CardioScorePipeline.from_defaults()
+    min_beat_detection_rate = float(
+        default_pipeline.config.get("quality_control", {}).get("min_beat_detection_rate", 0.7)
+    )
     paths = acquire_all(input_dir) if download else [
         input_dir / name for name in EXPECTED_FILES
     ]
@@ -177,6 +219,7 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
             )
         label, trace = next(iter(traces.items()))
         feature = extract_electrode_features(trace, fs_hz)
+        features = feature_dict(feature)
         condition_rows.append({
             "condition": condition,
             "source_file": name,
@@ -189,7 +232,11 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
             "mcs_ad_zero": metadata[0].ad_zero,
             "mcs_conversion_factor": metadata[0].conversion_factor,
             "multiplier_to_uv_per_adc_step": metadata[0].multiplier_to_uv,
-            **feature_dict(feature),
+            **features,
+            **signal_qc_flags(
+                features,
+                min_beat_detection_rate=min_beat_detection_rate,
+            ),
         })
     condition_df = pd.DataFrame(condition_rows)
     condition_csv = output_dir / "simultox_singlewell_features.csv"
@@ -210,6 +257,17 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
             None if pd.isna(left) or pd.isna(right) else float(right - left)
         )
 
+    qc_by_condition = {
+        row["condition"]: row
+        for row in condition_rows
+    }
+    failed_conditions = {
+        name: row["qc_failures"]
+        for name, row in qc_by_condition.items()
+        if not row["fpd_estimate_eligible"]
+    }
+    fpd_comparison_eligible = not failed_conditions
+
     sixwell_path = input_dir / "6well_HiPSC_cardio_Control.h5"
     start6, window6 = center_window(sixwell_path, 60.0)
     fs6, traces6, metadata6 = read_mcs_hdf5_traces(
@@ -218,13 +276,18 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
     channel_rows = []
     for idx, (label, trace) in enumerate(traces6.items()):
         feature = extract_electrode_features(trace, fs6)
+        features = feature_dict(feature)
         channel_rows.append({
             "channel": label,
             "fs_hz": fs6,
             "mcs_unit": metadata6[idx].unit if idx < len(metadata6) else None,
             "window_start_s": start6,
             "window_duration_s": window6,
-            **feature_dict(feature),
+            **features,
+            **signal_qc_flags(
+                features,
+                min_beat_detection_rate=min_beat_detection_rate,
+            ),
         })
     channels = pd.DataFrame(channel_rows)
     channels_csv = output_dir / "simultox_6well_control_channel_features.csv"
@@ -248,15 +311,43 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
                 "(ChannelData - ADZero) * ConversionFactor * 10**Exponent in InfoChannel.Unit"
             ),
             "sampling_rule": "fs_hz = 1_000_000 / Tick_us",
+            "signal_qc": {
+                "min_beat_detection_rate": min_beat_detection_rate,
+                "min_detected_beats_for_fpd_comparison": 2,
+                "min_fpd_candidates_for_fpd_comparison": 2,
+                "note": "Eligibility flags are screening guards, not biological validation criteria.",
+            },
         },
         "singlewell_conditions": condition_rows,
+        # Raw computed differences are retained for auditability but must not be
+        # interpreted if the corresponding feature eligibility gate fails.
         "descriptive_e4031_minus_control": differences,
+        "fpd_comparison_qc": {
+            "eligible": bool(fpd_comparison_eligible),
+            "status": "eligible_for_descriptive_comparison" if fpd_comparison_eligible else "blocked_by_signal_qc",
+            "failed_conditions": failed_conditions,
+            "interpretation": (
+                "The raw FPD difference is eligible for descriptive comparison under the signal screen."
+                if fpd_comparison_eligible else
+                "Do not interpret the raw FPD difference: at least one condition fails beat/FPD data eligibility."
+            ),
+        },
         "sixwell_control": {
             "n_channels": int(len(channels)),
             "median_beat_detection_rate": (
                 None if channels.empty else float(channels["beat_detection_rate"].median())
             ),
-            "channels_with_at_least_two_beats": int((channels["n_beats"] >= 2).sum()),
+            "n_channels_passing_beat_detection_qc": int(
+                (channels["beat_detection_rate"] >= min_beat_detection_rate).sum()
+            ),
+            "n_channels_with_at_least_two_beats": int((channels["n_beats"] >= 2).sum()),
+            "n_channels_eligible_for_fpd_summary": int(
+                (
+                    (channels["beat_detection_rate"] >= min_beat_detection_rate)
+                    & (channels["n_beats"] >= 2)
+                    & (channels["n_beats_with_fpd"] >= 2)
+                ).sum()
+            ),
             "channels_with_fpd": int((channels["n_beats_with_fpd"] > 0).sum()),
         },
         "outputs": {
@@ -265,9 +356,10 @@ def run_analysis(input_dir: Path, output_dir: Path, *, download: bool = True) ->
         },
         "interpretation_guardrail": (
             "This evaluates public MCS HDF5 decoding, physical unit conversion and existing "
-            "signal-feature extraction. There is only one source recording per single-well "
-            "condition; the comparison is descriptive, is not independent replicated risk "
-            "validation, and does not assign a CardioScore risk class."
+            "signal-feature extraction. Signal QC flags are recorded per condition. Raw single-well "
+            "differences must not be interpreted when FPD comparison eligibility is blocked. There "
+            "is only one source recording per single-well condition; this is not independent replicated "
+            "risk validation and does not assign a CardioScore risk class."
         ),
     }
     summary_path = output_dir / "simultox_component_summary.json"
