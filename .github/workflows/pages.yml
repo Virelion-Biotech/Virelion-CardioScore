@@ -30,8 +30,9 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:
-          # Enable Pages when this workflow is the first deploy to the repository.
-          enablement: true
+          # GITHUB_TOKEN cannot enable a new Pages site. Enable Pages once in
+          # Repository Settings -> Pages -> Build and deployment -> GitHub Actions.
+          enablement: false
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
