@@ -25,6 +25,9 @@ jobs:
       - name: Validate browser JavaScript
         run: node --check web/app.js
 
+      - name: Browser workbench behavior smoke test
+        run: node tests/browser_smoke.cjs
+
       - name: Validate external validation contract
         run: python scripts/check_validation_contract.py
 
