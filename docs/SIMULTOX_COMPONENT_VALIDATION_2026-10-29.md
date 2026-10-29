@@ -1,31 +1,41 @@
 # SiMulTox component-validation record — 2026-10-29
 
-## Run and source
+## Final QC-gated run and source
 
-- GitHub Actions run: [40873522938](https://github.com/Virelion-Biotech/Virelion-CardioScore/actions/runs/40873522938) — success
-- Runner revision: `afb03a8958c71cd38b6f270f0fcd23488f7b28d7`
+- Final GitHub Actions run: [40875172929](https://github.com/Virelion-Biotech/Virelion-CardioScore/actions/runs/40875172929) — success
+- Code revision: `12b3e1da62c8ec84729669214af987bf6b36fee0`
 - Dataset: [Zenodo record 13121249](https://zenodo.org/records/13121249), DOI `10.5281/zenodo.13121249`
-- Three agreed source files were acquired and the publisher-listed MD5 values all matched. SHA-256 fingerprints are in the [run artifact](https://github.com/Virelion-Biotech/Virelion-CardioScore/actions/runs/40873522938).
+- Three source files were acquired and all publisher-listed MD5 values matched. SHA-256 fingerprints are in the workflow artifact.
 
-| Recording | Bytes | Beat rate | Detected beats | Beats with an FPD candidate | FPD candidate | Beat-detection rate |
-|---|---:|---:|---:|---:|---:|---:|
-| Control, single-well | 9,400,016 | 49.32 bpm | 50 | 21 | 486.98 ms | 0.973 |
-| E-4031 1 µM, single-well | 7,496,856 | 0.00 bpm | 1 | 1 | 236.90 ms | 0.024 |
+| Recording | Bytes | Beat rate | Detected beats | FPD candidates | Candidate FPD | Detection rate | FPD eligibility |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Control, single-well | 9,400,016 | 49.32 bpm | 50 | 21 | 486.98 ms | 0.973 | Eligible for descriptive FPD summary |
+| E-4031 1 µM, single-well | 7,496,856 | 0.00 bpm | 1 | 1 | 236.90 ms | 0.024 | **Blocked by signal QC** |
 
-Both traces were sampled at 10 kHz; the analysis used a centered 60-second window and the MCS physical conversion formula documented by the channel metadata. The control's extracted amplitude was 13,941.98 µV and E-4031's was 28,214.39 µV, far higher than most values in the multi-channel control asset; investigate raw-scale/channel semantics before treating amplitude as quantitatively comparable.
+Both recordings were sampled at 10 kHz and evaluated in centered 60-second windows using the MCS physical conversion formula encoded in the channel metadata. The single-well amplitude outputs were 13,941.98 µV for control and 28,214.39 µV for E-4031; because these are much larger than most channels in the multi-channel control file, raw scale, channel metadata, and feature semantics should be audited before quantitative amplitude comparison.
 
-## QC interpretation
+## QC findings
 
-The configured CardioScore beat-detection screen is 0.70. The E-4031 trace's detection rate (0.024) is below that threshold and contains only one beat; its FPD is therefore a single candidate, not a reliable condition estimate. Do **not** interpret the raw difference of -250.08 ms in FPD as a drug effect.
+The configured CardioScore beat-detection threshold is 0.70. E-4031 fails this screen (0.024), with only one detected beat and one FPD candidate. The final JSON marks:
 
-The six-well control asset yielded 54 channel feature rows. Median beat-detection rate was 0.366; 20/54 channels met the 0.70 screen, 34/54 had at least two detected beats, and 35/54 produced an FPD candidate. These results show that the data reader and feature extractor execute, but also expose signal-quality/endpoint-eligibility concerns.
+- `fpd_comparison_qc.eligible = false`
+- `fpd_comparison_qc.status = blocked_by_signal_qc`
+- failed reasons: beat-detection rate below threshold, fewer than two detected beats, and fewer than two FPD candidates.
+
+The raw FPD difference of −250.08 ms remains in the output for auditability only. **Do not interpret it as a drug effect.**
+
+The six-well control asset yielded 54 channel feature rows. Median beat-detection rate was 0.366; **20/54** passed the configured detection-rate screen and were eligible for the FPD-summary gate; 34/54 had at least two detected beats, and 35/54 yielded at least one FPD candidate. Channel-level CSV rows contain `passes_beat_detection_qc`, `fpd_estimate_eligible`, and `qc_failures` columns so ineligible features are not silently promoted as valid.
 
 ## Scope
 
-**Passed:** source download, publisher MD5 verification, SHA-256 provenance, MCS HDF5 read, physical conversion execution, and generation of CSV/JSON features.
+**Passed:** source download/checksum verification, SHA-256 provenance, MCS HDF5 reading, physical-scaling execution, and generation of CSV/JSON features with explicit signal-QC eligibility flags.
 
-**Not passed:** reliable paired FPD comparison for the single-well Control/E-4031 challenge. The comparison has only one source recording per condition and is not replicated biological evidence.
+**Blocked:** a reliable paired FPD comparison for the single-well Control/E-4031 challenge because E-4031 fails signal QC.
 
-**Not tested:** CardioScore composite-risk performance, calibrated probability, or clinical/regulatory validity. No risk class or AUC was calculated from this dataset.
+**Not tested:** CardioScore composite-risk performance, calibrated probability, or clinical/regulatory validity. There is one source recording per condition and no biological replication; no risk class or AUC was calculated from this dataset.
 
-The initial artifact was generated before endpoint eligibility fields were added to the runner. The follow-up runner change adds per-condition and per-channel QC flags so low-quality candidate features are explicitly marked rather than silently presented as eligible comparisons.
+## Artifact
+
+The final artifact is [`cardioscore-simultox-component-validation`](https://github.com/Virelion-Biotech/Virelion-CardioScore/actions/runs/40875172929). It contains the machine-readable source receipt/summary, single-well feature table, and six-well channel feature table—not raw HDF5 recordings. GitHub Actions retains it through 2026-11-28.
+
+The next scientific step is a raw voltage/channel-metadata review followed by independent blinded human beat annotation using the existing frozen Cardio PyMEA workflow. Composite-risk qualification still requires a separate eligible dataset and an owner-attested locked preregistration.
