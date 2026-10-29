@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://virelionbiotech.org/schemas/cardioscore-hearttwin-result-v1.json",
+  "title": "CardioScore HeartTwin research scoring result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "producer",
+    "input",
+    "analysis",
+    "summary",
+    "scores",
+    "qc_log",
+    "normalization"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "virelion.cardioscore.hearttwin-result.v1"
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "Virelion-CardioScore"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "entity_id": {
+      "description": "Optional HeartTwin entity identifier echoed from the request."
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "format",
+        "filename",
+        "sha256",
+        "rows"
+      ],
+      "properties": {
+        "format": {
+          "const": "csv"
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysis": {
+      "type": "object",
+      "required": [
+        "score_kind",
+        "risk_class_semantics",
+        "config_source",
+        "config_sha256",
+        "endpoint_config_sha256"
+      ],
+      "properties": {
+        "score_kind": {
+          "const": "research_score"
+        },
+        "risk_class_semantics": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config_source": {
+          "enum": [
+            "payload",
+            "package_default"
+          ]
+        },
+        "config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "endpoint_config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "qc_log": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "normalization": {},
+    "qc_rejections": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "dropout_table": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "exclusion_table": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "provenance": {
+      "type": [
+        "object",
+        "array",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": true
+}
