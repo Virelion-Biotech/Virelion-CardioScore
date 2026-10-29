@@ -28,6 +28,11 @@ jobs:
       - name: Browser workbench behavior smoke test
         run: node tests/browser_smoke.cjs
 
+      - name: Validate HeartTwin JSON schemas
+        run: |
+          python -m json.tool schemas/hearttwin/cardioscore_input_v1.schema.json > /dev/null
+          python -m json.tool schemas/hearttwin/cardioscore_result_v1.schema.json > /dev/null
+
       - name: Validate external validation contract
         run: python scripts/check_validation_contract.py
 
