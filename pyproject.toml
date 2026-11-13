@@ -47,7 +47,7 @@ dev = [
     "h5py>=3.9",
     "jsonschema>=4.20",
     "pytest-cov>=4.1",
-    "ruff>=0.16,<0.17",
+    "ruff>=0.16,<0.18",
     "mypy>=1.5",
     "black>=23.0",
 ]
