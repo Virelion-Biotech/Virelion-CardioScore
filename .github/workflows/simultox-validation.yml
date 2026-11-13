@@ -39,7 +39,7 @@ jobs:
             --input-dir /tmp/cardioscore-simultox-input \
             --output-dir /tmp/cardioscore-simultox-results
       - name: Upload compact results only (never raw recordings)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cardioscore-simultox-component-validation
           path: |
