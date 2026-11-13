@@ -34,7 +34,7 @@ jobs:
           # Repository Settings -> Pages -> Build and deployment -> GitHub Actions.
           enablement: false
       - name: Upload static site
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: web
   deploy:
