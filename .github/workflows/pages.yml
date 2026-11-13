@@ -28,7 +28,7 @@ jobs:
       - name: Validate scoring contract JSON
         run: python -m json.tool web/scoring_contract.json > /dev/null
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
           # GITHUB_TOKEN cannot enable a new Pages site. Enable Pages once in
           # Repository Settings -> Pages -> Build and deployment -> GitHub Actions.
