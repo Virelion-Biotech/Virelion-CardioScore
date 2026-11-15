@@ -1,0 +1,47 @@
+name: Import verified universal resolver lock
+
+on:
+  push:
+    branches:
+      - chore/import-audited-uv-lock-2026-11-15
+
+permissions:
+  contents: write
+
+jobs:
+  import-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out maintenance branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Resolve and verify universal lock
+        shell: bash
+        run: |
+          uv lock --upgrade --python 3.12
+          uv lock --check --python 3.12
+          uv export --locked --python 3.12 --all-extras --all-groups --no-emit-project --format requirements-txt --output-file /tmp/candidate-dependencies.txt
+          grep -vE '^[[:space:]]*[^[:space:]]+[[:space:]]+@[[:space:]]+git\\+' /tmp/candidate-dependencies.txt > /tmp/candidate-pypi.txt || true
+          test -s /tmp/candidate-pypi.txt
+          uvx --python 3.12 --from pip-audit pip-audit --strict --requirement /tmp/candidate-pypi.txt
+      - name: Push lock-only branch based on current main
+        shell: bash
+        run: |
+          git fetch origin main
+          git switch --create maintenance/uv-lock-refresh-2026-11-15 origin/main
+          git add uv.lock
+          if git diff --cached --quiet; then
+            echo "The committed lock is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(deps): refresh universal uv lock"
+          git push origin HEAD:maintenance/uv-lock-refresh-2026-11-15
